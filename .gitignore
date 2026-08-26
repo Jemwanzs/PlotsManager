@@ -1,0 +1,27 @@
+# Rust
+/target
+**/target
+crates/*/target
+
+# Frontend build output (trunk)
+crates/frontend/dist
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Legacy Excel/VBA source material — contains live customer, payment and
+# personal data. Kept locally for analysis only; never pushed to GitHub.
+legacy-excel/
+
+# Editor / OS cruft
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.pdb
+
+# Logs
+*.log
