@@ -39,6 +39,17 @@ blueprint for this system, not the destination — see
   payment-gateway integration) layers on top once the manual path is
   trustworthy. See [14](14-development-roadmap.md).
 
+## Infrastructure
+
+Leptos frontend on **Vercel** (static WASM build), **Supabase** for
+Postgres + Auth + Storage (the frontend talks to it directly; multi-
+tenancy is Postgres Row-Level Security, not app code), a thin Rust
+`services` crate for what Supabase can't do (Paystack webhooks, PDF/
+schedule generation), and **Paystack** for the platform's own SaaS
+subscription billing. See [10](10-database-and-security-design.md),
+[12](12-api-and-integration-design.md), and
+[16](16-billing-and-subscriptions.md).
+
 ## Out of scope (for now)
 
 - Legal/registry integration — the platform's plot map and records are the

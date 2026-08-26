@@ -4,6 +4,7 @@
 //! `api` (Axum backend) and `frontend` (Leptos/WASM) crates, so both sides
 //! agree on shapes without duplicating type definitions.
 
+pub mod billing;
 pub mod customer;
 pub mod organization;
 pub mod plot;
@@ -11,6 +12,7 @@ pub mod project;
 pub mod sales;
 pub mod user;
 
+pub use billing::*;
 pub use customer::*;
 pub use organization::*;
 pub use plot::*;

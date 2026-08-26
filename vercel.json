@@ -1,0 +1,7 @@
+{
+  "buildCommand": "bash scripts/vercel-build.sh",
+  "outputDirectory": "crates/frontend/dist",
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}

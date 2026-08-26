@@ -18,3 +18,6 @@ leptos = { version = "0.7", features = ["csr"] }
 console_error_panic_hook = "0.1"
 console_log = "1"
 log = "0.4"
+# Talks directly to Supabase (Auth + PostgREST) from the browser — no
+# separate backend for CRUD, see docs/12-api-and-integration-design.md.
+gloo-net = "0.6"

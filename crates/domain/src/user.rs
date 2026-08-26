@@ -2,8 +2,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Mirrors the `profiles` table, which extends Supabase Auth's
+/// `auth.users` (id only) with the organization/branch scoping the rest of
+/// the schema keys off. Supabase owns credentials, sessions, and password
+/// resets — this crate never models a password.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct User {
+pub struct Profile {
     pub id: Uuid,
     pub organization_id: Uuid,
     pub branch_id: Option<Uuid>,

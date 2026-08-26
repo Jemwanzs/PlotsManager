@@ -15,12 +15,13 @@ the original scoping conversation and the legacy Excel/VBA workbook
 | [07 Sales and Booking Workflows](07-sales-and-booking-workflows.md) | drafted |
 | [08 Payments and Receipting](08-payments-and-receipting.md) | drafted |
 | [09 Approval Workflows](09-approval-workflows.md) | drafted |
-| [10 Database and Security Design](10-database-and-security-design.md) | drafted, schema in `crates/api/migrations/0001_init.sql` |
+| [10 Database and Security Design](10-database-and-security-design.md) | updated for Supabase — schema + RLS in `supabase/migrations/` |
 | [11 Reports and Analytics](11-reports-and-analytics.md) | drafted |
-| [12 API and Integration Design](12-api-and-integration-design.md) | drafted |
+| [12 API and Integration Design](12-api-and-integration-design.md) | updated for Supabase BaaS architecture |
 | [13 Data Migration Plan](13-data-migration-plan.md) | drafted |
 | [14 Development Roadmap](14-development-roadmap.md) | drafted, tracks current build status |
 | [15 Testing and Acceptance Criteria](15-testing-and-acceptance-criteria.md) | drafted |
+| [16 Billing and Subscriptions](16-billing-and-subscriptions.md) | drafted — Paystack SaaS billing, schema + webhook receiver built |
 
 "Drafted" means the requirements are captured from the original spec
 conversation; docs 03–15 have since been cross-checked against the actual

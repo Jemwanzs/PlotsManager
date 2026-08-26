@@ -5,10 +5,22 @@
 - **`domain`**: pure unit tests — serialization round-trips, any invariant
   helpers added later (e.g. status transition validity). No I/O, so no
   mocking needed.
-- **`api`**: integration tests against a real Postgres (docker-compose),
-  run through the actual Axum router with `tower::ServiceExt::oneshot` —
-  not mocked handlers. Migrations run per test database so schema drift
-  can't silently pass.
+- **`services`**: integration tests against a real Postgres (a local
+  `supabase start` instance, or plain Postgres with `supabase/migrations/`
+  applied), run through the actual Axum router with
+  `tower::ServiceExt::oneshot` — not mocked handlers. For the Paystack
+  webhook route specifically: test signature verification with both a
+  valid and a tampered body, and test that replaying the same event id is
+  a no-op against `billing_webhook_events`'s unique constraint.
+- **Row-Level Security policies** (`supabase/migrations/`): a distinct,
+  important test category now that RLS is the primary enforcement point
+  instead of application code — see
+  [10](10-database-and-security-design.md). For each tenant table:
+  connect as two different organisations' users (via short-lived test
+  JWTs or `set local role`/`set request.jwt.claims`) and assert org A
+  cannot read or write org B's rows, in both directions. This is the
+  direct replacement for what would otherwise be application-layer
+  authorization tests.
 - **`frontend`**: component-level tests where Leptos's testing story
   supports it; otherwise rely on manual verification in the browser via
   `trunk serve` for interactive map/polygon-editor behaviour, which is
@@ -45,7 +57,8 @@ feature is built, not stay as prose:
   draft version, never mutates the approved one in place.
 - Cross-tenant data isolation: a query authenticated as one organisation
   can never return another organisation's rows, under any filter
-  combination — worth a dedicated fuzz-style test once auth exists.
+  combination — this is now an RLS policy test (see above), not an
+  application-code test, since PostgREST queries hit Postgres directly.
 
 ## Definition of done for a feature
 

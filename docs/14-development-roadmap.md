@@ -6,13 +6,19 @@ platform-wide phases (1–7) and the payments-specific delivery sequence
 
 ## Current status (2026-08-26)
 
-Workspace scaffolded: Cargo workspace with `domain`, `api` (Axum + sqlx,
-health check + first real endpoint), `frontend` (Leptos CSR shell) crates;
-initial Postgres schema covering organisations/projects/plots/customers/
-sales/loan accounts/payments/audit log; docs directory, including a
-completed legacy-system analysis (Phase 1). **Nothing beyond scaffolding
-and documentation is implemented yet** — no auth, no real CRUD beyond
-`GET /api/v1/organizations`, no map UI, no approval engine.
+Infrastructure decided and scaffolded: **Supabase** (Postgres + Auth +
+Storage, with the Leptos frontend calling it directly and multi-tenancy
+enforced by Row-Level Security — see
+[10](10-database-and-security-design.md)), **Vercel** for the frontend's
+static deploy, and **Paystack** for the platform's own SaaS subscription
+billing ([16](16-billing-and-subscriptions.md)). The Cargo workspace is
+`domain` (shared types, now including billing), `services` (a thin Axum
+service for Paystack webhooks — no longer a general CRUD backend, that
+role moved to Supabase PostgREST), and `frontend` (Leptos CSR shell with
+a working Supabase Auth/PostgREST client). `supabase/migrations/` holds
+the schema and RLS policies. **No UI screens are built yet** — no
+sign-up/login flow, no map UI, no approval engine, and the `services`
+crate isn't deployed anywhere (no Rust-friendly host chosen).
 
 ## Phase 1 — Discovery and Legacy Analysis
 Analyse the Excel/VBA system, extract business rules, document current
@@ -29,8 +35,11 @@ anywhere else in `docs/`.
 Multi-tenant architecture; organisation settings; users, roles,
 permissions; projects and plot register; documents and audit logs;
 configurable numbering.
-**Status: schema and domain types scaffolded; no auth, no numbering
-config, no document storage yet.**
+**Status: infrastructure decided (Supabase/Vercel), schema + RLS policies
++ domain types scaffolded, frontend has a working Supabase Auth/PostgREST
+client module. Not yet built: any actual sign-up/login UI, org creation
+flow, numbering config, document storage wiring, or a deployed home for
+the `services` crate.**
 
 ## Phase 3 — Interactive Maps
 Upload project plans; manual polygon drawing; plot-to-map linking;
@@ -68,6 +77,18 @@ schedules/payments exist; workflow logic not implemented.**
 Project-performance dashboards; plot-availability analytics; sales
 conversion/agent performance; revenue/collection reports; GIS/satellite
 mapping; accounting/payment/SMS/email/WhatsApp integrations.
+
+## Platform billing (parallel to the phases above)
+
+SaaS subscription billing ([16](16-billing-and-subscriptions.md)) is an
+operational concern for running the platform as a business, not a phase
+in the product roadmap above — it can and should move independently.
+**Status**: schema (`subscription_plans`, `organization_subscriptions`,
+`billing_invoices`, `billing_webhook_events`) and a working, signature-
+verified Paystack webhook receiver exist
+(`crates/services/src/paystack.rs`). Not built: any plan-selection UI,
+the org sign-up flow that creates the first `organizations` row, or
+enforcement of subscription status against feature access.
 
 ## Sequencing principle
 

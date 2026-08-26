@@ -1,6 +1,12 @@
 use domain::PlotStatus;
 use leptos::prelude::*;
 
+// Not yet called from any component — the auth/CRUD screens that will use
+// it are Phase 2 UI work, not yet built. Silence dead_code until then
+// rather than leaving real warnings that would mask new ones.
+#[allow(dead_code)]
+mod supabase;
+
 fn main() {
     console_error_panic_hook::set_once();
     _ = console_log::init_with_level(log::Level::Debug);

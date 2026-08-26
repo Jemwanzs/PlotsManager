@@ -29,7 +29,7 @@ and [11](11-reports-and-analytics.md).
 1. **Extract**: export each relevant sheet from the live workbook to
    CSV/structured form (projects, plots, customers, bookings, payments).
 2. **Map**: define a field-by-field mapping from legacy columns to the new
-   schema (`crates/api/migrations/0001_init.sql`), flagging anything with
+   schema (`supabase/migrations/0001_init.sql`), flagging anything with
    no clean equivalent (e.g. free-text statuses that need to collapse into
    the fixed `PlotStatus` set).
 3. **Validate**: run duplicate/consistency checks before import — duplicate
