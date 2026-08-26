@@ -65,3 +65,16 @@ perform each transition (ties into [09](09-approval-workflows.md)). See
   at creation time.
 - Price and status changes must update the plot register and the published
   map consistently — never one without the other.
+
+## Legacy reality (see [02](02-existing-vba-system-analysis.md))
+
+The legacy workbook has **no plot number field at all** — a free-text
+"Plot Description" is the plot's only identity, and it must be unique
+*across the entire workbook*, not per project. There is no minimum price
+field, no polygon/coordinate data, and a plot's "status" is implicit
+(present in the loan register = sold; a manual "resale" override bypasses
+the duplicate check to re-sell a repossessed plot rather than transitioning
+it through a real status). The system-generated UUID + configurable
+per-project human code design above is a deliberate fix for the specific
+failure mode this caused (plot codes colliding or being reused informally
+across projects).

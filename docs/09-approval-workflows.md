@@ -41,3 +41,16 @@ repossession/reallocation, full-settlement confirmation.
   [10](10-database-and-security-design.md#schema)).
 - Workflow definitions are organisation data, not code, so a tenant can
   add/remove approval steps without a deployment.
+
+## Legacy reality (see [02](02-existing-vba-system-analysis.md))
+
+The system being replaced has exactly one approval step for payments and
+charges: a dropdown (Approved/Reject) with a free-text remark, reachable
+by any logged-in user — nothing in the code stops the person who captured
+a payment from also approving it. This doc's separation-of-duties and
+role-scoped approver assignment aren't a refinement of an existing
+control, they're introducing the control for the first time. Treat "does
+this action require an approver different from its initiator" as a
+setting to get right early, since the legacy system offers no precedent
+for how strict that should be — that's a product decision, not something
+inferable from history.

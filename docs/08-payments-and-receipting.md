@@ -121,6 +121,42 @@ each behind the approval engine ([09](09-approval-workflows.md)).
 - Dashboard totals, statements, plot accounts, and reports must all
   reconcile to the same transaction ledger.
 
+## Legacy reality (see [02](02-existing-vba-system-analysis.md))
+
+Every sale in the legacy system — cash or instalment — is entered as a
+manually-typed "loan": purchase value, tenor, EMI, and deposit are typed
+in by the officer, not calculated. There is no interest rate field, no
+amortization, and no generated per-instalment schedule; interest and
+penalties are separate manual "charges" added later as flat amounts. The
+payment-schedule PDF that exists today is a **separately re-typed
+summary**, not derived from the loan record — a real, painful duplicate-
+entry step this platform removes. Treat this doc's interest engine and
+generated schedule as a genuine upgrade, not a reimplementation — but keep
+a manual-adjustment fallback (charges/waivers) for cases the automatic
+engine can't cover, since that's the only mechanism the business has used
+so far.
+
+The legacy "suspense account" is a **single company-wide GL clearing
+balance** (not per-customer): every interest/penalty payment and
+overpayment debit decrements one running total. That's a different,
+equally legitimate concept from the per-payment "unallocated receipts"
+queue described above — support both: a per-account suspense holding for
+ambiguous receipts, and a GL-style clearing account for interest/penalty
+income recognition.
+
+Overpayment handling in the legacy system is more specific than "hold as
+credit": an officer can debit a customer's credit balance for one of four
+reasons, including **applying it to a different plot, or a different
+customer's plot debt**. Carry that cross-account reallocation capability
+forward explicitly, not just generic credit-holding.
+
+Approval in the legacy system is a single step, reachable by any logged-in
+user, with no check that the approver differs from the person who
+captured the payment. The one pattern worth keeping as-is: reversal
+pre-fills every field from the original transaction (negated amount) and
+locks them against tampering, rather than letting an officer type a
+reversal freehand.
+
 ## Delivery sequence
 
 **Phase A** (core): cash + Lipa Pole Pole sale modes, Plot Loan Accounts,

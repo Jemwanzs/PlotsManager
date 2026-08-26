@@ -9,14 +9,21 @@ platform-wide phases (1–7) and the payments-specific delivery sequence
 Workspace scaffolded: Cargo workspace with `domain`, `api` (Axum + sqlx,
 health check + first real endpoint), `frontend` (Leptos CSR shell) crates;
 initial Postgres schema covering organisations/projects/plots/customers/
-sales/loan accounts/payments/audit log; docs directory. **Nothing beyond
-scaffolding is implemented yet** — no auth, no real CRUD beyond
+sales/loan accounts/payments/audit log; docs directory, including a
+completed legacy-system analysis (Phase 1). **Nothing beyond scaffolding
+and documentation is implemented yet** — no auth, no real CRUD beyond
 `GET /api/v1/organizations`, no map UI, no approval engine.
 
 ## Phase 1 — Discovery and Legacy Analysis
 Analyse the Excel/VBA system, extract business rules, document current
 workflows, identify migration requirements, produce full specs.
-**Status: blocked on VBA export** — see [02](02-existing-vba-system-analysis.md).
+**Status: complete.** 58 VBA modules exported and analysed — see
+[02](02-existing-vba-system-analysis.md) for the full data model,
+numbering rules, workflow behavior, security posture, and a gap-analysis
+table mapping legacy behavior to every affected spec doc (03, 04, 05, 08,
+09, 10, 11, 13). One open product decision surfaced: whether to carry
+forward the legacy customer feedback/ratings module, currently unspecified
+anywhere else in `docs/`.
 
 ## Phase 2 — Platform Foundation
 Multi-tenant architecture; organisation settings; users, roles,

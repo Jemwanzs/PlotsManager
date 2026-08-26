@@ -43,8 +43,7 @@ An administrator can grant selected users visibility into sold, reserved,
 blocked, or transferred plots when needed, without changing the default
 for everyone else.
 
-## Other implied roles (to formalise once [02](02-existing-vba-system-analysis.md)
-lands)
+## Other implied roles
 
 - Organisation admin — configures numbering, pricing, workflows, roles.
 - Project manager — owns a project's plots, team assignment, map
@@ -54,3 +53,19 @@ lands)
 - Finance/accounts officer — payment capture, verification, statement
   issuance.
 - Auditor — read-only, cross-project, full visibility including audit log.
+- Staff/agent (daily activity) — the legacy system tracks per-staff daily
+  productivity (site visits, sales, leads); if the Daily Activity Report
+  in [11](11-reports-and-analytics.md) is carried forward, this role needs
+  no special access beyond submitting their own entries.
+
+## Legacy reality (see [02](02-existing-vba-system-analysis.md))
+
+None of the above exists today. The legacy system has exactly one
+authorization check in its entire codebase — a hardcoded
+`username = "Admin"` string comparison gating a single screen (user
+management). Every other screen, and every field on it (cost price,
+minimum price, margins included), is visible to anyone who can log in
+with any of the five hardcoded accounts. There is no per-project,
+per-branch, or field-level restriction anywhere, and no concept of
+"an agent's own customers" — all data is globally visible. This model is
+being introduced fresh, not extended from precedent.

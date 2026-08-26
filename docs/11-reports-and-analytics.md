@@ -62,10 +62,27 @@ numbers/print-friendly headers; PDF/Excel/CSV export; role-based masking
 of sensitive customer/financial fields; scheduled email distribution
 (later phase).
 
-## Note
+## Legacy reality (see [02](02-existing-vba-system-analysis.md))
 
-The legacy workbook's existing exports
-(`legacy-excel/PlotsManager/#DailyReportPDF/`,
-`#ExtractsPDF/`, `#PaymentSchedulesPDF/`, `#Extracts(Reports)/`) are a
-ready-made checklist of reports actually in use today — cross-check this
-list against them once [02](02-existing-vba-system-analysis.md) is done.
+Cross-checked against the actual legacy workbook (`#DailyReportPDF/`,
+`#ExtractsPDF/`, `#PaymentSchedulesPDF/`, `#Extracts(Reports)/`):
+
+- The Executive Dashboard KPI set above matches what the legacy dashboard
+  already shows almost exactly: total customers/projects/plots, total
+  loans, active loans, active loan book, and **Performing vs.
+  Non-Performing** counts/amounts (filterable by year or "since
+  inception"). Performing/Non-Performing is the legacy system's only
+  arrears bucket — a single binary split, not the ageing tiers specified
+  above — which confirms the ageing-bucket design is a real upgrade, not
+  invention.
+- **Add a Daily Activity Report** to the report library: a per-staff,
+  per-day productivity log (site visits, savings made, sales made, new
+  business leads, office visits, walk-ins, instalments made, transfers).
+  This exists and is used in the legacy system today but isn't covered
+  anywhere above — it's a lightweight CRM/activity report, distinct from
+  the financial reports.
+- One open product question the legacy system raises but doesn't answer
+  for us: it also has a **customer feedback/ratings module** (comment
+  type, free text, gender, 1–5 star rating) that nothing in this doc set
+  covers. Needs an explicit in/out decision rather than being silently
+  dropped.

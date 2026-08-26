@@ -1,9 +1,28 @@
 # 13 — Data Migration Plan
 
 Migrating real organisations off the Excel/VBA workbook and onto this
-platform. Not started — depends on [02](02-existing-vba-system-analysis.md)
-being done first, since the actual sheet/column structure isn't documented
-yet.
+platform. The sheet/column structure is now documented in
+[02](02-existing-vba-system-analysis.md); this plan itself — actually
+running a migration — has not started.
+
+## Legacy sheets to migrate
+
+From `02`'s data model table: `CustomerInfo` → `customers` (+ KYC photo
+files, currently local file-path references into a shared `#images/`
+folder — these need to move to real object storage, not just have their
+rows copied); `Projects` → `projects`; `Project_PLOTS` → `plots` (the
+free-text "Plot Description" becomes the source for a real plot number,
+deduplicated **per project** rather than globally); `LoanRegister` +
+`LoanPayment`/`OtherCharges`/`PrintLoan` → `plot_sales` +
+`plot_loan_accounts` + `payments` (the single flat `PrintLoan` ledger is
+the most reliable source of truth for historical transactions since it's
+what the legacy statements were generated from); `SuspenseAccount` →
+informs the opening balance of a GL-style clearing account, not a
+per-customer table; `AllRejected` → historical reference only, not
+migrated into live data. `DailyReport`/`StaffReport` and `Comments` are
+migrate-if-kept, pending the open product decision in
+[02](02-existing-vba-system-analysis.md#11-open-question-for-the-user)
+and [11](11-reports-and-analytics.md).
 
 ## Planned sequence
 

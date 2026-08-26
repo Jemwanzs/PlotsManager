@@ -7,7 +7,7 @@ the original scoping conversation and the legacy Excel/VBA workbook
 | Doc | Status |
 |---|---|
 | [01 Product Overview](01-product-overview.md) | drafted |
-| [02 Existing VBA System Analysis](02-existing-vba-system-analysis.md) | **not started** — needs `.bas`/`.cls`/`.frm` export |
+| [02 Existing VBA System Analysis](02-existing-vba-system-analysis.md) | **complete** — 58 modules exported and analyzed; gap-analysis table drives updates below |
 | [03 Functional Requirements](03-functional-requirements.md) | drafted |
 | [04 User Roles and Permissions](04-user-roles-and-permissions.md) | drafted |
 | [05 Project and Plot Management](05-project-and-plot-management.md) | drafted |
@@ -23,6 +23,7 @@ the original scoping conversation and the legacy Excel/VBA workbook
 | [15 Testing and Acceptance Criteria](15-testing-and-acceptance-criteria.md) | drafted |
 
 "Drafted" means the requirements are captured from the original spec
-conversation; none of this has been validated against a real client yet,
-and doc 02 in particular is blocked on exporting the VBA modules from
-`legacy-excel/PlotsManager/PPP_v.01.Xls.xlsm`.
+conversation; docs 03–15 have since been cross-checked against the actual
+legacy system (doc 02) and annotated with "Legacy reality" notes wherever
+the real workbook confirmed, contradicted, or added to the original plan.
+None of this has been validated against a real client yet.

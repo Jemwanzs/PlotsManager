@@ -55,6 +55,22 @@ storage/versioning, commission records — added as those phases start.
   durable identity, independent of any external reference (title number,
   receipt number) that may not exist yet or may change.
 
+## Legacy reality (see [02](02-existing-vba-system-analysis.md))
+
+The system being replaced authenticates against **up to five hardcoded
+username/password pairs stored in plaintext in a worksheet cell** — no
+hashing, no lockout, no password policy. Authorization is a single
+hardcoded check (`username = "Admin"`) gating one screen; every other
+screen and every field (including cost price and minimum price) is open
+to anyone logged in. The only audit trail is a navigation log (who opened
+which screen, when) — there is no field-level before/after record of data
+changes, so "who changed this price and what was it before" is
+unanswerable today. Every control in this document — hashed credentials,
+scoped RBAC, field masking, before/after audit — is a net-new capability
+for the business, not a hardening of an existing one, which is worth
+keeping in mind when prioritising: there is no legacy behavior to
+preserve compatibility with here, only a floor to clear.
+
 ## Open questions for a later pass
 
 - Auth mechanism (session cookies vs. JWT) and where MFA fits.
