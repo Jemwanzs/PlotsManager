@@ -71,6 +71,13 @@ confidence scores; exception handling and human correction.
 Leads/prospects; plot selection; holds/reservations/bookings; quotations/
 offer letters; sales agreements; customer 360°; agent assignment/
 commissions.
+**Status: frontend groundwork started against mock data.** Customers
+list + detail (purchase history) and a "Reserve this plot" flow exist —
+picking a customer and payment mode on an uncommitted plot creates a
+mock `PlotSale`, moves the plot to Reserved/Booked, and the plot grid
+updates live. Not built: leads/prospects, holds vs. reservations as
+distinct stages, quotations/offer letters, agent commissions, a real
+customer 360° view (today's customer detail is purchase history only).
 
 ## Phase 6 — Payments and Transfers
 Nests the payments delivery sequence:
