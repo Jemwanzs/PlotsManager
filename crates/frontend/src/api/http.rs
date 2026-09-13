@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use super::types::{
     ApiError, AuthSession, CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary,
-    PlotWithColor, ProjectSummary,
+    LoanAccountDetail, PlotWithColor, ProjectSummary, RecordPaymentInput,
 };
 
 #[derive(Clone)]
@@ -70,6 +70,18 @@ impl HttpApi {
     pub async fn create_sale(&self, _input: CreateSaleInput) -> Result<domain::PlotSale, ApiError> {
         Err(ApiError::Network(
             "backend sales endpoint isn't built yet".to_string(),
+        ))
+    }
+
+    pub async fn get_loan_account(&self, _id: Uuid) -> Result<LoanAccountDetail, ApiError> {
+        Err(ApiError::Network(
+            "backend loan account endpoint isn't built yet".to_string(),
+        ))
+    }
+
+    pub async fn record_payment(&self, _input: RecordPaymentInput) -> Result<domain::Payment, ApiError> {
+        Err(ApiError::Network(
+            "backend payments endpoint isn't built yet".to_string(),
         ))
     }
 }

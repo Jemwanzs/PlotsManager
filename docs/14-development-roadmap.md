@@ -92,8 +92,18 @@ Nests the payments delivery sequence:
 - **Phase D** — mobile-money/banking integrations, automated matching/
   receipting/reconciliation, customer self-service portal.
 
-**Status: domain types and schema for Plot Loan Accounts/repayment
-schedules/payments exist; workflow logic not implemented.**
+**Status: Phase A frontend groundwork started against mock data.** A
+Plot Loan Account is created automatically when a Lipa Pole Pole sale is
+reserved (fixed 10% deposit / 12 monthly instalments — no tenor/deposit
+picker yet), with a detail screen (balance, instalment, deposit) and a
+"Record a payment" form that updates the running balance and status
+(Awaiting Deposit → Active (Partially Paid) → Fully Paid) live. Not
+built: a real generated repayment schedule
+(`repayment_schedule_entries` — see docs/08's note that the interest/
+amortization engine is deliberately deferred), the Captured → Verified →
+Posted approval lifecycle (payments post immediately, no approval gate
+yet — that needs docs/09's engine and real authenticated roles first),
+receipts/statements, arrears ageing, and everything in Phases B–D.
 
 ## Phase 7 — Analytics and Integrations
 Project-performance dashboards; plot-availability analytics; sales

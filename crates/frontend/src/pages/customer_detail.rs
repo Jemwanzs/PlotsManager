@@ -60,7 +60,15 @@ pub fn CustomerDetail() -> impl IntoView {
                                         {d.sales
                                             .into_iter()
                                             .map(|sale| {
-                                                let href = format!("/projects/{}", sale.project_id);
+                                                // A Lipa Pole Pole sale has a loan account — that's the
+                                                // more useful destination (payment history/capture)
+                                                // than the project. A Full Cash sale has neither yet
+                                                // (docs/08 §2.1 payment tracking isn't built), so it
+                                                // just links back to the project for now.
+                                                let href = sale
+                                                    .loan_account_id
+                                                    .map(|id| format!("/loan-accounts/{id}"))
+                                                    .unwrap_or_else(|| format!("/projects/{}", sale.project_id));
                                                 view! {
                                                     <A href=href attr:class="project-card card">
                                                         <div class="page-header" style="margin-bottom: var(--space-2)">

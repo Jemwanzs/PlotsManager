@@ -1,4 +1,5 @@
-use domain::{Customer, PaymentMode, Plot, User};
+use chrono::NaiveDate;
+use domain::{Customer, Payment, PaymentMode, Plot, PlotLoanAccount, User};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -66,6 +67,11 @@ pub struct CustomerSaleView {
     pub agreed_price: Decimal,
     pub status_label: String,
     pub status_color: String,
+    /// Set for Lipa Pole Pole sales only — a Full Cash sale has no Plot
+    /// Loan Account (see docs/08 §2.1 vs §2.2/2.3; the `payments` table
+    /// itself is keyed to `loan_account_id`, not a sale, so there's
+    /// nothing to link for cash sales yet).
+    pub loan_account_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,14 +81,41 @@ pub struct CustomerDetail {
 }
 
 /// What it takes to reserve a plot for a customer — the first step of the
-/// sales workflow (docs/07). Deliberately minimal: full Plot Loan Account
-/// setup (deposit, tenor, schedule) is Phase 6/A, not this pass.
+/// sales workflow (docs/07). For a Lipa Pole Pole payment mode this also
+/// creates a Plot Loan Account (docs/08 §3), with a fixed 12-instalment/
+/// 10%-deposit default — a real UI for choosing tenor/deposit/interest is
+/// still future work, this just needs *a* schedule to exist to build the
+/// payment-capture screen against.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateSaleInput {
     pub plot_id: Uuid,
     pub customer_id: Uuid,
     pub payment_mode: PaymentMode,
     pub agreed_price: Decimal,
+}
+
+/// A Plot Loan Account plus enough about the plot/project/customer to
+/// render its detail screen without three more round trips.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoanAccountDetail {
+    pub account: PlotLoanAccount,
+    pub plot_id: Uuid,
+    pub plot_number: String,
+    pub project_id: Uuid,
+    pub project_name: String,
+    pub customer_id: Uuid,
+    pub customer_name: String,
+    pub status_label: String,
+    pub status_color: String,
+    pub payments: Vec<Payment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordPaymentInput {
+    pub loan_account_id: Uuid,
+    pub amount: Decimal,
+    pub payment_date: NaiveDate,
+    pub method: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

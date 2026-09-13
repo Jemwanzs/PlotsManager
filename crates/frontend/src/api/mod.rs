@@ -3,6 +3,7 @@
 //! docs/12-api-and-integration-design.md and the module docs on `mock`.
 
 mod http;
+mod loan_status;
 mod mock;
 mod plot_status;
 mod types;
@@ -81,6 +82,20 @@ impl ApiClient {
         match self {
             Self::Mock(api) => api.create_sale(input).await,
             Self::Http(api) => api.create_sale(input).await,
+        }
+    }
+
+    pub async fn get_loan_account(&self, id: Uuid) -> Result<LoanAccountDetail, ApiError> {
+        match self {
+            Self::Mock(api) => api.get_loan_account(id).await,
+            Self::Http(api) => api.get_loan_account(id).await,
+        }
+    }
+
+    pub async fn record_payment(&self, input: RecordPaymentInput) -> Result<domain::Payment, ApiError> {
+        match self {
+            Self::Mock(api) => api.record_payment(input).await,
+            Self::Http(api) => api.record_payment(input).await,
         }
     }
 }

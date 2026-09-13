@@ -1,6 +1,7 @@
 mod customer_detail;
 mod customers_list;
 mod dashboard;
+mod loan_account_detail;
 mod login;
 mod not_found;
 mod project_detail;
@@ -9,6 +10,7 @@ mod projects_list;
 pub use customer_detail::CustomerDetail;
 pub use customers_list::CustomersList;
 pub use dashboard::Dashboard;
+pub use loan_account_detail::LoanAccountDetailPage;
 pub use login::Login;
 pub use not_found::NotFound;
 pub use project_detail::ProjectDetail;

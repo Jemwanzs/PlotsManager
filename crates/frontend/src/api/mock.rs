@@ -7,18 +7,19 @@
 
 use std::sync::{Arc, Mutex};
 
-use chrono::Utc;
+use chrono::{NaiveDate, Utc};
 use domain::{
-    AreaUnit, Customer, Organization, PaymentMode, Plot, PlotSale, PlotStatus, Project,
-    ProjectStatus, User,
+    AreaUnit, Customer, LoanAccountStatus, Organization, Payment, PaymentMode, PaymentStatus,
+    Plot, PlotLoanAccount, PlotSale, PlotStatus, Project, ProjectStatus, User,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
+use super::loan_status::loan_status_meta;
 use super::plot_status::status_meta;
 use super::types::{
     ApiError, AuthSession, CreateSaleInput, CustomerDetail, CustomerSaleView, CustomerSummary,
-    DashboardSummary, PlotWithColor, ProjectSummary,
+    DashboardSummary, LoanAccountDetail, PlotWithColor, ProjectSummary, RecordPaymentInput,
 };
 
 const DEMO_EMAIL: &str = "admin@acaciagrove.example";
@@ -31,6 +32,8 @@ struct MockDb {
     plots: Vec<Plot>,
     customers: Vec<Customer>,
     sales: Vec<PlotSale>,
+    loan_accounts: Vec<PlotLoanAccount>,
+    payments: Vec<Payment>,
 }
 
 // Arc<Mutex<..>>, not Rc<RefCell<..>>: Leptos 0.7's `provide_context`
@@ -200,6 +203,11 @@ impl MockApi {
                 let plot = db.plots.iter().find(|p| p.id == sale.plot_id)?;
                 let project = db.projects.iter().find(|pr| pr.id == plot.project_id)?;
                 let (label, color) = status_meta(plot.status);
+                let loan_account_id = db
+                    .loan_accounts
+                    .iter()
+                    .find(|la| la.sale_id == sale.id)
+                    .map(|la| la.id);
                 Some(CustomerSaleView {
                     sale_id: sale.id,
                     plot_id: plot.id,
@@ -210,6 +218,7 @@ impl MockApi {
                     agreed_price: sale.agreed_price,
                     status_label: label.to_string(),
                     status_color: color.to_string(),
+                    loan_account_id,
                 })
             })
             .collect();
@@ -250,6 +259,13 @@ impl MockApi {
         };
         db.sales.push(sale.clone());
 
+        if input.payment_mode != PaymentMode::FullCash {
+            let seq = db.loan_accounts.len() + 1;
+            let today = Utc::now().date_naive();
+            db.loan_accounts
+                .push(new_loan_account(&sale, seq, today));
+        }
+
         if let Some(plot) = db.plots.iter_mut().find(|p| p.id == input.plot_id) {
             plot.status = match input.payment_mode {
                 PaymentMode::FullCash => PlotStatus::Reserved,
@@ -260,6 +276,137 @@ impl MockApi {
         }
 
         Ok(sale)
+    }
+
+    pub async fn get_loan_account(&self, id: Uuid) -> Result<LoanAccountDetail, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+        let account = db
+            .loan_accounts
+            .iter()
+            .find(|la| la.id == id)
+            .cloned()
+            .ok_or(ApiError::NotFound)?;
+        let sale = db
+            .sales
+            .iter()
+            .find(|s| s.id == account.sale_id)
+            .ok_or(ApiError::NotFound)?;
+        let plot = db
+            .plots
+            .iter()
+            .find(|p| p.id == sale.plot_id)
+            .ok_or(ApiError::NotFound)?;
+        let project = db
+            .projects
+            .iter()
+            .find(|p| p.id == plot.project_id)
+            .ok_or(ApiError::NotFound)?;
+        let customer = db
+            .customers
+            .iter()
+            .find(|c| c.id == sale.customer_id)
+            .ok_or(ApiError::NotFound)?;
+        let (label, color) = loan_status_meta(account.status);
+
+        let mut payments: Vec<Payment> = db
+            .payments
+            .iter()
+            .filter(|p| p.loan_account_id == id)
+            .cloned()
+            .collect();
+        payments.sort_by(|a, b| b.payment_date.cmp(&a.payment_date));
+
+        Ok(LoanAccountDetail {
+            plot_id: plot.id,
+            plot_number: plot.plot_number.clone(),
+            project_id: project.id,
+            project_name: project.name.clone(),
+            customer_id: customer.id,
+            customer_name: customer.full_name.clone(),
+            status_label: label.to_string(),
+            status_color: color.to_string(),
+            account,
+            payments,
+        })
+    }
+
+    /// Records a payment against a Plot Loan Account and updates its
+    /// running balance/status. Posted immediately — the
+    /// Captured/Verified/Posted lifecycle and approval gating from
+    /// docs/08 apply once real authenticated users and an approval engine
+    /// exist (docs/09); this mock has neither yet.
+    pub async fn record_payment(&self, input: RecordPaymentInput) -> Result<Payment, ApiError> {
+        settle(300).await;
+        let mut db = self.db.lock().unwrap();
+
+        if input.amount <= Decimal::ZERO {
+            return Err(ApiError::InvalidCredentials(
+                "Enter an amount greater than zero.".to_string(),
+            ));
+        }
+
+        let captured_by = db.demo_user.id;
+        let payment = Payment {
+            id: Uuid::new_v4(),
+            loan_account_id: input.loan_account_id,
+            amount: input.amount,
+            payment_date: input.payment_date,
+            method: input.method,
+            external_reference: None,
+            status: PaymentStatus::Posted,
+            captured_by,
+            verified_by: Some(captured_by),
+            created_at: Utc::now(),
+        };
+
+        let account = db
+            .loan_accounts
+            .iter_mut()
+            .find(|la| la.id == input.loan_account_id)
+            .ok_or(ApiError::NotFound)?;
+        account.amount_paid += input.amount;
+        account.outstanding_balance = (account.outstanding_balance - input.amount).max(Decimal::ZERO);
+        account.status = if account.outstanding_balance <= Decimal::ZERO {
+            LoanAccountStatus::FullyPaid
+        } else if account.amount_paid > Decimal::ZERO {
+            LoanAccountStatus::ActivePartiallyPaid
+        } else {
+            account.status
+        };
+
+        db.payments.push(payment.clone());
+        Ok(payment)
+    }
+}
+
+/// Deliberately simple defaults (10% deposit, 12 monthly instalments) —
+/// see `CreateSaleInput`'s doc comment. Shared by `create_sale` and the
+/// initial seed so both produce accounts with the same shape.
+fn new_loan_account(sale: &PlotSale, seq: usize, start_date: NaiveDate) -> PlotLoanAccount {
+    let deposit_required = (sale.agreed_price * Decimal::new(10, 2)).round();
+    let financed = sale.agreed_price - deposit_required;
+    let instalment_amount = (financed / Decimal::from(12)).round();
+    let interest_rate = match sale.payment_mode {
+        PaymentMode::LipaPolePoleInterestBearing => Some(Decimal::from(14)),
+        _ => None,
+    };
+
+    PlotLoanAccount {
+        id: Uuid::new_v4(),
+        account_number: format!("PLA-{seq:04}"),
+        sale_id: sale.id,
+        principal: sale.agreed_price,
+        interest_rate,
+        deposit_required,
+        deposit_paid: Decimal::ZERO,
+        instalment_amount,
+        repayment_frequency_days: 30,
+        start_date,
+        status: LoanAccountStatus::ApprovedAwaitingDeposit,
+        amount_paid: Decimal::ZERO,
+        outstanding_balance: sale.agreed_price,
+        days_in_arrears: 0,
     }
 }
 
@@ -379,6 +526,9 @@ fn seed() -> MockDb {
     // the customer-detail screen and the "already sold" guard in
     // `create_sale` have something real to show/enforce.
     let mut sales = Vec::new();
+    let mut loan_accounts = Vec::new();
+    let mut payments = Vec::new();
+    let today = Utc::now().date_naive();
     let mut next_customer = 0usize;
     for plot in plots.iter_mut() {
         let payment_mode = match plot.status {
@@ -394,7 +544,7 @@ fn seed() -> MockDb {
         next_customer += 1;
 
         plot.assigned_customer_id = Some(customer.id);
-        sales.push(PlotSale {
+        let sale = PlotSale {
             id: Uuid::new_v4(),
             plot_id: plot.id,
             customer_id: customer.id,
@@ -403,7 +553,45 @@ fn seed() -> MockDb {
             payment_mode,
             agreed_price: plot.asking_price,
             created_at: Utc::now(),
-        });
+        };
+
+        if payment_mode != PaymentMode::FullCash {
+            let mut account = new_loan_account(&sale, loan_accounts.len() + 1, today);
+            // Give it a couple of instalments of history so the loan
+            // account detail screen has something real to show, instead
+            // of every seeded account looking freshly opened.
+            let paid = account.instalment_amount * Decimal::from(2);
+            account.amount_paid = paid;
+            account.outstanding_balance = (account.principal - paid).max(Decimal::ZERO);
+            account.status = LoanAccountStatus::ActivePartiallyPaid;
+            payments.push(Payment {
+                id: Uuid::new_v4(),
+                loan_account_id: account.id,
+                amount: account.instalment_amount,
+                payment_date: today - chrono::Duration::days(60),
+                method: "M-Pesa".to_string(),
+                external_reference: Some("QGX7T2K9".to_string()),
+                status: PaymentStatus::Posted,
+                captured_by: demo_user.id,
+                verified_by: Some(demo_user.id),
+                created_at: Utc::now(),
+            });
+            payments.push(Payment {
+                id: Uuid::new_v4(),
+                loan_account_id: account.id,
+                amount: account.instalment_amount,
+                payment_date: today - chrono::Duration::days(30),
+                method: "Bank Transfer".to_string(),
+                external_reference: Some("FT2409".to_string()),
+                status: PaymentStatus::Posted,
+                captured_by: demo_user.id,
+                verified_by: Some(demo_user.id),
+                created_at: Utc::now(),
+            });
+            loan_accounts.push(account);
+        }
+
+        sales.push(sale);
     }
 
     MockDb {
@@ -413,5 +601,7 @@ fn seed() -> MockDb {
         plots,
         customers,
         sales,
+        loan_accounts,
+        payments,
     }
 }

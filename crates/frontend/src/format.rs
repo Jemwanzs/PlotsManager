@@ -1,4 +1,4 @@
-use domain::PaymentMode;
+use domain::{PaymentMode, PaymentStatus};
 use rust_decimal::Decimal;
 
 pub fn format_payment_mode(mode: PaymentMode) -> &'static str {
@@ -6,6 +6,16 @@ pub fn format_payment_mode(mode: PaymentMode) -> &'static str {
         PaymentMode::FullCash => "Full cash",
         PaymentMode::LipaPolePoleInterestFree => "Lipa Pole Pole (interest-free)",
         PaymentMode::LipaPolePoleInterestBearing => "Lipa Pole Pole (interest-bearing)",
+    }
+}
+
+pub fn format_payment_status(status: PaymentStatus) -> &'static str {
+    match status {
+        PaymentStatus::Captured => "Captured",
+        PaymentStatus::Verified => "Verified",
+        PaymentStatus::Posted => "Posted",
+        PaymentStatus::Rejected => "Rejected",
+        PaymentStatus::Reversed => "Reversed",
     }
 }
 

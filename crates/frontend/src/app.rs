@@ -6,7 +6,8 @@ use crate::api::ApiClient;
 use crate::auth::AuthSignal;
 use crate::layout::AppShell;
 use crate::pages::{
-    CustomerDetail, CustomersList, Dashboard, Login, NotFound, ProjectDetail, ProjectsList,
+    CustomerDetail, CustomersList, Dashboard, LoanAccountDetailPage, Login, NotFound,
+    ProjectDetail, ProjectsList,
 };
 
 #[component]
@@ -37,6 +38,10 @@ pub fn App() -> impl IntoView {
                 <Route
                     path=(StaticSegment("customers"), ParamSegment("id"))
                     view=|| view! { <AppShell><CustomerDetail /></AppShell> }
+                />
+                <Route
+                    path=(StaticSegment("loan-accounts"), ParamSegment("id"))
+                    view=|| view! { <AppShell><LoanAccountDetailPage /></AppShell> }
                 />
             </Routes>
         </Router>
