@@ -54,7 +54,13 @@ has a real login screen and app shell against mock auth. Not yet built:
 actual signup/login HTTP endpoints, org creation flow, numbering config,
 document storage wiring, the least-privilege RLS-subject Postgres role
 (see [10](10-database-and-security-design.md)), or Railway deployment
-configs for `backend`/`frontend`.**
+configs for `backend`/`frontend`. The plot register itself has real
+create flows against mock data now — new project, new plot (per-project
+unique plot numbers, fixing the legacy global-uniqueness bug from
+[02](02-existing-vba-system-analysis.md) §3), new customer — each with
+the validation the schema itself enforces (duplicate codes/IDs rejected)
+replicated in the mock so the UI behaves the same way the real backend
+will once it exists.**
 
 ## Phase 3 — Interactive Maps
 Upload project plans; manual polygon drawing; plot-to-map linking;

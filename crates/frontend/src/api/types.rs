@@ -1,5 +1,5 @@
 use chrono::NaiveDate;
-use domain::{Customer, Payment, PaymentMode, Plot, PlotLoanAccount, User};
+use domain::{AreaUnit, Customer, Payment, PaymentMode, Plot, PlotLoanAccount, User};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -35,6 +35,32 @@ pub struct ProjectSummary {
     pub total_plots: u32,
     pub available_plots: u32,
     pub sold_plots: u32,
+}
+
+/// A new land project. Deliberately narrower than the full field set in
+/// docs/05 (GPS boundary, surveyor/legal info, phases, supporting
+/// documents) — this is enough to register a project and start adding
+/// plots to it; the rest lands with document upload/map versioning
+/// (Phase 3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateProjectInput {
+    pub name: String,
+    pub code: String,
+    pub location: String,
+    pub total_size: Decimal,
+    pub area_unit: AreaUnit,
+}
+
+/// A new plot within a project. `plot_number` must be unique **within
+/// its project** (docs/05's fix for the legacy system's global-uniqueness
+/// bug — see docs/02 §3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreatePlotInput {
+    pub project_id: Uuid,
+    pub plot_number: String,
+    pub size: Decimal,
+    pub asking_price: Decimal,
+    pub minimum_price: Decimal,
 }
 
 /// One row in a project's plot inventory, with its status color resolved

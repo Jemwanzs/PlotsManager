@@ -18,9 +18,9 @@ use uuid::Uuid;
 use super::loan_status::loan_status_meta;
 use super::plot_status::status_meta;
 use super::types::{
-    ApiError, AuthSession, CreateCustomerInput, CreateSaleInput, CustomerDetail, CustomerSaleView,
-    CustomerSummary, DashboardSummary, LoanAccountDetail, PlotWithColor, ProjectSummary,
-    RecordPaymentInput,
+    ApiError, AuthSession, CreateCustomerInput, CreatePlotInput, CreateProjectInput,
+    CreateSaleInput, CustomerDetail, CustomerSaleView, CustomerSummary, DashboardSummary,
+    LoanAccountDetail, PlotWithColor, ProjectSummary, RecordPaymentInput,
 };
 
 const DEMO_EMAIL: &str = "admin@acaciagrove.example";
@@ -140,6 +140,44 @@ impl MockApi {
             .collect())
     }
 
+    /// Unique project code, org-wide — matches the real constraint
+    /// (`projects.organization_id, code` unique, database/migrations/0001_init.sql),
+    /// checked here too since the mock has no database to enforce it.
+    pub async fn create_project(&self, input: CreateProjectInput) -> Result<Project, ApiError> {
+        settle(300).await;
+        let mut db = self.db.lock().unwrap();
+
+        let name = input.name.trim().to_string();
+        let code = input.code.trim().to_uppercase();
+        if name.is_empty() || code.is_empty() || input.location.trim().is_empty() {
+            return Err(ApiError::InvalidCredentials(
+                "Enter a project name, code, and location.".to_string(),
+            ));
+        }
+        if db.projects.iter().any(|p| p.code == code) {
+            return Err(ApiError::InvalidCredentials(format!(
+                "Project code \"{code}\" is already in use."
+            )));
+        }
+
+        let project = Project {
+            id: Uuid::new_v4(),
+            organization_id: db.organization.id,
+            branch_id: None,
+            name,
+            code,
+            location: input.location.trim().to_string(),
+            original_title_number: None,
+            total_size: input.total_size,
+            area_unit: input.area_unit,
+            status: ProjectStatus::Planning,
+            assigned_manager_id: Some(db.demo_user.id),
+            created_at: Utc::now(),
+        };
+        db.projects.push(project.clone());
+        Ok(project)
+    }
+
     pub async fn get_project(&self, id: Uuid) -> Result<Project, ApiError> {
         settle(150).await;
         self.db
@@ -167,6 +205,59 @@ impl MockApi {
                 }
             })
             .collect())
+    }
+
+    /// `plot_number` unique **within its project** — fixes the legacy
+    /// system's global-uniqueness bug (docs/02 §3: two different projects
+    /// couldn't reuse the same plot description at all).
+    pub async fn create_plot(&self, input: CreatePlotInput) -> Result<Plot, ApiError> {
+        settle(300).await;
+        let mut db = self.db.lock().unwrap();
+
+        if !db.projects.iter().any(|p| p.id == input.project_id) {
+            return Err(ApiError::NotFound);
+        }
+        let plot_number = input.plot_number.trim().to_string();
+        if plot_number.is_empty() {
+            return Err(ApiError::InvalidCredentials(
+                "Enter a plot number.".to_string(),
+            ));
+        }
+        if input.asking_price <= Decimal::ZERO {
+            return Err(ApiError::InvalidCredentials(
+                "Enter an asking price greater than zero.".to_string(),
+            ));
+        }
+        if input.minimum_price > input.asking_price {
+            return Err(ApiError::InvalidCredentials(
+                "Minimum price can't be higher than the asking price.".to_string(),
+            ));
+        }
+        let duplicate = db
+            .plots
+            .iter()
+            .any(|p| p.project_id == input.project_id && p.plot_number == plot_number);
+        if duplicate {
+            return Err(ApiError::InvalidCredentials(format!(
+                "Plot \"{plot_number}\" already exists in this project."
+            )));
+        }
+
+        let plot = Plot {
+            id: Uuid::new_v4(),
+            project_id: input.project_id,
+            plot_number,
+            title_number: None,
+            size: input.size,
+            asking_price: input.asking_price,
+            minimum_price: input.minimum_price,
+            status: PlotStatus::Available,
+            map_feature_id: None,
+            assigned_customer_id: None,
+            created_at: Utc::now(),
+        };
+        db.plots.push(plot.clone());
+        Ok(plot)
     }
 
     pub async fn list_customers(&self) -> Result<Vec<CustomerSummary>, ApiError> {

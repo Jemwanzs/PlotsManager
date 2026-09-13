@@ -57,10 +57,24 @@ impl ApiClient {
         }
     }
 
+    pub async fn create_project(&self, input: CreateProjectInput) -> Result<domain::Project, ApiError> {
+        match self {
+            Self::Mock(api) => api.create_project(input).await,
+            Self::Http(api) => api.create_project(input).await,
+        }
+    }
+
     pub async fn list_plots(&self, project_id: Uuid) -> Result<Vec<PlotWithColor>, ApiError> {
         match self {
             Self::Mock(api) => api.list_plots(project_id).await,
             Self::Http(api) => api.list_plots(project_id).await,
+        }
+    }
+
+    pub async fn create_plot(&self, input: CreatePlotInput) -> Result<domain::Plot, ApiError> {
+        match self {
+            Self::Mock(api) => api.create_plot(input).await,
+            Self::Http(api) => api.create_plot(input).await,
         }
     }
 

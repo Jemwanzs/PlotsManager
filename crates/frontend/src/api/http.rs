@@ -8,8 +8,9 @@
 use uuid::Uuid;
 
 use super::types::{
-    ApiError, AuthSession, CreateCustomerInput, CreateSaleInput, CustomerDetail, CustomerSummary,
-    DashboardSummary, LoanAccountDetail, PlotWithColor, ProjectSummary, RecordPaymentInput,
+    ApiError, AuthSession, CreateCustomerInput, CreatePlotInput, CreateProjectInput,
+    CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary, LoanAccountDetail,
+    PlotWithColor, ProjectSummary, RecordPaymentInput,
 };
 
 #[derive(Clone)]
@@ -49,7 +50,19 @@ impl HttpApi {
         ))
     }
 
+    pub async fn create_project(&self, _input: CreateProjectInput) -> Result<domain::Project, ApiError> {
+        Err(ApiError::Network(
+            "backend projects endpoint isn't built yet".to_string(),
+        ))
+    }
+
     pub async fn list_plots(&self, _project_id: Uuid) -> Result<Vec<PlotWithColor>, ApiError> {
+        Err(ApiError::Network(
+            "backend plots endpoint isn't built yet".to_string(),
+        ))
+    }
+
+    pub async fn create_plot(&self, _input: CreatePlotInput) -> Result<domain::Plot, ApiError> {
         Err(ApiError::Network(
             "backend plots endpoint isn't built yet".to_string(),
         ))

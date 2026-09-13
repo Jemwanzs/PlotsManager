@@ -6,7 +6,7 @@ use rust_decimal::Decimal;
 use std::str::FromStr;
 use uuid::Uuid;
 
-use crate::api::{status_meta, CreateSaleInput, PlotWithColor};
+use crate::api::{status_meta, CreatePlotInput, CreateSaleInput, PlotWithColor};
 use crate::auth::use_api;
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
 use crate::format::format_kes;
@@ -68,6 +68,7 @@ pub fn ProjectDetail() -> impl IntoView {
     });
 
     let selected: RwSignal<Option<PlotWithColor>> = RwSignal::new(None);
+    let show_add_plot = RwSignal::new(false);
 
     view! {
         <Suspense fallback=|| view! { <LoadingState label="Loading project…" /> }>
@@ -78,13 +79,32 @@ pub fn ProjectDetail() -> impl IntoView {
                     .flatten()
                     .map(|result| match result {
                         Ok(p) => {
+                            let project_id_val = p.id;
                             view! {
                                 <div class="page-header">
                                     <div>
                                         <h1>{p.name.clone()}</h1>
                                         <p>{p.location.clone()} " · " {p.code.clone()}</p>
                                     </div>
+                                    <button
+                                        class="btn btn-secondary"
+                                        on:click=move |_| show_add_plot.update(|v| *v = !*v)
+                                    >
+                                        {move || if show_add_plot.get() { "Cancel" } else { "+ Add plot" }}
+                                    </button>
                                 </div>
+
+                                <Show when=move || show_add_plot.get()>
+                                    <div class="card" style="margin-bottom: var(--space-4)">
+                                        <AddPlotForm
+                                            project_id=project_id_val
+                                            on_added=move || {
+                                                plots.refetch();
+                                                show_add_plot.set(false);
+                                            }
+                                        />
+                                    </div>
+                                </Show>
                             }
                                 .into_any()
                         }
@@ -190,6 +210,126 @@ pub fn ProjectDetail() -> impl IntoView {
                     }
                 })
         }}
+    }
+}
+
+/// Adds a plot to this project. `plot_number` uniqueness is enforced per
+/// project by `create_plot` (docs/05's fix for the legacy system's
+/// global-uniqueness bug — docs/02 §3), not globally.
+#[component]
+fn AddPlotForm(project_id: Uuid, on_added: impl Fn() + Clone + 'static) -> impl IntoView {
+    let api = use_api();
+
+    let plot_number = RwSignal::new(String::new());
+    let size = RwSignal::new(String::new());
+    let asking_price = RwSignal::new(String::new());
+    let minimum_price = RwSignal::new(String::new());
+    let error = RwSignal::new(None::<String>);
+    let submitting = RwSignal::new(false);
+
+    let on_submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        if submitting.get() {
+            return;
+        }
+        error.set(None);
+
+        let Ok(parsed_size) = Decimal::from_str(size.get().trim()) else {
+            error.set(Some("Enter a valid size.".to_string()));
+            return;
+        };
+        let Ok(parsed_asking) = Decimal::from_str(asking_price.get().trim()) else {
+            error.set(Some("Enter a valid asking price.".to_string()));
+            return;
+        };
+        let parsed_minimum = if minimum_price.get().trim().is_empty() {
+            parsed_asking
+        } else {
+            match Decimal::from_str(minimum_price.get().trim()) {
+                Ok(v) => v,
+                Err(_) => {
+                    error.set(Some("Enter a valid minimum price.".to_string()));
+                    return;
+                }
+            }
+        };
+
+        submitting.set(true);
+        let api = api.clone();
+        let on_added = on_added.clone();
+        let input = CreatePlotInput {
+            project_id,
+            plot_number: plot_number.get(),
+            size: parsed_size,
+            asking_price: parsed_asking,
+            minimum_price: parsed_minimum,
+        };
+        spawn_local(async move {
+            match api.create_plot(input).await {
+                Ok(_) => on_added(),
+                Err(e) => {
+                    error.set(Some(format!("{e}")));
+                    submitting.set(false);
+                }
+            }
+        });
+    };
+
+    view! {
+        <form on:submit=on_submit>
+            <h3 class="mt-0">"Add a plot"</h3>
+            {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+
+            <div class="field">
+                <label for="plot-number">"Plot number"</label>
+                <input
+                    id="plot-number"
+                    type="text"
+                    required
+                    prop:value=plot_number
+                    on:input=move |ev| plot_number.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label for="plot-size">"Size (acres)"</label>
+                <input
+                    id="plot-size"
+                    type="text"
+                    inputmode="decimal"
+                    required
+                    prop:value=size
+                    on:input=move |ev| size.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label for="asking-price">"Asking price (KES)"</label>
+                <input
+                    id="asking-price"
+                    type="text"
+                    inputmode="numeric"
+                    required
+                    prop:value=asking_price
+                    on:input=move |ev| asking_price.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label for="minimum-price">"Minimum price (KES, optional)"</label>
+                <input
+                    id="minimum-price"
+                    type="text"
+                    inputmode="numeric"
+                    prop:value=minimum_price
+                    on:input=move |ev| minimum_price.set(event_target_value(&ev))
+                />
+            </div>
+
+            <button type="submit" class="btn btn-primary" disabled=submitting>
+                {move || if submitting.get() { "Adding…" } else { "Add plot" }}
+            </button>
+        </form>
     }
 }
 

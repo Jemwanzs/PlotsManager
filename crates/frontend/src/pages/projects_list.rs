@@ -21,6 +21,7 @@ pub fn ProjectsList() -> impl IntoView {
                 <h1>"Projects"</h1>
                 <p>"Every land project your organisation is selling, with live inventory."</p>
             </div>
+            <A href="/projects/new" attr:class="btn btn-primary">"+ New project"</A>
         </div>
 
         <input
