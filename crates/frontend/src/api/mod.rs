@@ -78,6 +78,13 @@ impl ApiClient {
         }
     }
 
+    pub async fn create_customer(&self, input: CreateCustomerInput) -> Result<domain::Customer, ApiError> {
+        match self {
+            Self::Mock(api) => api.create_customer(input).await,
+            Self::Http(api) => api.create_customer(input).await,
+        }
+    }
+
     pub async fn create_sale(&self, input: CreateSaleInput) -> Result<domain::PlotSale, ApiError> {
         match self {
             Self::Mock(api) => api.create_sale(input).await,

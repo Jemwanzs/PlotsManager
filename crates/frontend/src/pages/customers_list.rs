@@ -21,6 +21,7 @@ pub fn CustomersList() -> impl IntoView {
                 <h1>"Customers"</h1>
                 <p>"Everyone who has expressed interest in, reserved, or bought a plot."</p>
             </div>
+            <A href="/customers/new" attr:class="btn btn-primary">"+ New customer"</A>
         </div>
 
         <input

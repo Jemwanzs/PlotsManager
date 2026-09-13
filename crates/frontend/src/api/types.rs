@@ -80,6 +80,22 @@ pub struct CustomerDetail {
     pub sales: Vec<CustomerSaleView>,
 }
 
+/// Only `full_name` is truly required — the legacy system
+/// (docs/02 §6) required a full KYC set (title, ID, postal address,
+/// city, KRA PIN, join date, photos) before a customer could be saved at
+/// all, which is precisely why walk-in leads never made it into that
+/// system until someone had time to do full data entry. Keeping this
+/// deliberately minimal, matching the `domain::Customer` fields that
+/// actually exist today, so a customer can be captured the moment
+/// they're interested and enriched later.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateCustomerInput {
+    pub full_name: String,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub id_number: Option<String>,
+}
+
 /// What it takes to reserve a plot for a customer — the first step of the
 /// sales workflow (docs/07). For a Lipa Pole Pole payment mode this also
 /// creates a Plot Loan Account (docs/08 §3), with a fixed 12-instalment/

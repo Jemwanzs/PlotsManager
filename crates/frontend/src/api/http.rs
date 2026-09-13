@@ -8,8 +8,8 @@
 use uuid::Uuid;
 
 use super::types::{
-    ApiError, AuthSession, CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary,
-    LoanAccountDetail, PlotWithColor, ProjectSummary, RecordPaymentInput,
+    ApiError, AuthSession, CreateCustomerInput, CreateSaleInput, CustomerDetail, CustomerSummary,
+    DashboardSummary, LoanAccountDetail, PlotWithColor, ProjectSummary, RecordPaymentInput,
 };
 
 #[derive(Clone)]
@@ -62,6 +62,12 @@ impl HttpApi {
     }
 
     pub async fn get_customer(&self, _id: Uuid) -> Result<CustomerDetail, ApiError> {
+        Err(ApiError::Network(
+            "backend customers endpoint isn't built yet".to_string(),
+        ))
+    }
+
+    pub async fn create_customer(&self, _input: CreateCustomerInput) -> Result<domain::Customer, ApiError> {
         Err(ApiError::Network(
             "backend customers endpoint isn't built yet".to_string(),
         ))

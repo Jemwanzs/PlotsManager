@@ -18,8 +18,9 @@ use uuid::Uuid;
 use super::loan_status::loan_status_meta;
 use super::plot_status::status_meta;
 use super::types::{
-    ApiError, AuthSession, CreateSaleInput, CustomerDetail, CustomerSaleView, CustomerSummary,
-    DashboardSummary, LoanAccountDetail, PlotWithColor, ProjectSummary, RecordPaymentInput,
+    ApiError, AuthSession, CreateCustomerInput, CreateSaleInput, CustomerDetail, CustomerSaleView,
+    CustomerSummary, DashboardSummary, LoanAccountDetail, PlotWithColor, ProjectSummary,
+    RecordPaymentInput,
 };
 
 const DEMO_EMAIL: &str = "admin@acaciagrove.example";
@@ -183,6 +184,46 @@ impl MockApi {
                     .count() as u32,
             })
             .collect())
+    }
+
+    /// Mirrors a real, working legacy validation (docs/02 §6): reject a
+    /// duplicate ID/passport number rather than silently allowing two
+    /// customer records for the same person.
+    pub async fn create_customer(&self, input: CreateCustomerInput) -> Result<Customer, ApiError> {
+        settle(300).await;
+        let mut db = self.db.lock().unwrap();
+
+        let full_name = input.full_name.trim().to_string();
+        if full_name.is_empty() {
+            return Err(ApiError::InvalidCredentials(
+                "Enter the customer's name.".to_string(),
+            ));
+        }
+
+        if let Some(id_number) = input.id_number.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            let duplicate = db
+                .customers
+                .iter()
+                .any(|c| c.id_number.as_deref() == Some(id_number));
+            if duplicate {
+                return Err(ApiError::InvalidCredentials(
+                    "That ID/passport number is already registered.".to_string(),
+                ));
+            }
+        }
+
+        let customer = Customer {
+            id: Uuid::new_v4(),
+            organization_id: db.organization.id,
+            full_name,
+            email: input.email.filter(|s| !s.trim().is_empty()),
+            phone: input.phone.filter(|s| !s.trim().is_empty()),
+            id_number: input.id_number.filter(|s| !s.trim().is_empty()),
+            assigned_agent_id: Some(db.demo_user.id),
+            created_at: Utc::now(),
+        };
+        db.customers.push(customer.clone());
+        Ok(customer)
     }
 
     pub async fn get_customer(&self, id: Uuid) -> Result<CustomerDetail, ApiError> {

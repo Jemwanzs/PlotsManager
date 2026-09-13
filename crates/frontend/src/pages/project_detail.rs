@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
 use rust_decimal::Decimal;
 use std::str::FromStr;
@@ -294,6 +295,11 @@ fn ReserveForm(
                         }}
                     </Suspense>
                 </select>
+                <span class="text-muted" style="font-size: 0.8rem;">
+                    "Don't see them? "
+                    <A href="/customers/new">"Add a new customer"</A>
+                    " (you'll need to reserve again after)."
+                </span>
             </div>
 
             <div class="field">
