@@ -15,9 +15,9 @@ the original scoping conversation and the legacy Excel/VBA workbook
 | [07 Sales and Booking Workflows](07-sales-and-booking-workflows.md) | drafted |
 | [08 Payments and Receipting](08-payments-and-receipting.md) | drafted |
 | [09 Approval Workflows](09-approval-workflows.md) | drafted |
-| [10 Database and Security Design](10-database-and-security-design.md) | updated for Supabase — schema + RLS in `supabase/migrations/` |
+| [10 Database and Security Design](10-database-and-security-design.md) | updated for Railway — schema + RLS in `database/migrations/` |
 | [11 Reports and Analytics](11-reports-and-analytics.md) | drafted |
-| [12 API and Integration Design](12-api-and-integration-design.md) | updated for Supabase BaaS architecture |
+| [12 API and Integration Design](12-api-and-integration-design.md) | updated for Frontend → Rust API → PostgreSQL on Railway |
 | [13 Data Migration Plan](13-data-migration-plan.md) | drafted |
 | [14 Development Roadmap](14-development-roadmap.md) | drafted, tracks current build status |
 | [15 Testing and Acceptance Criteria](15-testing-and-acceptance-criteria.md) | drafted |

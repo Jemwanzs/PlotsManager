@@ -2,12 +2,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Mirrors the `profiles` table, which extends Supabase Auth's
-/// `auth.users` (id only) with the organization/branch scoping the rest of
-/// the schema keys off. Supabase owns credentials, sessions, and password
-/// resets — this crate never models a password.
+/// Mirrors the `users` table (`database/migrations/0001_init.sql`).
+/// Never carries `password_hash` — that field exists only in Postgres and
+/// in `crates/backend/src/auth.rs`'s hashing/verification code, never in
+/// a struct that could end up serialized into an API response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Profile {
+pub struct User {
     pub id: Uuid,
     pub organization_id: Uuid,
     pub branch_id: Option<Uuid>,

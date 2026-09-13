@@ -1,15 +1,34 @@
--- Phase 2 foundation schema, adapted for Supabase: authentication is
--- Supabase Auth's `auth.users` (managed by Supabase, not this schema) —
--- every tenant-scoped table here carries organization_id directly (or
--- transitively via project_id/plot_id/sale_id) and multi-tenancy is
--- enforced with Postgres Row-Level Security, not application code, since
--- the Leptos frontend talks to Supabase's PostgREST API directly.
+-- Phase 2 foundation schema. Platform-neutral Postgres, run against
+-- Railway Postgres by the backend on boot (`sqlx::migrate!`, see
+-- crates/backend/src/main.rs) — no external migration CLI required.
 --
--- Run via the Supabase CLI: `supabase db push` (or picked up automatically
--- by `supabase start` for local dev). Do not run this by hand against a
--- production project.
+-- Architecture: the frontend never connects to this database directly.
+-- Every request goes through the Rust backend (crates/backend), which is
+-- the primary enforcement point for authentication, authorization, and
+-- tenant isolation. Row-Level Security below is *defense in depth*, not
+-- the primary boundary: the backend opens a transaction, runs
+-- `select set_config('app.current_organization_id', $1, true)` with the
+-- authenticated caller's organization before any tenant-scoped query, and
+-- these policies check that session-local setting. A bug that forgets a
+-- WHERE clause in application code still can't leak across tenants; a
+-- bug that forgets to set the session variable gets zero rows back, not
+-- someone else's data (current_setting(..., true) is null, and null
+-- never equals an organization_id).
 
 create extension if not exists "pgcrypto";
+-- Case-insensitive email column (users.email) so "A@x.com" and "a@x.com"
+-- collide at the database constraint level, not just in application code.
+create extension if not exists "citext";
+
+-- Read by every RLS policy below. No elevated privileges needed — it
+-- only reads a session-local setting the backend sets per transaction.
+create or replace function public.current_org_id()
+returns uuid
+language sql
+stable
+as $$
+    select nullif(current_setting('app.current_organization_id', true), '')::uuid
+$$;
 
 create table organizations (
     id uuid primary key default gen_random_uuid(),
@@ -36,38 +55,34 @@ create table roles (
     unique (organization_id, name)
 );
 
--- One row per Supabase Auth user, extending `auth.users` with the
--- organization/branch/role scoping the rest of this schema keys off.
--- Created by a trigger (see below) the moment a user signs up.
-create table profiles (
-    id uuid primary key references auth.users(id) on delete cascade,
+-- Authentication lives here, owned entirely by the backend (argon2
+-- password hashing, JWT/session issuance — see crates/backend/src/auth).
+-- No Auth-as-a-service dependency.
+create table users (
+    id uuid primary key default gen_random_uuid(),
     organization_id uuid not null references organizations(id),
     branch_id uuid references branches(id),
     full_name text not null,
-    email text not null,
+    email citext not null unique,
+    password_hash text not null,
     is_active boolean not null default true,
     created_at timestamptz not null default now()
 );
 
 create table role_assignments (
-    user_id uuid not null references profiles(id),
+    id uuid primary key default gen_random_uuid(),
+    user_id uuid not null references users(id),
     role_id uuid not null references roles(id),
     project_id uuid,
-    branch_id uuid references branches(id),
-    primary key (user_id, role_id, coalesce(project_id, '00000000-0000-0000-0000-000000000000'))
+    branch_id uuid references branches(id)
 );
-
--- Helper used by every RLS policy below: the caller's organization, read
--- from their profile row. `stable` so the planner can cache it per query.
-create or replace function public.current_organization_id()
-returns uuid
-language sql
-stable
-security definer
-set search_path = public
-as $$
-    select organization_id from public.profiles where id = auth.uid()
-$$;
+-- A plain `unique (user_id, role_id, project_id)` constraint wouldn't
+-- catch a duplicate org-wide assignment (project_id null) alongside a
+-- project-scoped one, since Postgres treats every null as distinct in a
+-- unique constraint — this expression index (coalescing null to a
+-- sentinel) is what table-level PRIMARY KEY/UNIQUE can't express.
+create unique index role_assignments_uidx
+    on role_assignments (user_id, role_id, coalesce(project_id, '00000000-0000-0000-0000-000000000000'));
 
 create table projects (
     id uuid primary key default gen_random_uuid(),
@@ -81,7 +96,7 @@ create table projects (
     area_unit text not null check (area_unit in ('hectares', 'acres', 'square_metres')),
     status text not null default 'planning'
         check (status in ('planning', 'active', 'on_hold', 'sold_out', 'closed')),
-    assigned_manager_id uuid references profiles(id),
+    assigned_manager_id uuid references users(id),
     created_at timestamptz not null default now(),
     unique (organization_id, code)
 );
@@ -94,11 +109,12 @@ create table project_map_versions (
     version_number int not null,
     status text not null default 'draft'
         check (status in ('draft', 'pending_approval', 'approved', 'published', 'superseded')),
-    -- Path into the `project-plans` Supabase Storage bucket, not a public URL.
+    -- Object storage key/path (Railway volume or S3-compatible bucket —
+    -- see docs/10-database-and-security-design.md), not a public URL.
     source_document_path text not null,
     polygons jsonb not null default '{}',
-    uploaded_by uuid not null references profiles(id),
-    approved_by uuid references profiles(id),
+    uploaded_by uuid not null references users(id),
+    approved_by uuid references users(id),
     created_at timestamptz not null default now(),
     unique (project_id, version_number)
 );
@@ -137,7 +153,7 @@ create table customers (
     email text,
     phone text,
     id_number text,
-    assigned_agent_id uuid references profiles(id),
+    assigned_agent_id uuid references users(id),
     created_at timestamptz not null default now()
 );
 alter table plots
@@ -148,7 +164,7 @@ create table plot_sales (
     plot_id uuid not null references plots(id),
     customer_id uuid not null references customers(id),
     organization_id uuid not null references organizations(id),
-    agent_id uuid references profiles(id),
+    agent_id uuid references users(id),
     payment_mode text not null
         check (payment_mode in ('full_cash', 'lipa_pole_pole_interest_free', 'lipa_pole_pole_interest_bearing')),
     agreed_price numeric(16, 2) not null,
@@ -198,8 +214,8 @@ create table payments (
     method text not null,
     external_reference text,
     status text not null default 'captured',
-    captured_by uuid not null references profiles(id),
-    verified_by uuid references profiles(id),
+    captured_by uuid not null references users(id),
+    verified_by uuid references users(id),
     created_at timestamptz not null default now()
 );
 create index payments_loan_account_id_idx on payments(loan_account_id);
@@ -207,7 +223,7 @@ create index payments_loan_account_id_idx on payments(loan_account_id);
 create table audit_log (
     id uuid primary key default gen_random_uuid(),
     organization_id uuid not null references organizations(id),
-    actor_id uuid references profiles(id),
+    actor_id uuid references users(id),
     entity_type text not null,
     entity_id uuid not null,
     action text not null,
@@ -218,17 +234,20 @@ create table audit_log (
 create index audit_log_entity_idx on audit_log(entity_type, entity_id);
 
 -- =========================================================================
--- Row-Level Security: every tenant-scoped table is locked down by default
--- and opened only to callers whose profile organization_id matches. The
--- services crate connects with the service_role key, which bypasses RLS
--- entirely (Postgres role membership, not a policy) — that's how Paystack
--- webhook processing and other backend-only writes work.
+-- Row-Level Security — defense in depth behind the backend's own
+-- authorization checks (see the header note above). Every tenant-scoped
+-- table is locked down by default and opened only to rows matching the
+-- session-local org id the backend sets per transaction. The backend's
+-- system/admin connection pool (migrations, Paystack webhook processing —
+-- see database/migrations/0002_billing.sql) uses a Postgres role with
+-- BYPASSRLS, which is a role grant, not a policy, and is documented in
+-- docs/10-database-and-security-design.md.
 -- =========================================================================
 
 alter table organizations enable row level security;
 alter table branches enable row level security;
 alter table roles enable row level security;
-alter table profiles enable row level security;
+alter table users enable row level security;
 alter table role_assignments enable row level security;
 alter table projects enable row level security;
 alter table project_map_versions enable row level security;
@@ -242,76 +261,49 @@ alter table payments enable row level security;
 alter table audit_log enable row level security;
 
 create policy org_isolation_select on organizations for select
-    using (id = public.current_organization_id());
+    using (id = public.current_org_id());
 
-create policy profile_self_select on profiles for select
-    using (id = auth.uid() or organization_id = public.current_organization_id());
-create policy profile_self_update on profiles for update
-    using (id = auth.uid());
+create policy users_org_select on users for select
+    using (organization_id = public.current_org_id());
 
 -- Every other tenant-scoped table follows the same shape: read/write only
 -- rows in the caller's organization. Write policies are deliberately
 -- read-only (`for select`) at this stage — INSERT/UPDATE/DELETE policies
--- are added per table as each write workflow is built (Phase 2+), so that
--- every write path gets a policy that matches its actual permission model
--- (e.g. plot price changes going through an approval-aware policy) instead
--- of a blanket "same org can write anything" rule.
+-- are added per table as each write workflow is built, matched to the
+-- backend's actual permission model for that action (e.g. plot price
+-- changes going through an approval-aware check) rather than a blanket
+-- "same org can write anything" rule.
 create policy branches_org_select on branches for select
-    using (organization_id = public.current_organization_id());
+    using (organization_id = public.current_org_id());
 create policy roles_org_select on roles for select
-    using (organization_id = public.current_organization_id());
+    using (organization_id = public.current_org_id());
 create policy role_assignments_org_select on role_assignments for select
-    using (user_id in (select id from profiles where organization_id = public.current_organization_id()));
+    using (user_id in (select id from users where organization_id = public.current_org_id()));
 create policy projects_org_select on projects for select
-    using (organization_id = public.current_organization_id());
+    using (organization_id = public.current_org_id());
 create policy project_map_versions_org_select on project_map_versions for select
-    using (project_id in (select id from projects where organization_id = public.current_organization_id()));
+    using (project_id in (select id from projects where organization_id = public.current_org_id()));
 create policy plot_status_config_org_select on plot_status_config for select
-    using (organization_id = public.current_organization_id());
+    using (organization_id = public.current_org_id());
 create policy plots_org_select on plots for select
-    using (project_id in (select id from projects where organization_id = public.current_organization_id()));
+    using (project_id in (select id from projects where organization_id = public.current_org_id()));
 create policy customers_org_select on customers for select
-    using (organization_id = public.current_organization_id());
+    using (organization_id = public.current_org_id());
 create policy plot_sales_org_select on plot_sales for select
-    using (organization_id = public.current_organization_id());
+    using (organization_id = public.current_org_id());
 create policy plot_loan_accounts_org_select on plot_loan_accounts for select
-    using (sale_id in (select id from plot_sales where organization_id = public.current_organization_id()));
+    using (sale_id in (select id from plot_sales where organization_id = public.current_org_id()));
 create policy repayment_schedule_org_select on repayment_schedule_entries for select
     using (loan_account_id in (
         select pla.id from plot_loan_accounts pla
         join plot_sales ps on ps.id = pla.sale_id
-        where ps.organization_id = public.current_organization_id()
+        where ps.organization_id = public.current_org_id()
     ));
 create policy payments_org_select on payments for select
     using (loan_account_id in (
         select pla.id from plot_loan_accounts pla
         join plot_sales ps on ps.id = pla.sale_id
-        where ps.organization_id = public.current_organization_id()
+        where ps.organization_id = public.current_org_id()
     ));
 create policy audit_log_org_select on audit_log for select
-    using (organization_id = public.current_organization_id());
-
--- New Auth user -> profile row. The organization must already exist
--- (created during org sign-up before inviting users) and is passed in
--- via the sign-up call's user metadata.
-create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-    insert into public.profiles (id, organization_id, full_name, email)
-    values (
-        new.id,
-        (new.raw_user_meta_data ->> 'organization_id')::uuid,
-        coalesce(new.raw_user_meta_data ->> 'full_name', new.email),
-        new.email
-    );
-    return new;
-end;
-$$;
-
-create trigger on_auth_user_created
-    after insert on auth.users
-    for each row execute function public.handle_new_user();
+    using (organization_id = public.current_org_id());

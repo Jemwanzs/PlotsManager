@@ -9,11 +9,12 @@ Repo: https://github.com/Jemwanzs/PlotsManager
 
 ## Stack
 
-- **Frontend**: Rust, [Leptos](https://leptos.dev/) (CSR, compiled to WASM via [Trunk](https://trunkrs.dev/)), deployed to **Vercel** as a static site.
-- **Backend-as-a-service**: [Supabase](https://supabase.com/) — Postgres, Auth, and Storage. The frontend talks to Supabase directly (PostgREST + GoTrue) over HTTPS; multi-tenancy and permissions are enforced by Postgres **Row-Level Security**, not application code. See [docs/12](docs/12-api-and-integration-design.md).
-- **`services` crate**: a thin Rust/Axum service for the handful of things Supabase can't do directly — verifying and applying **Paystack** webhooks today, PDF generation and repayment-schedule calculation as those land. Not deployed to Vercel (needs a persistent Rust host — Fly.io/Shuttle/Railway; not yet provisioned).
+- **Frontend**: Rust, [Leptos](https://leptos.dev/) (CSR, compiled to WASM via [Trunk](https://trunkrs.dev/)). Talks only to the backend API, never to Postgres directly.
+- **Backend**: Rust, [Axum](https://github.com/tokio-rs/axum) + [sqlx](https://github.com/launchbadge/sqlx). The sole authority for authentication, authorization, tenant isolation, and business rules — see [docs/12](docs/12-api-and-integration-design.md).
+- **Database**: PostgreSQL on **Railway**. Row-Level Security (`database/migrations/`) is defense-in-depth behind the backend's own checks, not the primary boundary — see [docs/10](docs/10-database-and-security-design.md).
 - **Billing**: [Paystack](https://paystack.com/) for the platform's own SaaS subscription billing (an organization paying for the product) — separate from in-app customer plot payments. See [docs/16](docs/16-billing-and-subscriptions.md).
-- **Shared `domain` crate**: plain Rust types/enums (no I/O), used by both `frontend` and `services` so they can never drift apart.
+- **Hosting**: **Railway** (project `c7bee255-492d-40b6-af50-30374625b279`) for the frontend, backend, and Postgres. No Vercel, no Supabase.
+- **Shared `domain` crate**: plain Rust types/enums (no I/O), used by both `frontend` and `backend` so they can never drift apart.
 
 ## Layout
 
@@ -21,43 +22,47 @@ Repo: https://github.com/Jemwanzs/PlotsManager
 Cargo.toml              workspace root
 crates/
   domain/                shared types (Organization, Plot, PlotStatus, sales/loan accounts, billing, ...)
-  services/               thin Axum service: Paystack webhooks today, PDF/schedule generation later
-  frontend/               Leptos WASM app — talks to Supabase directly (src/supabase/)
-supabase/
-  migrations/             Postgres schema + Row-Level Security policies (Supabase CLI)
+  backend/                Axum API: auth, business logic, Postgres access, Paystack webhooks
+  frontend/               Leptos WASM app — talks only to the backend (src/api/)
+database/
+  migrations/             schema, applied automatically by the backend on boot
+  seeds/                  static reference data, applied manually
 docs/                    product & technical specification (see docs/README.md)
 legacy-excel/             existing Excel/VBA workbook + exports — gitignored, local reference only
-vercel.json              static deploy config for crates/frontend
-scripts/vercel-build.sh   installs Rust + Trunk on Vercel's build image, then builds the frontend
 ```
+
+## Frontend-first, mock-backed
+
+The frontend is being built ahead of the backend's real endpoints against
+an in-memory mock dataset (`crates/frontend/src/api/mock.rs`), behind the
+same `ApiClient` interface the real HTTP client
+(`crates/frontend/src/api/http.rs`) will use — see
+[docs/14](docs/14-development-roadmap.md) for the reasoning and current
+status. No component talks to `mock`/`http` directly, so swapping one for
+the other later doesn't touch the UI.
 
 ## Getting started
 
-Prerequisites: [Rust](https://rustup.rs/), the
-[Supabase CLI](https://supabase.com/docs/guides/cli) (Docker required for
-local Supabase), and [Trunk](https://trunkrs.dev/) + the
-`wasm32-unknown-unknown` target for the frontend.
+Prerequisites: [Rust](https://rustup.rs/), a local Postgres (Docker is
+easiest — see [`database/README.md`](database/README.md)), and
+[Trunk](https://trunkrs.dev/) + the `wasm32-unknown-unknown` target for
+the frontend.
 
 ```bash
 rustup target add wasm32-unknown-unknown
 cargo install trunk
 
-supabase start                # local Supabase stack (Postgres/Auth/Storage/PostgREST)
-supabase db push               # applies supabase/migrations/
+cp .env.example .env   # fill in DATABASE_URL, JWT_SECRET, PAYSTACK_SECRET_KEY
 
-cp .env.example .env
-# fill in DATABASE_URL (from `supabase status`), PAYSTACK_SECRET_KEY,
-# SUPABASE_URL / SUPABASE_ANON_KEY (also from `supabase status`)
-
-cargo run -p services          # Paystack-webhook service, :8080
-cd crates/frontend && trunk serve   # frontend dev server, reads SUPABASE_* from your shell env
+cargo run -p backend          # runs database/migrations/ on boot, serves on :8080
+cd crates/frontend && trunk serve   # frontend dev server on :8080 (Trunk's default) — runs against api::mock, no backend calls yet
 ```
 
-Production: point a Supabase **cloud** project's connection details at the
-same env vars, run `supabase db push --linked` (or push through CI),
-deploy `crates/frontend` to **Vercel** (`vercel.json` + `scripts/vercel-build.sh`
-handle the Rust/Trunk build), and deploy `crates/services` to a
-persistent Rust host — not decided yet.
+Production: Railway hosts the backend (Postgres plugin +
+`crates/backend`, reading `DATABASE_URL`/`PORT` from Railway env vars) and
+the frontend (`crates/frontend`'s Trunk build). Deployment configs land
+alongside that work — not committed yet, see
+[docs/14](docs/14-development-roadmap.md).
 
 ## Legacy Excel/VBA source material
 

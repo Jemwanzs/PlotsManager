@@ -1,5 +1,5 @@
 [package]
-name = "services"
+name = "backend"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -20,7 +20,7 @@ axum = "0.7"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "rust_decimal", "json"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "rust_decimal", "json", "migrate"] }
 dotenvy = "0.15"
 anyhow = "1"
 
@@ -30,3 +30,10 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
+
+# Password hashing and session tokens for the auth module this crate owns
+# (see docs/10-database-and-security-design.md) — not built out yet beyond
+# these primitives; signup/login endpoints land in the "Rust APIs &
+# Authentication" roadmap phase (docs/14-development-roadmap.md).
+argon2 = "0.5"
+jsonwebtoken = "9"

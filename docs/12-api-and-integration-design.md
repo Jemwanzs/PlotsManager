@@ -1,51 +1,62 @@
 # 12 — API and Integration Design
 
-## Shape: Supabase as backend-as-a-service, not a custom API
+## Shape: Frontend → Rust API → PostgreSQL
 
-There is no application server between the Leptos frontend and Postgres
-for ordinary CRUD. The frontend (`crates/frontend/src/supabase/`) calls
-Supabase directly:
+`crates/backend` is a conventional Rust/Axum REST API and the **only**
+thing that talks to Postgres. The Leptos frontend (`crates/frontend/src/api/`)
+never connects to the database directly — every read and write goes
+through the backend, which is the authoritative layer for authentication,
+authorization, tenant isolation, and business rules (see
+[10](10-database-and-security-design.md)).
 
-- **PostgREST** (`{SUPABASE_URL}/rest/v1/...`) for reading/writing tables —
-  what a table returns or accepts is governed entirely by the Row-Level
-  Security policies in [`supabase/migrations/`](../supabase/migrations/),
-  described in [10](10-database-and-security-design.md).
-- **GoTrue** (`{SUPABASE_URL}/auth/v1/...`) for sign-up/sign-in/sign-out,
-  wrapped in `crates/frontend/src/supabase/auth.rs`.
-- **Storage** for uploaded plans, KYC documents, and generated PDFs
-  (bucket policies mirror the table RLS pattern).
+`domain` types are shared between `frontend` and `backend` so request/
+response payloads and the database rows they're built from can't drift
+apart silently — a `Plot` struct means the same thing on both sides of
+the wire.
 
-`domain` types are shared between `frontend` and `services`, but there is
-no wire-format contract to keep in sync the way a REST API normally
-would — the "API" is Postgres's own schema plus PostgREST's convention
-for turning it into HTTP, and RLS is what actually decides who can do
-what.
+## Frontend-first: mock now, real API later, same interface
 
-## The `services` crate: what Supabase can't do
+The UI is being built ahead of the backend's real endpoints (see
+[14](14-development-roadmap.md)) against an in-memory mock
+(`crates/frontend/src/api/mock.rs`) that implements the exact same method
+surface the real HTTP client (`crates/frontend/src/api/http.rs`) will —
+both are wrapped by one `ApiClient` enum
+(`crates/frontend/src/api/mod.rs`) that every component calls through.
+Swapping `ApiClient::new_mock()` for `ApiClient::new_http(base_url)` at
+the single call site in `app.rs` is the entire migration once the backend
+routes exist — no component is rewritten.
 
-A thin Axum service (`crates/services/`) handles the handful of things
-that don't fit the "frontend talks to Postgres directly" model:
+```
+UI Components
+      |
+Application/State Layer (Leptos signals/resources)
+      |
+ApiClient (api::mock today, api::http once the backend exists)
+      |
+Rust REST API (crates/backend)
+      |
+PostgreSQL (Railway)
+```
 
-- **Paystack webhooks** (`crates/services/src/paystack.rs`) — verifying
-  signatures and applying subscription/invoice state needs a server-side
-  secret and a place to receive an HTTP callback, neither of which a
-  static frontend has. See [16](16-billing-and-subscriptions.md).
-- **PDF generation** (statements, receipts, certificates —
-  [08](08-payments-and-receipting.md)) — not yet built; will live here
-  once statement generation starts.
-- **Repayment-schedule calculation** — the amortization math for
-  interest-bearing Lipa Pole Pole sales is deliberately not implemented
-  yet (see [08](08-payments-and-receipting.md)'s note on this); when it
-  is, it should be computed server-side here rather than trusted from the
-  client, even though `domain` types could technically be shared into the
-  WASM frontend for a live preview.
+## The backend's job (progressively)
 
-It connects to the same Supabase Postgres via a direct connection string
-(`DATABASE_URL`) using a role that bypasses RLS — see
-[10](10-database-and-security-design.md#authentication-and-authorization).
-It is **not deployed to Vercel** (Vercel doesn't run a persistent Rust
-process); hosting for it is an open question — see
-[14](14-development-roadmap.md).
+Per [10](10-database-and-security-design.md) and
+[04](04-user-roles-and-permissions.md), `crates/backend` owns:
+
+- Authentication/session handling (`crates/backend/src/auth.rs` — Argon2
+  password hashing and JWT session tokens, built; not yet wired to HTTP
+  handlers)
+- API endpoints and request validation
+- Authorization, multi-tenant isolation, RBAC, branch/project scoping
+- Business rules (pricing, approval gates, repayment schedules once built)
+- Database access and transactions
+- Approval workflows ([09](09-approval-workflows.md))
+- Audit logging
+- Paystack webhook verification and processing (built —
+  `crates/backend/src/paystack.rs`)
+- File/document operations, once an object storage backend is chosen
+  ([10](10-database-and-security-design.md#file-storage))
+- Reporting services ([11](11-reports-and-analytics.md))
 
 ## Future payment integration readiness
 
@@ -64,10 +75,9 @@ parallel balance:
 Practically: an integrated payment should land in the same `payments`
 table, go through the same `Captured → Verified → Posted` lifecycle (with
 `Captured` set automatically instead of by an officer), and use the same
-allocation rules. Any such integration's webhook handling belongs in
-`services`, following the same signature-verification + idempotency
-pattern already established for Paystack in
-`crates/services/src/paystack.rs`.
+allocation rules. Any such integration's webhook handling follows the
+same signature-verification + idempotency pattern already established for
+Paystack in `crates/backend/src/paystack.rs`.
 
 **Do not confuse this with Paystack**, which is exclusively for the
 platform's own SaaS subscription billing — see
@@ -78,18 +88,26 @@ platform's own SaaS subscription billing — see
 Email, SMS, WhatsApp, and in-app notifications are referenced throughout
 approvals ([09](09-approval-workflows.md)) and collections
 ([08](08-payments-and-receipting.md)). Treat this as a single internal
-notification service with pluggable channel adapters, driven by
-organisation-configured templates — not per-feature ad hoc sends. Where
-it lives (a Supabase Edge Function, or another `services` route) is not
-yet decided; Supabase Edge Functions run on Deno/TypeScript, not Rust, so
-this is a real architectural choice to make deliberately rather than
-default into.
+notification service in `crates/backend`, with pluggable channel
+adapters, driven by organisation-configured templates — not per-feature
+ad hoc sends. Provider not yet chosen.
 
 ## Document generation
 
 PDF statements, receipts, and certificates ([08](08-payments-and-receipting.md))
-should go through one templating/rendering path in `services`, not a
-bespoke renderer per document type, since the audit/versioning
+should go through one templating/rendering path in `crates/backend`, not
+a bespoke renderer per document type, since the audit/versioning
 requirements (recipient/channel/sender/date/delivery status/version) are
-identical across all of them. Generated files are written to Supabase
-Storage, same as uploaded documents.
+identical across all of them. Generated files go to the same object
+storage backend as uploaded documents
+([10](10-database-and-security-design.md#file-storage)).
+
+## Deployment: Railway
+
+Railway project `c7bee255-492d-40b6-af50-30374625b279` hosts the
+frontend, backend, and Postgres. Deployment configs (Dockerfiles,
+per-service Railway settings) aren't committed yet — deliberately
+sequenced after the frontend's UI/UX work per
+[14](14-development-roadmap.md)'s priority order. `crates/backend`
+already reads `PORT` from the environment (Railway's convention) so it's
+ready to deploy once that work starts.

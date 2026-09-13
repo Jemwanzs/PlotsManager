@@ -3,10 +3,12 @@
 -- customer plot payments in the core schema (0001_init.sql) — see
 -- docs/16-billing-and-subscriptions.md for why these are kept separate.
 --
--- All writes here happen through the `services` crate using the
--- service_role key (Paystack webhook processing), never directly from the
--- frontend, so only SELECT policies are needed for organizations to view
--- their own billing state.
+-- All writes here happen through the backend's system/admin connection
+-- (Paystack webhook processing, crates/backend/src/paystack.rs), which
+-- uses a Postgres role with BYPASSRLS since webhook events aren't tied to
+-- an authenticated user's session the way ordinary requests are. Only
+-- SELECT policies are needed for organizations to view their own billing
+-- state through the backend's regular (RLS-scoped) connection pool.
 
 create table subscription_plans (
     id uuid primary key default gen_random_uuid(),
@@ -47,9 +49,9 @@ create table billing_invoices (
 );
 
 -- Idempotency guard: Paystack retries webhooks that don't 200 promptly, so
--- every event id is recorded before it's acted on. Not exposed via the
--- frontend API at all (RLS enabled, zero policies -> default deny; only
--- the service_role connection, which bypasses RLS, can touch it).
+-- every event id is recorded before it's acted on. No SELECT policy at
+-- all — only the backend's BYPASSRLS system connection can touch it, the
+-- ordinary RLS-scoped pool gets zero rows by default.
 create table billing_webhook_events (
     id uuid primary key default gen_random_uuid(),
     provider text not null default 'paystack',
@@ -70,13 +72,13 @@ create policy subscription_plans_public_select on subscription_plans for select
     using (is_active = true);
 
 create policy organization_subscriptions_org_select on organization_subscriptions for select
-    using (organization_id = public.current_organization_id());
+    using (organization_id = public.current_org_id());
 
 create policy billing_invoices_org_select on billing_invoices for select
     using (organization_subscription_id in (
         select id from organization_subscriptions
-        where organization_id = public.current_organization_id()
+        where organization_id = public.current_org_id()
     ));
 
 -- billing_webhook_events: no policies -> RLS defaults to deny for every
--- role except service_role, which bypasses RLS entirely.
+-- role except one with BYPASSRLS.

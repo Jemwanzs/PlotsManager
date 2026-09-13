@@ -13,11 +13,17 @@ serde_json.workspace = true
 # wasm32 has no native RNG; pull entropy from the browser's Web Crypto API.
 uuid = { workspace = true, features = ["js"] }
 chrono.workspace = true
+rust_decimal.workspace = true
+thiserror.workspace = true
 
 leptos = { version = "0.7", features = ["csr"] }
+leptos_router = { version = "0.7" }
 console_error_panic_hook = "0.1"
 console_log = "1"
 log = "0.4"
-# Talks directly to Supabase (Auth + PostgREST) from the browser — no
-# separate backend for CRUD, see docs/12-api-and-integration-design.md.
+# HTTP client for the real-API `api::http` implementation — not the
+# primary path yet (the app runs against `api::mock` while UI is built
+# ahead of the Rust API, see docs/14-development-roadmap.md), but the
+# contract is written against it so swapping is wiring, not a rebuild.
 gloo-net = "0.6"
+gloo-timers = { version = "0.3", features = ["futures"] }

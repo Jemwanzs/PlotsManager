@@ -1,0 +1,54 @@
+//! Real-backend implementation. Establishes the contract `api::mock`
+//! already implements against, but the routes don't exist on the backend
+//! yet (see docs/14-development-roadmap.md) — every method here is
+//! genuinely unimplemented, not a guess at a wire format. Wiring this up
+//! is: implement the matching Axum route in `crates/backend`, then fill
+//! in the `gloo_net` call here. No UI component changes when that happens.
+
+use uuid::Uuid;
+
+use super::types::{ApiError, AuthSession, DashboardSummary, PlotWithColor, ProjectSummary};
+
+#[derive(Clone)]
+pub struct HttpApi {
+    #[allow(dead_code)]
+    base_url: String,
+}
+
+impl HttpApi {
+    pub fn new(base_url: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.into(),
+        }
+    }
+
+    pub async fn login(&self, _email: &str, _password: &str) -> Result<AuthSession, ApiError> {
+        Err(ApiError::Network(
+            "backend auth endpoints aren't built yet".to_string(),
+        ))
+    }
+
+    pub async fn dashboard_summary(&self) -> Result<DashboardSummary, ApiError> {
+        Err(ApiError::Network(
+            "backend dashboard endpoint isn't built yet".to_string(),
+        ))
+    }
+
+    pub async fn list_projects(&self) -> Result<Vec<ProjectSummary>, ApiError> {
+        Err(ApiError::Network(
+            "backend projects endpoint isn't built yet".to_string(),
+        ))
+    }
+
+    pub async fn get_project(&self, _id: Uuid) -> Result<domain::Project, ApiError> {
+        Err(ApiError::Network(
+            "backend projects endpoint isn't built yet".to_string(),
+        ))
+    }
+
+    pub async fn list_plots(&self, _project_id: Uuid) -> Result<Vec<PlotWithColor>, ApiError> {
+        Err(ApiError::Network(
+            "backend plots endpoint isn't built yet".to_string(),
+        ))
+    }
+}

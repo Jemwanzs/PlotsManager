@@ -41,11 +41,12 @@ blueprint for this system, not the destination — see
 
 ## Infrastructure
 
-Leptos frontend on **Vercel** (static WASM build), **Supabase** for
-Postgres + Auth + Storage (the frontend talks to it directly; multi-
-tenancy is Postgres Row-Level Security, not app code), a thin Rust
-`services` crate for what Supabase can't do (Paystack webhooks, PDF/
-schedule generation), and **Paystack** for the platform's own SaaS
+Frontend → Rust API → PostgreSQL, all hosted on **Railway** (project
+`c7bee255-492d-40b6-af50-30374625b279`). The Leptos frontend never talks
+to the database directly — `crates/backend` (Axum) is the sole
+authority for authentication, authorization, and tenant isolation, with
+Postgres Row-Level Security as defense-in-depth behind it, not the
+enforcement point. **Paystack** handles the platform's own SaaS
 subscription billing. See [10](10-database-and-security-design.md),
 [12](12-api-and-integration-design.md), and
 [16](16-billing-and-subscriptions.md).

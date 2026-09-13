@@ -4,21 +4,33 @@ Two roadmaps from the original scoping conversation are merged here: the
 platform-wide phases (1–7) and the payments-specific delivery sequence
 (A–D), which nests inside phases 5–7.
 
-## Current status (2026-08-26)
+## Current status (2026-09-13)
 
-Infrastructure decided and scaffolded: **Supabase** (Postgres + Auth +
-Storage, with the Leptos frontend calling it directly and multi-tenancy
-enforced by Row-Level Security — see
-[10](10-database-and-security-design.md)), **Vercel** for the frontend's
-static deploy, and **Paystack** for the platform's own SaaS subscription
-billing ([16](16-billing-and-subscriptions.md)). The Cargo workspace is
-`domain` (shared types, now including billing), `services` (a thin Axum
-service for Paystack webhooks — no longer a general CRUD backend, that
-role moved to Supabase PostgREST), and `frontend` (Leptos CSR shell with
-a working Supabase Auth/PostgREST client). `supabase/migrations/` holds
-the schema and RLS policies. **No UI screens are built yet** — no
-sign-up/login flow, no map UI, no approval engine, and the `services`
-crate isn't deployed anywhere (no Rust-friendly host chosen).
+**Architecture (final): Frontend → Rust API → PostgreSQL, all on
+Railway** (project `c7bee255-492d-40b6-af50-30374625b279`). This project
+briefly targeted Supabase + Vercel (2026-08-26 to 2026-09-13); that's been
+fully refactored away — the Leptos frontend never talks to the database,
+`crates/backend` (Axum) owns authentication/authorization/tenant
+isolation, and Postgres lives on Railway with Row-Level Security as
+defense-in-depth, not the enforcement point. See
+[10](10-database-and-security-design.md) and
+[12](12-api-and-integration-design.md).
+
+The Cargo workspace is `domain` (shared types, including billing),
+`backend` (Axum — health check, Paystack webhook receiver, and working
+auth primitives in `auth.rs` not yet wired to routes), and `frontend`
+(Leptos CSR shell with routing, a responsive app shell, and real screens
+— login, dashboard, projects, project/plot detail — built against an
+in-memory mock dataset behind the same interface the real API will use,
+see `crates/frontend/src/api/`). `database/migrations/` holds the schema
+and RLS policies, applied automatically by the backend on boot.
+
+**Priority order for what's next** (per the 2026-09-13 architecture
+decision): Frontend/UI → Complete User Journeys → Mobile/Responsive
+Polish → Railway Frontend Deployment → PostgreSQL/Migrations → Rust APIs
+& Authentication → Frontend/API Integration → External Integrations →
+Testing/Security → Production Hardening. Backend/database work continues
+in parallel where useful but doesn't block frontend progress.
 
 ## Phase 1 — Discovery and Legacy Analysis
 Analyse the Excel/VBA system, extract business rules, document current
@@ -35,11 +47,14 @@ anywhere else in `docs/`.
 Multi-tenant architecture; organisation settings; users, roles,
 permissions; projects and plot register; documents and audit logs;
 configurable numbering.
-**Status: infrastructure decided (Supabase/Vercel), schema + RLS policies
-+ domain types scaffolded, frontend has a working Supabase Auth/PostgREST
-client module. Not yet built: any actual sign-up/login UI, org creation
-flow, numbering config, document storage wiring, or a deployed home for
-the `services` crate.**
+**Status: infrastructure decided (Railway: frontend + Rust API +
+Postgres), schema + RLS policies + domain types scaffolded, backend auth
+primitives (Argon2 + JWT, tested) built but not wired to routes, frontend
+has a real login screen and app shell against mock auth. Not yet built:
+actual signup/login HTTP endpoints, org creation flow, numbering config,
+document storage wiring, the least-privilege RLS-subject Postgres role
+(see [10](10-database-and-security-design.md)), or Railway deployment
+configs for `backend`/`frontend`.**
 
 ## Phase 3 — Interactive Maps
 Upload project plans; manual polygon drawing; plot-to-map linking;
@@ -86,7 +101,7 @@ in the product roadmap above — it can and should move independently.
 **Status**: schema (`subscription_plans`, `organization_subscriptions`,
 `billing_invoices`, `billing_webhook_events`) and a working, signature-
 verified Paystack webhook receiver exist
-(`crates/services/src/paystack.rs`). Not built: any plan-selection UI,
+(`crates/backend/src/paystack.rs`). Not built: any plan-selection UI,
 the org sign-up flow that creates the first `organizations` row, or
 enforcement of subscription status against feature access.
 

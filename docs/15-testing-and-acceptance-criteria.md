@@ -5,22 +5,26 @@
 - **`domain`**: pure unit tests — serialization round-trips, any invariant
   helpers added later (e.g. status transition validity). No I/O, so no
   mocking needed.
-- **`services`**: integration tests against a real Postgres (a local
-  `supabase start` instance, or plain Postgres with `supabase/migrations/`
-  applied), run through the actual Axum router with
+- **`backend`**: integration tests against a real Postgres (any local
+  Postgres 14+ with `database/migrations/` applied — see
+  `database/README.md`), run through the actual Axum router with
   `tower::ServiceExt::oneshot` — not mocked handlers. For the Paystack
   webhook route specifically: test signature verification with both a
   valid and a tampered body, and test that replaying the same event id is
-  a no-op against `billing_webhook_events`'s unique constraint.
-- **Row-Level Security policies** (`supabase/migrations/`): a distinct,
-  important test category now that RLS is the primary enforcement point
-  instead of application code — see
-  [10](10-database-and-security-design.md). For each tenant table:
-  connect as two different organisations' users (via short-lived test
-  JWTs or `set local role`/`set request.jwt.claims`) and assert org A
-  cannot read or write org B's rows, in both directions. This is the
-  direct replacement for what would otherwise be application-layer
-  authorization tests.
+  a no-op against `billing_webhook_events`'s unique constraint. `auth.rs`
+  already has unit tests for password hashing and session-token issuance/
+  verification, independent of any HTTP layer.
+- **Backend authorization tests**: the primary tenant-isolation and
+  permission tests, since the backend is the enforcement point (see
+  [10](10-database-and-security-design.md)) — call handlers as two
+  different organisations' users and assert org A can never read or write
+  org B's rows, and that a role without a given permission gets rejected.
+- **Row-Level Security policies** (`database/migrations/`): a secondary,
+  defense-in-depth test layer — with `set_config('app.current_organization_id', ...)`
+  set to org A, assert queries against every tenant table return zero
+  rows for org B's data, and that an *unset* session variable also
+  returns zero rows (the fail-closed case, not just the fail-correct
+  case).
 - **`frontend`**: component-level tests where Leptos's testing story
   supports it; otherwise rely on manual verification in the browser via
   `trunk serve` for interactive map/polygon-editor behaviour, which is
@@ -57,8 +61,8 @@ feature is built, not stay as prose:
   draft version, never mutates the approved one in place.
 - Cross-tenant data isolation: a query authenticated as one organisation
   can never return another organisation's rows, under any filter
-  combination — this is now an RLS policy test (see above), not an
-  application-code test, since PostgREST queries hit Postgres directly.
+  combination — a backend authorization test *and* an RLS policy test
+  (see above), since both layers are expected to hold independently.
 
 ## Definition of done for a feature
 

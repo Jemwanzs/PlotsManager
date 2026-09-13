@@ -20,7 +20,7 @@ Keeping them separate means:
 - The webhook handler, idempotency table, and reconciliation invariant
   for subscription billing (`billing_webhook_events`,
   `organization_subscriptions`, `billing_invoices` —
-  [`supabase/migrations/0002_billing.sql`](../supabase/migrations/0002_billing.sql))
+  [`database/migrations/0002_billing.sql`](../database/migrations/0002_billing.sql))
   are independent of the customer-payment ledger's reconciliation
   invariant in [08](08-payments-and-receipting.md).
 
@@ -37,9 +37,9 @@ Keeping them separate means:
   transaction reference.
 - **`billing_webhook_events`**: idempotency ledger — every inbound
   webhook is recorded by `(provider, paystack_event_id)` before it's
-  acted on, so a retried delivery is a no-op. Not exposed via PostgREST
-  at all (RLS enabled, zero policies); only the `services` crate's direct
-  Postgres connection can touch it.
+  acted on, so a retried delivery is a no-op. No RLS `select` policy at
+  all; only the backend's `BYPASSRLS` system connection can touch it (see
+  [10](10-database-and-security-design.md)).
 
 ## Flow
 
@@ -47,9 +47,8 @@ Keeping them separate means:
    client-side inline/popup flow, or is redirected to a Paystack-hosted
    page — not yet decided which).
 2. Paystack sends webhooks (`charge.success`, `subscription.create`,
-   `subscription.disable`, `invoice.payment_failed`, …) to
-   `services`' `POST /webhooks/paystack`
-   (`crates/services/src/paystack.rs`).
+   `subscription.disable`, `invoice.payment_failed`, …) to the backend's
+   `POST /webhooks/paystack` (`crates/backend/src/paystack.rs`).
 3. The handler verifies the `x-paystack-signature` header (HMAC-SHA512
    over the raw body — verified against raw bytes, never a re-parsed
    copy), records the event for idempotency, then applies it: currently
@@ -58,24 +57,25 @@ Keeping them separate means:
    subscription. Other event types are recorded but not yet acted on —
    extend `apply_event` as billing flows need them (dunning on
    `invoice.payment_failed`, plan-change handling, etc.).
-4. `organization_subscriptions.status` is what the frontend reads (via
-   PostgREST, RLS-scoped to the caller's own organisation) to decide
-   whether to show a paywall, a "past due" banner, or full access.
+4. `organization_subscriptions.status` is what the frontend reads (via a
+   backend endpoint — not built yet — scoped to the caller's own
+   organisation) to decide whether to show a paywall, a "past due"
+   banner, or full access.
 
 ## What's not decided yet
 
 - **Enforcement**: whether a `past_due`/`expired` subscription actually
   blocks access (and to what — read-only? fully locked?) is a product
-  decision, not yet made. RLS policies would need to reference
-  `organization_subscriptions.status` if so.
+  decision, not yet made. The backend would need to check
+  `organization_subscriptions.status` on relevant requests if so.
 - **Trial policy**: length, what happens at expiry, whether a card is
   required up front.
 - **Plan changes and proration**: upgrade/downgrade mid-cycle isn't
   modelled yet — `organization_subscriptions` has no history of past
   plans.
-- **Where the sign-up-time organisation gets created**: a new org's first
-  admin user and its `organizations` row need to exist before
-  Supabase Auth's `on_auth_user_created` trigger can attach a `profiles`
-  row to it ([10](10-database-and-security-design.md)) — the exact
-  sequencing (org row first via a privileged call, then sign-up; or
-  sign-up first with a temporary org) isn't settled.
+- **Org + first-admin sign-up sequencing**: the backend needs to create
+  the `organizations` row and the first `users` row (with its hashed
+  password) together, in one transaction, before anything else can
+  reference that organisation — the exact signup endpoint contract isn't
+  designed yet ([10](10-database-and-security-design.md),
+  [14](14-development-roadmap.md)).
