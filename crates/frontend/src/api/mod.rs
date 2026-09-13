@@ -62,4 +62,25 @@ impl ApiClient {
             Self::Http(api) => api.list_plots(project_id).await,
         }
     }
+
+    pub async fn list_customers(&self) -> Result<Vec<CustomerSummary>, ApiError> {
+        match self {
+            Self::Mock(api) => api.list_customers().await,
+            Self::Http(api) => api.list_customers().await,
+        }
+    }
+
+    pub async fn get_customer(&self, id: Uuid) -> Result<CustomerDetail, ApiError> {
+        match self {
+            Self::Mock(api) => api.get_customer(id).await,
+            Self::Http(api) => api.get_customer(id).await,
+        }
+    }
+
+    pub async fn create_sale(&self, input: CreateSaleInput) -> Result<domain::PlotSale, ApiError> {
+        match self {
+            Self::Mock(api) => api.create_sale(input).await,
+            Self::Http(api) => api.create_sale(input).await,
+        }
+    }
 }

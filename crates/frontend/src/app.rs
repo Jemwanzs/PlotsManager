@@ -5,7 +5,9 @@ use leptos_router::{ParamSegment, StaticSegment};
 use crate::api::ApiClient;
 use crate::auth::AuthSignal;
 use crate::layout::AppShell;
-use crate::pages::{Dashboard, Login, NotFound, ProjectDetail, ProjectsList};
+use crate::pages::{
+    CustomerDetail, CustomersList, Dashboard, Login, NotFound, ProjectDetail, ProjectsList,
+};
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -27,6 +29,14 @@ pub fn App() -> impl IntoView {
                 <Route
                     path=(StaticSegment("projects"), ParamSegment("id"))
                     view=|| view! { <AppShell><ProjectDetail /></AppShell> }
+                />
+                <Route
+                    path=StaticSegment("customers")
+                    view=|| view! { <AppShell><CustomersList /></AppShell> }
+                />
+                <Route
+                    path=(StaticSegment("customers"), ParamSegment("id"))
+                    view=|| view! { <AppShell><CustomerDetail /></AppShell> }
                 />
             </Routes>
         </Router>

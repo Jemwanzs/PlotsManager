@@ -7,7 +7,10 @@
 
 use uuid::Uuid;
 
-use super::types::{ApiError, AuthSession, DashboardSummary, PlotWithColor, ProjectSummary};
+use super::types::{
+    ApiError, AuthSession, CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary,
+    PlotWithColor, ProjectSummary,
+};
 
 #[derive(Clone)]
 pub struct HttpApi {
@@ -49,6 +52,24 @@ impl HttpApi {
     pub async fn list_plots(&self, _project_id: Uuid) -> Result<Vec<PlotWithColor>, ApiError> {
         Err(ApiError::Network(
             "backend plots endpoint isn't built yet".to_string(),
+        ))
+    }
+
+    pub async fn list_customers(&self) -> Result<Vec<CustomerSummary>, ApiError> {
+        Err(ApiError::Network(
+            "backend customers endpoint isn't built yet".to_string(),
+        ))
+    }
+
+    pub async fn get_customer(&self, _id: Uuid) -> Result<CustomerDetail, ApiError> {
+        Err(ApiError::Network(
+            "backend customers endpoint isn't built yet".to_string(),
+        ))
+    }
+
+    pub async fn create_sale(&self, _input: CreateSaleInput) -> Result<domain::PlotSale, ApiError> {
+        Err(ApiError::Network(
+            "backend sales endpoint isn't built yet".to_string(),
         ))
     }
 }

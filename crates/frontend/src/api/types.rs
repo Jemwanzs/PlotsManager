@@ -1,4 +1,5 @@
-use domain::{Plot, User};
+use domain::{Customer, PaymentMode, Plot, User};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -43,6 +44,45 @@ pub struct PlotWithColor {
     pub plot: Plot,
     pub status_label: String,
     pub status_color: String,
+}
+
+/// A customer plus the plot count a list screen needs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomerSummary {
+    pub customer: Customer,
+    pub plots_owned: u32,
+}
+
+/// One row in a customer's purchase history — the sale plus enough about
+/// the plot/project to render without a second round trip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomerSaleView {
+    pub sale_id: Uuid,
+    pub plot_id: Uuid,
+    pub project_id: Uuid,
+    pub plot_number: String,
+    pub project_name: String,
+    pub payment_mode: PaymentMode,
+    pub agreed_price: Decimal,
+    pub status_label: String,
+    pub status_color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomerDetail {
+    pub customer: Customer,
+    pub sales: Vec<CustomerSaleView>,
+}
+
+/// What it takes to reserve a plot for a customer — the first step of the
+/// sales workflow (docs/07). Deliberately minimal: full Plot Loan Account
+/// setup (deposit, tenor, schedule) is Phase 6/A, not this pass.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateSaleInput {
+    pub plot_id: Uuid,
+    pub customer_id: Uuid,
+    pub payment_mode: PaymentMode,
+    pub agreed_price: Decimal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

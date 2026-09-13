@@ -1,4 +1,13 @@
+use domain::PaymentMode;
 use rust_decimal::Decimal;
+
+pub fn format_payment_mode(mode: PaymentMode) -> &'static str {
+    match mode {
+        PaymentMode::FullCash => "Full cash",
+        PaymentMode::LipaPolePoleInterestFree => "Lipa Pole Pole (interest-free)",
+        PaymentMode::LipaPolePoleInterestBearing => "Lipa Pole Pole (interest-bearing)",
+    }
+}
 
 /// "KES 1,234,500" — `Decimal`'s own `Display` has no thousands
 /// separator, and every money value in this app needs one.

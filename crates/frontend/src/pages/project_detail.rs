@@ -1,12 +1,15 @@
 use leptos::prelude::*;
+use leptos::task::spawn_local;
 use leptos_router::hooks::use_params_map;
+use rust_decimal::Decimal;
+use std::str::FromStr;
 use uuid::Uuid;
 
-use crate::api::{status_meta, PlotWithColor};
+use crate::api::{status_meta, CreateSaleInput, PlotWithColor};
 use crate::auth::use_api;
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
 use crate::format::format_kes;
-use domain::PlotStatus;
+use domain::{PaymentMode, PlotStatus};
 
 const ALL_STATUSES: &[PlotStatus] = &[
     PlotStatus::Available,
@@ -22,6 +25,18 @@ const ALL_STATUSES: &[PlotStatus] = &[
     PlotStatus::Disputed,
     PlotStatus::Cancelled,
 ];
+
+/// Plots in these states have no sale attached yet — the only ones a new
+/// sale/reservation can be started from. Everything else already has an
+/// active `PlotSale` (see `plot_sales_one_active_per_plot` in
+/// database/migrations/0001_init.sql) and must go through a different
+/// workflow (cancellation, restructure, etc. — not built yet) to change.
+fn can_start_sale(status: PlotStatus) -> bool {
+    matches!(
+        status,
+        PlotStatus::Available | PlotStatus::Selected | PlotStatus::TemporarilyHeld
+    )
+}
 
 #[component]
 pub fn ProjectDetail() -> impl IntoView {
@@ -141,6 +156,9 @@ pub fn ProjectDetail() -> impl IntoView {
             selected
                 .get()
                 .map(|pwc| {
+                    let plot_id = pwc.plot.id;
+                    let asking_price = pwc.plot.asking_price;
+                    let startable = can_start_sale(pwc.plot.status);
                     view! {
                         <div class="card" style="margin-top: var(--space-4)">
                             <div class="page-header" style="margin-bottom: var(--space-3)">
@@ -152,6 +170,18 @@ pub fn ProjectDetail() -> impl IntoView {
                                 {format_kes(pwc.plot.asking_price)}
                             </p>
                             {pwc.plot.title_number.clone().map(|t| view! { <p>"Title: " {t}</p> })}
+
+                            <Show when=move || startable>
+                                <ReserveForm
+                                    plot_id=plot_id
+                                    asking_price=asking_price
+                                    on_reserved=move || {
+                                        plots.refetch();
+                                        selected.set(None);
+                                    }
+                                />
+                            </Show>
+
                             <button class="btn btn-secondary" on:click=move |_| selected.set(None)>
                                 "Close"
                             </button>
@@ -159,5 +189,141 @@ pub fn ProjectDetail() -> impl IntoView {
                     }
                 })
         }}
+    }
+}
+
+/// Starts a sale for the selected plot: pick a customer and payment mode,
+/// confirm the price. This is the first step of the sales workflow
+/// (docs/07) — deposit/tenor/schedule setup for Lipa Pole Pole comes
+/// later (docs/08), not part of this form.
+#[component]
+fn ReserveForm(
+    plot_id: Uuid,
+    asking_price: Decimal,
+    on_reserved: impl Fn() + Clone + 'static,
+) -> impl IntoView {
+    let api = use_api();
+
+    let customers = LocalResource::new({
+        let api = api.clone();
+        move || {
+            let api = api.clone();
+            async move { api.list_customers().await }
+        }
+    });
+
+    let customer_id = RwSignal::new(String::new());
+    let payment_mode = RwSignal::new("full_cash".to_string());
+    let price = RwSignal::new(asking_price.to_string());
+    let error = RwSignal::new(None::<String>);
+    let submitting = RwSignal::new(false);
+
+    let on_submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        if submitting.get() {
+            return;
+        }
+        error.set(None);
+
+        let Ok(customer) = Uuid::parse_str(&customer_id.get()) else {
+            error.set(Some("Choose a customer.".to_string()));
+            return;
+        };
+        let Ok(agreed_price) = Decimal::from_str(price.get().trim()) else {
+            error.set(Some("Enter a valid price.".to_string()));
+            return;
+        };
+        let mode = match payment_mode.get().as_str() {
+            "lpp_free" => PaymentMode::LipaPolePoleInterestFree,
+            "lpp_bearing" => PaymentMode::LipaPolePoleInterestBearing,
+            _ => PaymentMode::FullCash,
+        };
+
+        submitting.set(true);
+        let api = api.clone();
+        let on_reserved = on_reserved.clone();
+        spawn_local(async move {
+            let result = api
+                .create_sale(CreateSaleInput {
+                    plot_id,
+                    customer_id: customer,
+                    payment_mode: mode,
+                    agreed_price,
+                })
+                .await;
+            match result {
+                Ok(_) => on_reserved(),
+                Err(e) => {
+                    error.set(Some(format!("{e}")));
+                    submitting.set(false);
+                }
+            }
+        });
+    };
+
+    view! {
+        <form on:submit=on_submit style="margin: var(--space-4) 0; padding-top: var(--space-4); border-top: 1px solid var(--color-border);">
+            <h3>"Reserve this plot"</h3>
+            {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+
+            <div class="field">
+                <label for="customer">"Customer"</label>
+                <select
+                    id="customer"
+                    required
+                    prop:value=customer_id
+                    on:change=move |ev| customer_id.set(event_target_value(&ev))
+                >
+                    <option value="">"Select a customer…"</option>
+                    <Suspense fallback=|| ()>
+                        {move || {
+                            customers
+                                .get()
+                                .map(|wrapped| wrapped.take())
+                                .map(|result| match result {
+                                    Ok(list) => list
+                                        .into_iter()
+                                        .map(|c| {
+                                            let id = c.customer.id.to_string();
+                                            view! { <option value=id>{c.customer.full_name}</option> }
+                                        })
+                                        .collect_view()
+                                        .into_any(),
+                                    Err(_) => ().into_any(),
+                                })
+                        }}
+                    </Suspense>
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="payment-mode">"Payment mode"</label>
+                <select
+                    id="payment-mode"
+                    prop:value=payment_mode
+                    on:change=move |ev| payment_mode.set(event_target_value(&ev))
+                >
+                    <option value="full_cash">"Full cash"</option>
+                    <option value="lpp_free">"Lipa Pole Pole (interest-free)"</option>
+                    <option value="lpp_bearing">"Lipa Pole Pole (interest-bearing)"</option>
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="price">"Agreed price (KES)"</label>
+                <input
+                    id="price"
+                    type="text"
+                    inputmode="numeric"
+                    required
+                    prop:value=price
+                    on:input=move |ev| price.set(event_target_value(&ev))
+                />
+            </div>
+
+            <button type="submit" class="btn btn-primary" disabled=submitting>
+                {move || if submitting.get() { "Reserving…" } else { "Reserve for customer" }}
+            </button>
+        </form>
     }
 }

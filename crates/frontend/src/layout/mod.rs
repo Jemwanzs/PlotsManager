@@ -13,6 +13,7 @@ struct NavItem {
 const NAV_ITEMS: &[NavItem] = &[
     NavItem { href: "/", icon: "\u{1F4CA}", label: "Dashboard" },
     NavItem { href: "/projects", icon: "\u{1F3D8}\u{FE0F}", label: "Projects" },
+    NavItem { href: "/customers", icon: "\u{1F464}", label: "Customers" },
 ];
 
 /// Authenticated app layout: sidebar on laptop/desktop, top bar + bottom
