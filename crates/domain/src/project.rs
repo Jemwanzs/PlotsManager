@@ -38,30 +38,33 @@ pub struct Project {
     pub created_at: DateTime<Utc>,
 }
 
-/// A versioned, published (or draft) interactive map for a project.
-/// The original uploaded plan is never overwritten — every edit creates a
-/// new draft version, and only an approved version is published for sales use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProjectMapStatus {
-    Draft,
-    PendingApproval,
-    Approved,
-    Published,
-    Superseded,
+/// One image plus one polygon set per project — the minimal v1 slice
+/// of docs/06-interactive-map-engine.md's Phase 3, deliberately
+/// without its draft/pending-approval/published versioning workflow
+/// (see `database/migrations/0009_project_map.sql`'s module comment).
+/// Re-uploading the image replaces this outright.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectMap {
+    pub project_id: Uuid,
+    pub image_content_type: String,
+    pub polygons: MapPolygons,
+    pub uploaded_by: Uuid,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Plot boundaries in *pixel* space against the uploaded image, not
+/// geographic coordinates — v1's tech choice is a plain image with an
+/// SVG overlay (docs/06:51-66), not a real GIS layer.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MapPolygons {
+    pub image_width: f64,
+    pub image_height: f64,
+    pub features: Vec<MapFeature>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProjectMapVersion {
-    pub id: Uuid,
-    pub project_id: Uuid,
-    pub version_number: i32,
-    pub status: ProjectMapStatus,
-    /// Storage reference to the original uploaded plan (PDF/scan/image), immutable.
-    pub source_document_url: String,
-    /// GeoJSON FeatureCollection of plot polygons for this version.
-    pub polygons: serde_json::Value,
-    pub uploaded_by: Uuid,
-    pub approved_by: Option<Uuid>,
-    pub created_at: DateTime<Utc>,
+pub struct MapFeature {
+    pub id: String,
+    pub plot_id: Uuid,
+    pub points: Vec<[f64; 2]>,
 }

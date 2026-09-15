@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use leptos::wasm_bindgen::JsCast;
 use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
 use rust_decimal::Decimal;
@@ -10,7 +11,7 @@ use crate::api::{status_meta, CreatePlotInput, CreateQuotationInput, CreateSaleI
 use crate::auth::use_api;
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
 use crate::format::format_kes;
-use domain::{PaymentMode, PlotStatus};
+use domain::{MapFeature, MapPolygons, PaymentMode, PlotStatus};
 
 const ALL_STATUSES: &[PlotStatus] = &[
     PlotStatus::Available,
@@ -37,6 +38,19 @@ fn can_start_sale(status: PlotStatus) -> bool {
         status,
         PlotStatus::Available | PlotStatus::Selected | PlotStatus::TemporarilyHeld
     )
+}
+
+/// A plain function, not a closure stored in a `let` — reactive view
+/// closures that render the map's polygons need a fresh, repeatable
+/// way to look up a plot's colour without capturing (and exhausting)
+/// an owned `Vec<PlotWithColor>`; taking `&[PlotWithColor]` by
+/// reference each call sidesteps that entirely.
+fn feature_color(plots: &[PlotWithColor], plot_id: Uuid) -> String {
+    plots
+        .iter()
+        .find(|p| p.plot.id == plot_id)
+        .map(|p| p.status_color.clone())
+        .unwrap_or_else(|| "#6b7280".to_string())
 }
 
 #[component]
@@ -69,6 +83,7 @@ pub fn ProjectDetail() -> impl IntoView {
 
     let selected: RwSignal<Option<PlotWithColor>> = RwSignal::new(None);
     let show_add_plot = RwSignal::new(false);
+    let show_map = RwSignal::new(false);
 
     view! {
         <Suspense fallback=|| view! { <LoadingState label="Loading project…" /> }>
@@ -128,6 +143,25 @@ pub fn ProjectDetail() -> impl IntoView {
                 .collect_view()}
         </div>
 
+        <div class="filter-tabs">
+            <button
+                type="button"
+                class="filter-tab"
+                class:active=move || !show_map.get()
+                on:click=move |_| show_map.set(false)
+            >
+                "Grid"
+            </button>
+            <button
+                type="button"
+                class="filter-tab"
+                class:active=move || show_map.get()
+                on:click=move |_| show_map.set(true)
+            >
+                "Map"
+            </button>
+        </div>
+
         <Suspense fallback=|| view! { <LoadingState label="Loading plots…" /> }>
             {move || {
                 plots
@@ -143,6 +177,11 @@ pub fn ProjectDetail() -> impl IntoView {
                                     detail="Plots added to this project will appear here."
                                 />
                             }
+                                .into_any()
+                        }
+                        Ok(list) if show_map.get() => {
+                            let Some(id) = project_id() else { return ().into_any() };
+                            view! { <ProjectMapSection project_id=id plots=list selected=selected /> }
                                 .into_any()
                         }
                         Ok(list) => {
@@ -668,5 +707,392 @@ fn QuoteForm(plot_id: Uuid, asking_price: Decimal, on_quoted: impl Fn() + Clone 
                 {move || if submitting.get() { "Creating…" } else { "Create quotation" }}
             </button>
         </form>
+    }
+}
+
+/// Minimal interactive-map v1 (see `domain::ProjectMap`'s module docs)
+/// — loads the current map (if any) and hands off to `MapUploadForm`
+/// or `MapCanvas`.
+#[component]
+fn ProjectMapSection(
+    project_id: Uuid,
+    plots: Vec<PlotWithColor>,
+    selected: RwSignal<Option<PlotWithColor>>,
+) -> impl IntoView {
+    let api = use_api();
+    let refresh = RwSignal::new(0u32);
+
+    let summary = LocalResource::new({
+        let api = api.clone();
+        move || {
+            let api = api.clone();
+            refresh.get();
+            async move { api.get_map_summary(project_id).await }
+        }
+    });
+
+    view! {
+        <Suspense fallback=|| view! { <LoadingState label="Loading map…" /> }>
+            {move || {
+                let plots = plots.clone();
+                summary
+                    .get()
+                    .map(|wrapped| wrapped.take())
+                    .map(|result| match result {
+                        Ok(s) if !s.exists => view! {
+                            <MapUploadForm
+                                project_id=project_id
+                                on_uploaded=move || refresh.update(|n| *n += 1)
+                            />
+                        }
+                            .into_any(),
+                        Ok(s) => view! {
+                            <MapCanvas
+                                project_id=project_id
+                                plots=plots
+                                summary=s
+                                selected=selected
+                                refresh=refresh
+                            />
+                        }
+                            .into_any(),
+                        Err(e) => view! { <ErrorAlert message=format!("Couldn't load the map: {e}") /> }
+                            .into_any(),
+                    })
+            }}
+        </Suspense>
+    }
+}
+
+#[component]
+fn MapUploadForm(project_id: Uuid, on_uploaded: impl Fn() + Clone + 'static) -> impl IntoView {
+    let api = use_api();
+    let error = RwSignal::new(None::<String>);
+    let uploading = RwSignal::new(false);
+
+    let on_change = move |ev: leptos::ev::Event| {
+        let Some(input) = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+        else {
+            return;
+        };
+        let Some(files) = input.files() else { return };
+        let Some(file) = files.item(0) else { return };
+        if uploading.get() {
+            return;
+        }
+        error.set(None);
+        uploading.set(true);
+        let api = api.clone();
+        let on_uploaded = on_uploaded.clone();
+        spawn_local(async move {
+            match api.upload_map_image(project_id, file).await {
+                Ok(_) => on_uploaded(),
+                Err(e) => error.set(Some(format!("{e}"))),
+            }
+            uploading.set(false);
+        });
+    };
+
+    view! {
+        <EmptyState
+            icon="\u{1F5FA}\u{FE0F}"
+            title="No site plan uploaded yet"
+            detail="Upload an image of this project's site plan, then draw each plot's boundary on top of it."
+        />
+        {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+        <div class="field" style="max-width: 360px;">
+            <label for="map-image">
+                {move || if uploading.get() { "Uploading…" } else { "Site plan image" }}
+            </label>
+            <input id="map-image" type="file" accept="image/*" disabled=uploading on:change=on_change />
+        </div>
+    }
+}
+
+/// A single project's map: the uploaded image with an SVG polygon
+/// overlay. Coordinates are pixels against the image's natural size,
+/// not geographic — see `domain::MapPolygons`'s module docs. Outside
+/// edit mode, clicking a polygon selects that plot (reusing the same
+/// `selected` signal — and so the same Reserve/Quote card — as
+/// clicking a tile in the grid view); in edit mode, clicking the image
+/// places a boundary point and clicking an existing polygon removes it.
+#[component]
+fn MapCanvas(
+    project_id: Uuid,
+    plots: Vec<PlotWithColor>,
+    summary: domain::ProjectMapSummary,
+    selected: RwSignal<Option<PlotWithColor>>,
+    refresh: RwSignal<u32>,
+) -> impl IntoView {
+    let api = use_api();
+    let image_url = api.map_image_url(project_id);
+
+    let img_dims = RwSignal::new((
+        if summary.polygons.image_width > 0.0 { summary.polygons.image_width } else { 1000.0 },
+        if summary.polygons.image_height > 0.0 { summary.polygons.image_height } else { 700.0 },
+    ));
+    let features: RwSignal<Vec<MapFeature>> = RwSignal::new(summary.polygons.features.clone());
+    let edit_mode = RwSignal::new(false);
+    let draft_points: RwSignal<Vec<(f64, f64)>> = RwSignal::new(Vec::new());
+    let draft_plot_id = RwSignal::new(String::new());
+    let error = RwSignal::new(None::<String>);
+    let saving = RwSignal::new(false);
+    let replacing = RwSignal::new(false);
+
+    let on_image_load = move |ev: leptos::ev::Event| {
+        if let Some(img) = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::HtmlImageElement>().ok())
+        {
+            let w = img.natural_width() as f64;
+            let h = img.natural_height() as f64;
+            if w > 0.0 && h > 0.0 {
+                img_dims.set((w, h));
+            }
+        }
+    };
+
+    let on_svg_click = move |ev: leptos::ev::MouseEvent| {
+        if !edit_mode.get() {
+            return;
+        }
+        let Some(target) = ev.current_target() else { return };
+        let Ok(el) = target.dyn_into::<web_sys::Element>() else { return };
+        let rect = el.get_bounding_client_rect();
+        if rect.width() <= 0.0 || rect.height() <= 0.0 {
+            return;
+        }
+        let (w, h) = img_dims.get();
+        let x = (ev.client_x() as f64 - rect.left()) / rect.width() * w;
+        let y = (ev.client_y() as f64 - rect.top()) / rect.height() * h;
+        draft_points.update(|pts| pts.push((x, y)));
+    };
+
+    let api_for_replace = api.clone();
+    let on_replace_change = move |ev: leptos::ev::Event| {
+        let Some(input) = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+        else {
+            return;
+        };
+        let Some(files) = input.files() else { return };
+        let Some(file) = files.item(0) else { return };
+        if replacing.get() {
+            return;
+        }
+        error.set(None);
+        replacing.set(true);
+        let api = api_for_replace.clone();
+        spawn_local(async move {
+            match api.upload_map_image(project_id, file).await {
+                Ok(_) => refresh.update(|n| *n += 1),
+                Err(e) => error.set(Some(format!("{e}"))),
+            }
+            replacing.set(false);
+        });
+    };
+
+    let plots_for_dropdown = plots.clone();
+
+    view! {
+        {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+
+        <div style="display:flex; justify-content: space-between; align-items:center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-2);">
+            <p class="meta mt-0">
+                {move || if edit_mode.get() {
+                    "Click the image to place boundary points; click a shaded plot to remove it."
+                } else {
+                    "Click a shaded plot to view it."
+                }}
+            </p>
+            <div style="display:flex; gap: var(--space-2); align-items:center;">
+                <label class="btn btn-secondary" style="margin-bottom:0; cursor:pointer;">
+                    {move || if replacing.get() { "Replacing…" } else { "Replace image" }}
+                    <input
+                        type="file"
+                        accept="image/*"
+                        disabled=replacing
+                        style="display:none;"
+                        on:change=on_replace_change
+                    />
+                </label>
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    on:click=move |_| {
+                        edit_mode.update(|v| *v = !*v);
+                        draft_points.set(Vec::new());
+                    }
+                >
+                    {move || if edit_mode.get() { "Done editing" } else { "Edit boundaries" }}
+                </button>
+            </div>
+        </div>
+
+        <Show when=move || edit_mode.get()>
+            {
+                // Fresh per-invocation clone: `<Show>`'s children run
+                // repeatedly as `edit_mode` toggles, but this outer
+                // `api` is captured once — see the identical note in
+                // `pages/quotation_detail.rs::run`.
+                let api = api.clone();
+                view! {
+            <div class="card" style="margin-bottom: var(--space-3); display:flex; gap: var(--space-3); align-items:flex-end; flex-wrap:wrap;">
+                <div class="field" style="margin-bottom:0;">
+                    <label for="draft-plot">"Plot for next shape"</label>
+                    <select
+                        id="draft-plot"
+                        prop:value=draft_plot_id
+                        on:change=move |ev| draft_plot_id.set(event_target_value(&ev))
+                    >
+                        <option value="">"Select a plot…"</option>
+                        {plots_for_dropdown
+                            .iter()
+                            .map(|p| {
+                                let id = p.plot.id.to_string();
+                                view! { <option value=id>{p.plot.plot_number.clone()}</option> }
+                            })
+                            .collect_view()}
+                    </select>
+                </div>
+                <span class="meta">{move || format!("{} point(s) placed", draft_points.get().len())}</span>
+                <button
+                    type="button"
+                    class="btn btn-primary"
+                    on:click=move |_| {
+                        let pts = draft_points.get();
+                        if pts.len() < 3 {
+                            error.set(Some("Click at least 3 points to outline a plot.".to_string()));
+                            return;
+                        }
+                        let Ok(plot_id) = Uuid::parse_str(draft_plot_id.get().trim()) else {
+                            error.set(Some("Choose which plot this shape is for.".to_string()));
+                            return;
+                        };
+                        error.set(None);
+                        features.update(|list| {
+                            list.retain(|f| f.plot_id != plot_id);
+                            list.push(MapFeature {
+                                id: format!("f-{}", Uuid::new_v4()),
+                                plot_id,
+                                points: pts.iter().map(|&(x, y)| [x, y]).collect(),
+                            });
+                        });
+                        draft_points.set(Vec::new());
+                        draft_plot_id.set(String::new());
+                    }
+                >
+                    "Finish shape"
+                </button>
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    on:click=move |_| draft_points.set(Vec::new())
+                >
+                    "Clear points"
+                </button>
+                <button
+                    type="button"
+                    class="btn btn-primary"
+                    disabled=saving
+                    on:click=move |_| {
+                        if saving.get() {
+                            return;
+                        }
+                        error.set(None);
+                        saving.set(true);
+                        let api = api.clone();
+                        let (image_width, image_height) = img_dims.get();
+                        let polygons = MapPolygons { image_width, image_height, features: features.get() };
+                        spawn_local(async move {
+                            match api.update_map_polygons(project_id, polygons).await {
+                                Ok(_) => refresh.update(|n| *n += 1),
+                                Err(crate::api::ApiError::InvalidCredentials(msg)) => error.set(Some(msg)),
+                                Err(e) => error.set(Some(format!("{e}"))),
+                            }
+                            saving.set(false);
+                        });
+                    }
+                >
+                    {move || if saving.get() { "Saving…" } else { "Save map" }}
+                </button>
+            </div>
+                }
+            }
+        </Show>
+
+        <div style="position:relative; max-width: 100%; display:inline-block; line-height:0;">
+            <img
+                src=image_url
+                on:load=on_image_load
+                style="display:block; max-width:100%; height:auto; border-radius: var(--radius, 8px);"
+            />
+            <svg
+                on:click=on_svg_click
+                attr:viewBox=move || {
+                    let (w, h) = img_dims.get();
+                    format!("0 0 {w} {h}")
+                }
+                style="position:absolute; top:0; left:0; width:100%; height:100%;"
+            >
+                {move || {
+                    let plots = plots.clone();
+                    features
+                        .get()
+                        .into_iter()
+                        .map(|f| {
+                            let points_attr = f
+                                .points
+                                .iter()
+                                .map(|[x, y]| format!("{x},{y}"))
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            let color = feature_color(&plots, f.plot_id);
+                            let fid = f.id.clone();
+                            let plot_for_select = plots.iter().find(|p| p.plot.id == f.plot_id).cloned();
+                            view! {
+                                <polygon
+                                    points=points_attr
+                                    fill=format!("{color}99")
+                                    stroke=color.clone()
+                                    stroke-width="2"
+                                    style="cursor:pointer;"
+                                    on:click=move |ev: leptos::ev::MouseEvent| {
+                                        ev.stop_propagation();
+                                        if edit_mode.get() {
+                                            let fid = fid.clone();
+                                            features.update(|list| list.retain(|x| x.id != fid));
+                                        } else if let Some(p) = plot_for_select.clone() {
+                                            selected.set(Some(p));
+                                        }
+                                    }
+                                ></polygon>
+                            }
+                        })
+                        .collect_view()
+                }}
+
+                {move || {
+                    let pts = draft_points.get();
+                    if pts.is_empty() {
+                        None
+                    } else {
+                        let points_attr = pts.iter().map(|(x, y)| format!("{x},{y}")).collect::<Vec<_>>().join(" ");
+                        Some(view! {
+                            <polyline
+                                points=points_attr
+                                fill="none"
+                                stroke="#f97316"
+                                stroke-width="3"
+                                stroke-dasharray="6,4"
+                            ></polyline>
+                        })
+                    }
+                }}
+            </svg>
+        </div>
     }
 }

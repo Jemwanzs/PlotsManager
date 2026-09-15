@@ -34,7 +34,10 @@ pub struct Plot {
     pub asking_price: Decimal,
     pub minimum_price: Decimal,
     pub status: PlotStatus,
-    /// Index into the published ProjectMapVersion's polygon FeatureCollection.
+    /// Unused since the interactive-map v1 slice (see `ProjectMap`'s
+    /// module docs) links polygons to plots via `MapFeature.plot_id`
+    /// directly instead — kept only so existing rows/queries don't
+    /// need a migration to drop the column.
     pub map_feature_id: Option<String>,
     pub assigned_customer_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,

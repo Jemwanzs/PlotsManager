@@ -276,4 +276,40 @@ impl ApiClient {
             Self::Http(api) => api.agent_performance_report(from, to).await,
         }
     }
+
+    pub async fn get_map_summary(&self, project_id: Uuid) -> Result<domain::ProjectMapSummary, ApiError> {
+        match self {
+            Self::Mock(api) => api.get_map_summary(project_id).await,
+            Self::Http(api) => api.get_map_summary(project_id).await,
+        }
+    }
+
+    pub async fn upload_map_image(
+        &self,
+        project_id: Uuid,
+        file: web_sys::File,
+    ) -> Result<domain::ProjectMapSummary, ApiError> {
+        match self {
+            Self::Mock(api) => api.upload_map_image(project_id, file).await,
+            Self::Http(api) => api.upload_map_image(project_id, file).await,
+        }
+    }
+
+    pub async fn update_map_polygons(
+        &self,
+        project_id: Uuid,
+        polygons: domain::MapPolygons,
+    ) -> Result<domain::ProjectMapSummary, ApiError> {
+        match self {
+            Self::Mock(api) => api.update_map_polygons(project_id, polygons).await,
+            Self::Http(api) => api.update_map_polygons(project_id, polygons).await,
+        }
+    }
+
+    pub fn map_image_url(&self, project_id: Uuid) -> String {
+        match self {
+            Self::Mock(api) => api.map_image_url(project_id),
+            Self::Http(api) => api.map_image_url(project_id),
+        }
+    }
 }

@@ -7,6 +7,8 @@
 
 use std::sync::{Arc, Mutex};
 
+use std::collections::HashMap;
+
 use chrono::{NaiveDate, Utc};
 use domain::{
     approval_status_meta, loan_status_meta, plot_status_meta as status_meta,
@@ -14,12 +16,12 @@ use domain::{
     ApprovalRequestSummary, ApprovalStatus, AreaUnit, AuthSession, CreateCustomerInput,
     CreatePlotInput, CreateProjectInput, CreateQuotationInput, CreateSaleInput, Customer,
     CustomerDetail, CustomerSaleView, CustomerSummary, DashboardSummary, InventoryReport,
-    LeadStage, LoanAccountDetail, LoanAccountStatus, Organization, Payment, PaymentMode,
-    PaymentStatus, PlatformOrganizationDetail, PlatformOrganizationSummary, Plot,
+    LeadStage, LoanAccountDetail, LoanAccountStatus, MapPolygons, Organization, Payment,
+    PaymentMode, PaymentStatus, PlatformOrganizationDetail, PlatformOrganizationSummary, Plot,
     PlotLoanAccount, PlotSale, PlotStatus, PlotStatusCount, PlotWithColor, Project,
-    ProjectInventoryRow, ProjectStatus, ProjectSummary, Quotation, QuotationDetail,
-    QuotationStatus, QuotationSummary, RecordPaymentInput, SalesReport, SalesReportRow,
-    SignupInput, UpdateLeadInput, User,
+    ProjectInventoryRow, ProjectMapSummary, ProjectStatus, ProjectSummary, Quotation,
+    QuotationDetail, QuotationStatus, QuotationSummary, RecordPaymentInput, SalesReport,
+    SalesReportRow, SignupInput, UpdateLeadInput, User,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -38,6 +40,19 @@ struct MockDb {
     payments: Vec<Payment>,
     quotations: Vec<Quotation>,
     approval_requests: Vec<ApprovalRequest>,
+    project_maps: HashMap<Uuid, MockProjectMap>,
+}
+
+/// Mirrors the real `project_maps` table (see
+/// `database/migrations/0009_project_map.sql`) — `image_url` is a
+/// browser blob: URL (`web_sys::Url::create_object_url_with_blob`)
+/// rather than stored bytes, since the mock never leaves this tab and
+/// has no server to round-trip bytes through.
+struct MockProjectMap {
+    image_url: String,
+    image_content_type: String,
+    polygons: MapPolygons,
+    updated_at: chrono::DateTime<Utc>,
 }
 
 // Arc<Mutex<..>>, not Rc<RefCell<..>>: Leptos 0.7's `provide_context`
@@ -926,6 +941,91 @@ impl MockApi {
 
         Ok(AgentPerformanceReport { rows })
     }
+
+    pub async fn get_map_summary(&self, project_id: Uuid) -> Result<ProjectMapSummary, ApiError> {
+        settle(100).await;
+        let db = self.db.lock().unwrap();
+        Ok(match db.project_maps.get(&project_id) {
+            Some(map) => ProjectMapSummary {
+                exists: true,
+                image_content_type: Some(map.image_content_type.clone()),
+                polygons: map.polygons.clone(),
+                updated_at: Some(map.updated_at),
+            },
+            None => ProjectMapSummary {
+                exists: false,
+                image_content_type: None,
+                polygons: MapPolygons::default(),
+                updated_at: None,
+            },
+        })
+    }
+
+    pub async fn upload_map_image(
+        &self,
+        project_id: Uuid,
+        file: web_sys::File,
+    ) -> Result<ProjectMapSummary, ApiError> {
+        settle(300).await;
+        let content_type = file.type_();
+        let url = web_sys::Url::create_object_url_with_blob(&file)
+            .map_err(|_| ApiError::Network("couldn't read that file".to_string()))?;
+
+        let mut db = self.db.lock().unwrap();
+        db.project_maps.insert(
+            project_id,
+            MockProjectMap {
+                image_url: url,
+                image_content_type: content_type,
+                polygons: MapPolygons::default(),
+                updated_at: Utc::now(),
+            },
+        );
+        drop(db);
+        self.get_map_summary(project_id).await
+    }
+
+    pub async fn update_map_polygons(
+        &self,
+        project_id: Uuid,
+        polygons: MapPolygons,
+    ) -> Result<ProjectMapSummary, ApiError> {
+        settle(200).await;
+        for feature in &polygons.features {
+            let db = self.db.lock().unwrap();
+            let belongs = db
+                .plots
+                .iter()
+                .any(|p| p.id == feature.plot_id && p.project_id == project_id);
+            if !belongs {
+                return Err(ApiError::InvalidCredentials(format!(
+                    "Plot {} doesn't belong to this project.",
+                    feature.plot_id
+                )));
+            }
+        }
+
+        let mut db = self.db.lock().unwrap();
+        let Some(map) = db.project_maps.get_mut(&project_id) else {
+            return Err(ApiError::InvalidCredentials(
+                "Upload a site plan image before saving plot boundaries.".to_string(),
+            ));
+        };
+        map.polygons = polygons;
+        map.updated_at = Utc::now();
+        drop(db);
+        self.get_map_summary(project_id).await
+    }
+
+    pub fn map_image_url(&self, project_id: Uuid) -> String {
+        self.db
+            .lock()
+            .unwrap()
+            .project_maps
+            .get(&project_id)
+            .map(|m| m.image_url.clone())
+            .unwrap_or_default()
+    }
 }
 
 fn to_pg_str(status: ApprovalStatus) -> &'static str {
@@ -1390,5 +1490,6 @@ fn seed() -> MockDb {
         payments,
         quotations: Vec::new(),
         approval_requests: Vec::new(),
+        project_maps: HashMap::new(),
     }
 }

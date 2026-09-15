@@ -4,6 +4,7 @@ mod customers;
 mod dashboard;
 mod loan_accounts;
 mod platform;
+mod project_map;
 mod projects;
 mod quotations;
 mod reports;
@@ -25,4 +26,5 @@ pub fn router() -> Router<AppState> {
         .merge(quotations::router())
         .merge(approvals::router())
         .merge(reports::router())
+        .merge(project_map::router())
 }

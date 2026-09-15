@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    ApprovalRequest, AreaUnit, Customer, LeadStage, Payment, PaymentMode, Plot, PlotLoanAccount,
-    ProjectStatus, Quotation, User,
+    ApprovalRequest, AreaUnit, Customer, LeadStage, MapPolygons, Payment, PaymentMode, Plot,
+    PlotLoanAccount, ProjectStatus, Quotation, User,
 };
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq, Serialize, Deserialize)]
@@ -331,4 +331,25 @@ pub struct ApprovalRequestSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DecideApprovalInput {
     pub notes: Option<String>,
+}
+
+/// Metadata for `GET /projects/:id/map` — no image bytes (those come
+/// from the separate `GET /projects/:id/map/image` route, so a page
+/// that only needs "does a map exist / what are the polygons" never
+/// pulls a multi-MB payload for it).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectMapSummary {
+    pub exists: bool,
+    pub image_content_type: Option<String>,
+    pub polygons: MapPolygons,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+/// Body for `PUT /projects/:id/map/polygons` — the client always sends
+/// the full desired polygon set, not a diff; matches this codebase's
+/// "derive, don't store incrementally" preference and keeps the
+/// endpoint's semantics obvious.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateMapPolygonsInput {
+    pub polygons: MapPolygons,
 }

@@ -27,9 +27,9 @@ use domain::{
     AgentPerformanceReport, ApiError, ApprovalRequestSummary, AuthSession, CreateCustomerInput,
     CreatePlotInput, CreateProjectInput, CreateQuotationInput, CreateSaleInput, CustomerDetail,
     CustomerSummary, DashboardSummary, DecideApprovalInput, InventoryReport, LoanAccountDetail,
-    LoginInput, PlatformOrganizationDetail, PlatformOrganizationSummary, PlotWithColor,
-    ProjectSummary, QuotationDetail, QuotationSummary, RecordPaymentInput, SalesReport,
-    SignupInput, UpdateLeadInput,
+    LoginInput, MapPolygons, PlatformOrganizationDetail, PlatformOrganizationSummary,
+    PlotWithColor, ProjectMapSummary, ProjectSummary, QuotationDetail, QuotationSummary,
+    RecordPaymentInput, SalesReport, SignupInput, UpdateLeadInput, UpdateMapPolygonsInput,
 };
 
 #[derive(Clone)]
@@ -74,6 +74,52 @@ impl HttpApi {
         let req = self
             .authorize(Request::post(&self.url(path)))
             .json(body)
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+        Self::parse(resp).await
+    }
+
+    async fn put<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, ApiError> {
+        let req = self
+            .authorize(Request::put(&self.url(path)))
+            .json(body)
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+        Self::parse(resp).await
+    }
+
+    /// Uploads a `File` the user picked in an `<input type="file">` as
+    /// a `multipart/form-data` body — the one request in this client
+    /// that isn't a plain JSON `post`. Built via `web_sys::FormData`
+    /// rather than hand-assembling a multipart body: the browser's
+    /// `fetch` sets the correct `Content-Type` (with boundary) itself
+    /// when the body is a `FormData`, which manually setting the
+    /// header would break.
+    async fn post_file<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        field_name: &str,
+        file: web_sys::File,
+    ) -> Result<T, ApiError> {
+        let form = web_sys::FormData::new().map_err(|_| {
+            ApiError::Network("couldn't build the upload".to_string())
+        })?;
+        form.append_with_blob_and_filename(field_name, &file, &file.name())
+            .map_err(|_| ApiError::Network("couldn't attach the file".to_string()))?;
+
+        let req = self
+            .authorize(Request::post(&self.url(path)))
+            .body(form)
             .map_err(|e| ApiError::Network(e.to_string()))?;
         let resp = req
             .send()
@@ -332,5 +378,39 @@ impl HttpApi {
             params.push(format!("to={to}"));
         }
         self.get(&format!("/api/v1/reports/agents?{}", params.join("&"))).await
+    }
+
+    pub async fn get_map_summary(&self, project_id: Uuid) -> Result<ProjectMapSummary, ApiError> {
+        self.get(&format!("/api/v1/projects/{project_id}/map")).await
+    }
+
+    pub async fn upload_map_image(
+        &self,
+        project_id: Uuid,
+        file: web_sys::File,
+    ) -> Result<ProjectMapSummary, ApiError> {
+        self.post_file(&format!("/api/v1/projects/{project_id}/map"), "image", file)
+            .await
+    }
+
+    pub async fn update_map_polygons(
+        &self,
+        project_id: Uuid,
+        polygons: MapPolygons,
+    ) -> Result<ProjectMapSummary, ApiError> {
+        self.put(
+            &format!("/api/v1/projects/{project_id}/map/polygons"),
+            &UpdateMapPolygonsInput { polygons },
+        )
+        .await
+    }
+
+    /// Not async — just a URL an `<img>` tag can point at directly.
+    /// `<img>` can't send an `Authorization` header, so the token
+    /// rides along as a query param instead (see
+    /// `crates/backend/src/routes/project_map.rs`'s module docs).
+    pub fn map_image_url(&self, project_id: Uuid) -> String {
+        let token = self.token.lock().unwrap().clone().unwrap_or_default();
+        format!("{}/api/v1/projects/{project_id}/map/image?token={token}", self.base_url)
     }
 }

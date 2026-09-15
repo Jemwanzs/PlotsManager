@@ -27,3 +27,12 @@ log = "0.4"
 # contract is written against it so swapping is wiring, not a rebuild.
 gloo-net = "0.6"
 gloo-timers = { version = "0.3", features = ["futures"] }
+# Reading a file the user picked in an `<input type="file">`, building
+# a `FormData` upload body for it, and hit-testing clicks against the
+# map image's on-screen size (the map's site-plan-image upload and
+# polygon editor) — everything else in this crate reaches the DOM only
+# through leptos, but there's no leptos wrapper for these.
+web-sys = { version = "0.3", features = [
+    "Blob", "DomRect", "Element", "File", "FileList", "FormData",
+    "HtmlImageElement", "HtmlInputElement", "Url",
+] }
