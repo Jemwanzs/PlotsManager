@@ -4,7 +4,7 @@ Two roadmaps from the original scoping conversation are merged here: the
 platform-wide phases (1–7) and the payments-specific delivery sequence
 (A–D), which nests inside phases 5–7.
 
-## Current status (2026-09-13)
+## Current status (2026-09-15)
 
 **Architecture (final): Frontend → Rust API → PostgreSQL, all on
 Railway** (project `c7bee255-492d-40b6-af50-30374625b279`). This project
@@ -16,21 +16,30 @@ defense-in-depth, not the enforcement point. See
 [10](10-database-and-security-design.md) and
 [12](12-api-and-integration-design.md).
 
-The Cargo workspace is `domain` (shared types, including billing),
-`backend` (Axum — health check, Paystack webhook receiver, and working
-auth primitives in `auth.rs` not yet wired to routes), and `frontend`
+The Cargo workspace is `domain` (shared types incl. billing, plus the
+request/response DTOs and status-color helpers both `backend` and
+`frontend` share — `api_types.rs`, `status_meta.rs`), `backend` (Axum —
+health check, Paystack webhook receiver, and now real routes: login,
+dashboard, projects/plots, customers, sales, loan accounts/payments, all
+authenticated via JWT and scoped by `organization_id`), and `frontend`
 (Leptos CSR shell with routing, a responsive app shell, and real screens
-— login, dashboard, projects, project/plot detail — built against an
-in-memory mock dataset behind the same interface the real API will use,
-see `crates/frontend/src/api/`). `database/migrations/` holds the schema
-and RLS policies, applied automatically by the backend on boot.
+— login, dashboard, projects, project/plot detail — still built against
+the in-memory mock dataset behind `crates/frontend/src/api/`; wiring it
+to the now-verified real backend is the next step). `database/migrations/`
+holds the schema and RLS policies, applied automatically by the backend
+on boot; `database/seeds/0002_dev_demo.sql` is a dev-only dataset
+mirroring the frontend mock, for backend verification against real
+Postgres.
 
 **Priority order for what's next** (per the 2026-09-13 architecture
-decision): Frontend/UI → Complete User Journeys → Mobile/Responsive
-Polish → Railway Frontend Deployment → PostgreSQL/Migrations → Rust APIs
-& Authentication → Frontend/API Integration → External Integrations →
-Testing/Security → Production Hardening. Backend/database work continues
-in parallel where useful but doesn't block frontend progress.
+decision, updated 2026-09-15 now that the backend is real): Frontend/API
+Integration (point `crates/frontend/src/api/http.rs` at the real
+backend) → External Integrations → Railway deployment (Dockerfiles for
+`backend`/`frontend`, service config — not started) → Testing/Security →
+Production Hardening. The least-privilege RLS-subject Postgres role
+(today everything runs through one connection; RLS is real but not yet
+the primary boundary for a scoped DB role) remains an explicitly
+deferred hardening item, not a blocker for the above.
 
 ## Phase 1 — Discovery and Legacy Analysis
 Analyse the Excel/VBA system, extract business rules, document current
@@ -48,19 +57,21 @@ Multi-tenant architecture; organisation settings; users, roles,
 permissions; projects and plot register; documents and audit logs;
 configurable numbering.
 **Status: infrastructure decided (Railway: frontend + Rust API +
-Postgres), schema + RLS policies + domain types scaffolded, backend auth
-primitives (Argon2 + JWT, tested) built but not wired to routes, frontend
-has a real login screen and app shell against mock auth. Not yet built:
-actual signup/login HTTP endpoints, org creation flow, numbering config,
+Postgres), schema + RLS policies + domain types built, and the backend
+API is real and verified against Postgres** — login (Argon2 + JWT),
+projects/plots (create + list + detail), customers (create + list +
+detail with purchase history), all authenticated and scoped by
+`organization_id`. Frontend still runs against its in-memory mock (same
+interface, not yet pointed at the real backend — see the priority order
+above). Not yet built: org creation/signup flow, numbering config,
 document storage wiring, the least-privilege RLS-subject Postgres role
 (see [10](10-database-and-security-design.md)), or Railway deployment
-configs for `backend`/`frontend`. The plot register itself has real
-create flows against mock data now — new project, new plot (per-project
+configs for `backend`/`frontend`. The plot register has real create
+flows against mock data in the UI — new project, new plot (per-project
 unique plot numbers, fixing the legacy global-uniqueness bug from
 [02](02-existing-vba-system-analysis.md) §3), new customer — each with
 the validation the schema itself enforces (duplicate codes/IDs rejected)
-replicated in the mock so the UI behaves the same way the real backend
-will once it exists.**
+replicated in the mock and now proven identical in the real backend.**
 
 ## Phase 3 — Interactive Maps
 Upload project plans; manual polygon drawing; plot-to-map linking;
@@ -77,13 +88,16 @@ confidence scores; exception handling and human correction.
 Leads/prospects; plot selection; holds/reservations/bookings; quotations/
 offer letters; sales agreements; customer 360°; agent assignment/
 commissions.
-**Status: frontend groundwork started against mock data.** Customers
-list + detail (purchase history) and a "Reserve this plot" flow exist —
-picking a customer and payment mode on an uncommitted plot creates a
-mock `PlotSale`, moves the plot to Reserved/Booked, and the plot grid
-updates live. Not built: leads/prospects, holds vs. reservations as
-distinct stages, quotations/offer letters, agent commissions, a real
-customer 360° view (today's customer detail is purchase history only).
+**Status: frontend groundwork against mock data, backend now real and
+verified.** Customers list + detail (purchase history) and a "Reserve
+this plot" flow exist in the UI — picking a customer and payment mode on
+an uncommitted plot creates a `PlotSale`, moves the plot to
+Reserved/Booked, and the plot grid updates live; the backend implements
+the same flow transactionally against Postgres (`POST /api/v1/sales`),
+verified for both Full Cash and Lipa Pole Pole modes. Not built:
+leads/prospects, holds vs. reservations as distinct stages, quotations/
+offer letters, agent commissions, a real customer 360° view (today's
+customer detail is purchase history only).
 
 ## Phase 6 — Payments and Transfers
 Nests the payments delivery sequence:
@@ -98,13 +112,19 @@ Nests the payments delivery sequence:
 - **Phase D** — mobile-money/banking integrations, automated matching/
   receipting/reconciliation, customer self-service portal.
 
-**Status: Phase A frontend groundwork started against mock data.** A
-Plot Loan Account is created automatically when a Lipa Pole Pole sale is
-reserved (fixed 10% deposit / 12 monthly instalments — no tenor/deposit
-picker yet), with a detail screen (balance, instalment, deposit) and a
-"Record a payment" form that updates the running balance and status
-(Awaiting Deposit → Active (Partially Paid) → Fully Paid) live. Not
-built: a real generated repayment schedule
+**Status: Phase A frontend groundwork against mock data, backend now
+real and verified.** A Plot Loan Account is created automatically when a
+Lipa Pole Pole sale is reserved (fixed 10% deposit / 12 monthly
+instalments — no tenor/deposit picker yet), with a detail screen
+(balance, instalment, deposit) and a "Record a payment" form that
+updates the running balance and status (Awaiting Deposit → Active
+(Partially Paid) → Fully Paid) live; the backend implements the same
+account creation and payment recalculation transactionally against
+Postgres (`POST /api/v1/sales`, `POST /api/v1/loan-accounts/:id/payments`),
+using a real Postgres sequence for account numbers (migration 0003 —
+the legacy `count(*)+1`-style numbering bug from
+[02](02-existing-vba-system-analysis.md) §3 doesn't get a chance to
+reappear here). Not built: a real generated repayment schedule
 (`repayment_schedule_entries` — see docs/08's note that the interest/
 amortization engine is deliberately deferred), the Captured → Verified →
 Posted approval lifecycle (payments post immediately, no approval gate

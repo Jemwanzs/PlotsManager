@@ -24,7 +24,6 @@ impl ApiClient {
         Self::Mock(mock::MockApi::new())
     }
 
-    #[allow(dead_code)] // wired in once crates/backend exposes real routes
     pub fn new_http(base_url: impl Into<String>) -> Self {
         Self::Http(http::HttpApi::new(base_url))
     }

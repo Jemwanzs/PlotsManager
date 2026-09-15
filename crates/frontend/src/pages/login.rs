@@ -84,7 +84,7 @@ pub fn Login() -> impl IntoView {
                 </form>
 
                 <p class="auth-hint">
-                    "Demo credentials: admin@acaciagrove.example / password123 — this build runs against sample data, not a live backend yet."
+                    "Demo credentials: admin@acaciagrove.example / password123"
                 </p>
             </div>
         </div>

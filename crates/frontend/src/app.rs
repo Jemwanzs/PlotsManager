@@ -10,9 +10,22 @@ use crate::pages::{
     NewProject, NotFound, ProjectDetail, ProjectsList,
 };
 
+/// `API_BASE_URL` is read at compile time (Trunk shells out to `cargo
+/// build`, so whatever's in the environment when you run `trunk serve`/
+/// `trunk build` — or Railway's build step — is what lands here). Unset
+/// it for frontend-only work against `api::mock`; set it once
+/// `crates/backend` is running to exercise the real API — see
+/// .env.example.
+fn build_api_client() -> ApiClient {
+    match option_env!("API_BASE_URL") {
+        Some(base_url) => ApiClient::new_http(base_url),
+        None => ApiClient::new_mock(),
+    }
+}
+
 #[component]
 pub fn App() -> impl IntoView {
-    provide_context(ApiClient::new_mock());
+    provide_context(build_api_client());
     provide_context::<AuthSignal>(RwSignal::new(None));
 
     view! {
