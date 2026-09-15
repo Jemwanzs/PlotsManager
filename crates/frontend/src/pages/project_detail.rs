@@ -6,7 +6,7 @@ use rust_decimal::Decimal;
 use std::str::FromStr;
 use uuid::Uuid;
 
-use crate::api::{status_meta, CreatePlotInput, CreateSaleInput, PlotWithColor};
+use crate::api::{status_meta, CreatePlotInput, CreateQuotationInput, CreateSaleInput, PlotWithColor};
 use crate::auth::use_api;
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
 use crate::format::format_kes;
@@ -180,6 +180,7 @@ pub fn ProjectDetail() -> impl IntoView {
                     let plot_id = pwc.plot.id;
                     let asking_price = pwc.plot.asking_price;
                     let startable = can_start_sale(pwc.plot.status);
+                    let show_quote_form = RwSignal::new(false);
                     view! {
                         <div class="card" style="margin-top: var(--space-4)">
                             <div class="page-header" style="margin-bottom: var(--space-3)">
@@ -193,14 +194,46 @@ pub fn ProjectDetail() -> impl IntoView {
                             {pwc.plot.title_number.clone().map(|t| view! { <p>"Title: " {t}</p> })}
 
                             <Show when=move || startable>
-                                <ReserveForm
-                                    plot_id=plot_id
-                                    asking_price=asking_price
-                                    on_reserved=move || {
-                                        plots.refetch();
-                                        selected.set(None);
+                                <div class="filter-tabs">
+                                    <button
+                                        type="button"
+                                        class="filter-tab"
+                                        class:active=move || !show_quote_form.get()
+                                        on:click=move |_| show_quote_form.set(false)
+                                    >
+                                        "Reserve now"
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class="filter-tab"
+                                        class:active=move || show_quote_form.get()
+                                        on:click=move |_| show_quote_form.set(true)
+                                    >
+                                        "Send a quotation"
+                                    </button>
+                                </div>
+
+                                <Show
+                                    when=move || show_quote_form.get()
+                                    fallback=move || view! {
+                                        <ReserveForm
+                                            plot_id=plot_id
+                                            asking_price=asking_price
+                                            on_reserved=move || {
+                                                plots.refetch();
+                                                selected.set(None);
+                                            }
+                                        />
                                     }
-                                />
+                                >
+                                    <QuoteForm
+                                        plot_id=plot_id
+                                        asking_price=asking_price
+                                        on_quoted=move || {
+                                            selected.set(None);
+                                        }
+                                    />
+                                </Show>
                             </Show>
 
                             <button class="btn btn-secondary" on:click=move |_| selected.set(None)>
@@ -469,6 +502,170 @@ fn ReserveForm(
 
             <button type="submit" class="btn btn-primary" disabled=submitting>
                 {move || if submitting.get() { "Reserving…" } else { "Reserve for customer" }}
+            </button>
+        </form>
+    }
+}
+
+/// Creates a `Quotation` in Draft status instead of committing to a sale
+/// directly — see docs/07's "quotations and offer letters" funnel stage
+/// and `domain::Quotation`'s module docs for why this exists as a
+/// separate step from `ReserveForm`. The quotation still needs to be
+/// sent and accepted (from /quotations) before it becomes a real sale.
+#[component]
+fn QuoteForm(plot_id: Uuid, asking_price: Decimal, on_quoted: impl Fn() + Clone + 'static) -> impl IntoView {
+    let api = use_api();
+
+    let customers = LocalResource::new({
+        let api = api.clone();
+        move || {
+            let api = api.clone();
+            async move { api.list_customers().await }
+        }
+    });
+
+    let customer_id = RwSignal::new(String::new());
+    let payment_mode = RwSignal::new("full_cash".to_string());
+    let price = RwSignal::new(asking_price.to_string());
+    let valid_until = RwSignal::new(
+        (chrono::Utc::now().date_naive() + chrono::Duration::days(7)).to_string(),
+    );
+    let notes = RwSignal::new(String::new());
+    let error = RwSignal::new(None::<String>);
+    let submitting = RwSignal::new(false);
+
+    let on_submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        if submitting.get() {
+            return;
+        }
+        error.set(None);
+
+        let Ok(customer) = Uuid::parse_str(&customer_id.get()) else {
+            error.set(Some("Choose a customer.".to_string()));
+            return;
+        };
+        let Ok(quoted_price) = Decimal::from_str(price.get().trim()) else {
+            error.set(Some("Enter a valid price.".to_string()));
+            return;
+        };
+        let Ok(valid_until_date) = chrono::NaiveDate::parse_from_str(&valid_until.get(), "%Y-%m-%d") else {
+            error.set(Some("Choose a validity date.".to_string()));
+            return;
+        };
+        let mode = match payment_mode.get().as_str() {
+            "lpp_free" => PaymentMode::LipaPolePoleInterestFree,
+            "lpp_bearing" => PaymentMode::LipaPolePoleInterestBearing,
+            _ => PaymentMode::FullCash,
+        };
+
+        submitting.set(true);
+        let api = api.clone();
+        let on_quoted = on_quoted.clone();
+        spawn_local(async move {
+            let result = api
+                .create_quotation(CreateQuotationInput {
+                    plot_id,
+                    customer_id: customer,
+                    payment_mode: mode,
+                    quoted_price,
+                    valid_until: valid_until_date,
+                    notes: Some(notes.get()).filter(|s| !s.trim().is_empty()),
+                })
+                .await;
+            match result {
+                Ok(_) => on_quoted(),
+                Err(e) => {
+                    error.set(Some(format!("{e}")));
+                    submitting.set(false);
+                }
+            }
+        });
+    };
+
+    view! {
+        <form on:submit=on_submit style="margin: var(--space-4) 0; padding-top: var(--space-4); border-top: 1px solid var(--color-border);">
+            <h3>"Send a quotation"</h3>
+            <p class="meta">"The customer can accept it later from Quotations — nothing changes for this plot until then."</p>
+            {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+
+            <div class="field">
+                <label for="quote-customer">"Customer"</label>
+                <select
+                    id="quote-customer"
+                    required
+                    prop:value=customer_id
+                    on:change=move |ev| customer_id.set(event_target_value(&ev))
+                >
+                    <option value="">"Select a customer…"</option>
+                    <Suspense fallback=|| ()>
+                        {move || {
+                            customers
+                                .get()
+                                .map(|wrapped| wrapped.take())
+                                .map(|result| match result {
+                                    Ok(list) => list
+                                        .into_iter()
+                                        .map(|c| {
+                                            let id = c.customer.id.to_string();
+                                            view! { <option value=id>{c.customer.full_name}</option> }
+                                        })
+                                        .collect_view()
+                                        .into_any(),
+                                    Err(_) => ().into_any(),
+                                })
+                        }}
+                    </Suspense>
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="quote-payment-mode">"Payment mode"</label>
+                <select
+                    id="quote-payment-mode"
+                    prop:value=payment_mode
+                    on:change=move |ev| payment_mode.set(event_target_value(&ev))
+                >
+                    <option value="full_cash">"Full cash"</option>
+                    <option value="lpp_free">"Lipa Pole Pole (interest-free)"</option>
+                    <option value="lpp_bearing">"Lipa Pole Pole (interest-bearing)"</option>
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="quote-price">"Quoted price (KES)"</label>
+                <input
+                    id="quote-price"
+                    type="text"
+                    inputmode="numeric"
+                    required
+                    prop:value=price
+                    on:input=move |ev| price.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label for="quote-valid-until">"Valid until"</label>
+                <input
+                    id="quote-valid-until"
+                    type="date"
+                    required
+                    prop:value=valid_until
+                    on:input=move |ev| valid_until.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label for="quote-notes">"Notes"</label>
+                <textarea
+                    id="quote-notes"
+                    prop:value=notes
+                    on:input=move |ev| notes.set(event_target_value(&ev))
+                ></textarea>
+            </div>
+
+            <button type="submit" class="btn btn-primary" disabled=submitting>
+                {move || if submitting.get() { "Creating…" } else { "Create quotation" }}
             </button>
         </form>
     }

@@ -4,6 +4,7 @@ mod dashboard;
 mod loan_accounts;
 mod platform;
 mod projects;
+mod quotations;
 mod sales;
 
 use axum::Router;
@@ -19,4 +20,5 @@ pub fn router() -> Router<AppState> {
         .merge(sales::router())
         .merge(loan_accounts::router())
         .merge(platform::router())
+        .merge(quotations::router())
 }

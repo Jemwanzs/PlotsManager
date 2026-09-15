@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     AreaUnit, Customer, LeadStage, Payment, PaymentMode, Plot, PlotLoanAccount, ProjectStatus,
-    User,
+    Quotation, User,
 };
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq, Serialize, Deserialize)]
@@ -262,4 +262,48 @@ pub struct PlatformOrganizationDetail {
     pub summary: PlatformOrganizationSummary,
     pub users: Vec<PlatformOrganizationUser>,
     pub recent_access: Vec<PlatformAccessLogEntry>,
+}
+
+/// Creates a `Quotation` in `Draft` status — see
+/// `crates/backend/src/routes/quotations.rs`. `below_minimum_price` on
+/// the response types is informational only (docs/09's approval engine
+/// isn't implemented yet, see the migration's module comment), so
+/// there's deliberately no server-side rejection here for a price under
+/// the plot's `minimum_price`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateQuotationInput {
+    pub plot_id: Uuid,
+    pub customer_id: Uuid,
+    pub payment_mode: PaymentMode,
+    pub quoted_price: Decimal,
+    pub valid_until: NaiveDate,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuotationSummary {
+    pub quotation: Quotation,
+    pub plot_number: String,
+    pub project_name: String,
+    pub customer_name: String,
+    pub status_label: String,
+    pub status_color: String,
+    pub is_expired: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuotationDetail {
+    pub quotation: Quotation,
+    pub plot_id: Uuid,
+    pub plot_number: String,
+    pub project_id: Uuid,
+    pub project_name: String,
+    pub asking_price: Decimal,
+    pub minimum_price: Decimal,
+    pub customer_id: Uuid,
+    pub customer_name: String,
+    pub status_label: String,
+    pub status_color: String,
+    pub is_expired: bool,
+    pub below_minimum_price: bool,
 }

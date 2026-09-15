@@ -21,13 +21,51 @@ async fn create_sale(
     auth: AuthUser,
     Json(input): Json<CreateSaleInput>,
 ) -> Result<Json<PlotSale>, AppError> {
-    if input.agreed_price <= Decimal::ZERO {
+    let mut tx = state.db.begin().await?;
+
+    let sale = execute_sale(
+        &mut tx,
+        auth.organization_id,
+        ExecuteSaleParams {
+            plot_id: input.plot_id,
+            customer_id: input.customer_id,
+            agent_id: auth.user_id,
+            payment_mode: input.payment_mode,
+            agreed_price: input.agreed_price,
+        },
+    )
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(Json(sale))
+}
+
+pub(crate) struct ExecuteSaleParams {
+    pub plot_id: Uuid,
+    pub customer_id: Uuid,
+    pub agent_id: Uuid,
+    pub payment_mode: PaymentMode,
+    pub agreed_price: Decimal,
+}
+
+/// The actual "commit to a sale" transaction — plot/customer validation,
+/// the `plot_sales` insert, the Plot Loan Account for non-cash modes, and
+/// the plot status flip, all against the transaction the caller already
+/// owns. Shared by `create_sale` above (reserving a plot directly) and
+/// `routes/quotations.rs`'s `accept_quotation` (converting a customer-
+/// accepted quotation into the same kind of real sale) — one place that
+/// knows what "becoming a sale" means, so the two paths can't drift.
+pub(crate) async fn execute_sale(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    organization_id: Uuid,
+    params: ExecuteSaleParams,
+) -> Result<PlotSale, AppError> {
+    if params.agreed_price <= Decimal::ZERO {
         return Err(AppError::bad_request(
             "Enter an agreed price greater than zero.",
         ));
     }
-
-    let mut tx = state.db.begin().await?;
 
     let plot_ok: bool = sqlx::query_scalar(
         r#"select exists(
@@ -35,9 +73,9 @@ async fn create_sale(
             where pl.id = $1 and p.organization_id = $2
         )"#,
     )
-    .bind(input.plot_id)
-    .bind(auth.organization_id)
-    .fetch_one(&mut *tx)
+    .bind(params.plot_id)
+    .bind(organization_id)
+    .fetch_one(&mut **tx)
     .await?;
     if !plot_ok {
         return Err(AppError::NotFound);
@@ -46,9 +84,9 @@ async fn create_sale(
     let customer_ok: bool = sqlx::query_scalar(
         "select exists(select 1 from customers where id = $1 and organization_id = $2)",
     )
-    .bind(input.customer_id)
-    .bind(auth.organization_id)
-    .fetch_one(&mut *tx)
+    .bind(params.customer_id)
+    .bind(organization_id)
+    .fetch_one(&mut **tx)
     .await?;
     if !customer_ok {
         return Err(AppError::bad_request("Choose a valid customer."));
@@ -61,13 +99,13 @@ async fn create_sale(
         returning id
         "#,
     )
-    .bind(input.plot_id)
-    .bind(input.customer_id)
-    .bind(auth.organization_id)
-    .bind(auth.user_id)
-    .bind(to_pg(&input.payment_mode))
-    .bind(input.agreed_price)
-    .fetch_one(&mut *tx)
+    .bind(params.plot_id)
+    .bind(params.customer_id)
+    .bind(organization_id)
+    .bind(params.agent_id)
+    .bind(to_pg(&params.payment_mode))
+    .bind(params.agreed_price)
+    .fetch_one(&mut **tx)
     .await
     .map_err(|e| match &e {
         sqlx::Error::Database(db_err)
@@ -78,17 +116,17 @@ async fn create_sale(
         _ => AppError::from(e),
     })?;
 
-    if input.payment_mode != PaymentMode::FullCash {
+    if params.payment_mode != PaymentMode::FullCash {
         let account_number: String = sqlx::query_scalar(
             "select 'PLA-' || lpad(nextval('plot_loan_account_number_seq')::text, 4, '0')",
         )
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await?;
 
-        let deposit_required = (input.agreed_price * Decimal::new(10, 2)).round();
-        let financed = input.agreed_price - deposit_required;
+        let deposit_required = (params.agreed_price * Decimal::new(10, 2)).round();
+        let financed = params.agreed_price - deposit_required;
         let instalment_amount = (financed / Decimal::from(12)).round();
-        let interest_rate = match input.payment_mode {
+        let interest_rate = match params.payment_mode {
             PaymentMode::LipaPolePoleInterestBearing => Some(Decimal::from(14)),
             _ => None,
         };
@@ -103,15 +141,15 @@ async fn create_sale(
         )
         .bind(&account_number)
         .bind(sale_id)
-        .bind(input.agreed_price)
+        .bind(params.agreed_price)
         .bind(interest_rate)
         .bind(deposit_required)
         .bind(instalment_amount)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
 
-    let new_status = match input.payment_mode {
+    let new_status = match params.payment_mode {
         PaymentMode::FullCash => PlotStatus::Reserved,
         PaymentMode::LipaPolePoleInterestFree | PaymentMode::LipaPolePoleInterestBearing => {
             PlotStatus::Booked
@@ -119,9 +157,9 @@ async fn create_sale(
     };
     sqlx::query("update plots set status = $1, assigned_customer_id = $2 where id = $3")
         .bind(to_pg(&new_status))
-        .bind(input.customer_id)
-        .bind(input.plot_id)
-        .execute(&mut *tx)
+        .bind(params.customer_id)
+        .bind(params.plot_id)
+        .execute(&mut **tx)
         .await?;
 
     let sale: PlotSaleRow = sqlx::query_as(
@@ -129,12 +167,10 @@ async fn create_sale(
            from plot_sales where id = $1"#,
     )
     .bind(sale_id)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await?;
 
-    tx.commit().await?;
-
-    Ok(Json(sale.into_domain()?))
+    sale.into_domain()
 }
 
 #[derive(sqlx::FromRow)]

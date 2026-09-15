@@ -3,7 +3,7 @@
 //! real API responses) need the *same* mapping — see the module docs on
 //! `api_types` for why that means it lives here, not in either crate.
 
-use crate::{LeadStage, LoanAccountStatus, PlotStatus};
+use crate::{LeadStage, LoanAccountStatus, PlotStatus, QuotationStatus};
 
 /// Matches the suggested defaults in docs/05-project-and-plot-management.md.
 /// Organisations can reconfigure both per docs/05 once `plot_status_config`
@@ -52,5 +52,20 @@ pub fn lead_stage_meta(stage: LeadStage) -> (&'static str, &'static str) {
         LeadStage::SiteVisit => ("Site Visit", "#f97316"),
         LeadStage::Negotiating => ("Negotiating", "#9333ea"),
         LeadStage::Lost => ("Lost", "#6b7280"),
+    }
+}
+
+/// `is_expired` is computed by the caller (a `Sent` quotation past its
+/// `valid_until` — see `Quotation`'s module docs) since this crate has
+/// no clock/IO of its own to derive it from.
+pub fn quotation_status_meta(status: QuotationStatus, is_expired: bool) -> (&'static str, &'static str) {
+    if is_expired && status == QuotationStatus::Sent {
+        return ("Expired", "#6b7280");
+    }
+    match status {
+        QuotationStatus::Draft => ("Draft", "#6b7280"),
+        QuotationStatus::Sent => ("Sent", "#38bdf8"),
+        QuotationStatus::Accepted => ("Accepted", "#16a34a"),
+        QuotationStatus::Rejected => ("Rejected", "#dc2626"),
     }
 }

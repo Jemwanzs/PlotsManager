@@ -9,12 +9,13 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{NaiveDate, Utc};
 use domain::{
-    loan_status_meta, plot_status_meta as status_meta, AreaUnit, ApiError, AuthSession,
-    CreateCustomerInput, CreatePlotInput, CreateProjectInput, CreateSaleInput, Customer,
-    CustomerDetail, CustomerSaleView, CustomerSummary, DashboardSummary, LeadStage,
-    LoanAccountDetail, LoanAccountStatus, Organization, Payment, PaymentMode, PaymentStatus,
-    PlatformOrganizationDetail, PlatformOrganizationSummary, Plot, PlotLoanAccount, PlotSale,
-    PlotStatus, PlotWithColor, Project, ProjectStatus, ProjectSummary, RecordPaymentInput,
+    loan_status_meta, plot_status_meta as status_meta, quotation_status_meta, AreaUnit, ApiError,
+    AuthSession, CreateCustomerInput, CreatePlotInput, CreateProjectInput, CreateQuotationInput,
+    CreateSaleInput, Customer, CustomerDetail, CustomerSaleView, CustomerSummary,
+    DashboardSummary, LeadStage, LoanAccountDetail, LoanAccountStatus, Organization, Payment,
+    PaymentMode, PaymentStatus, PlatformOrganizationDetail, PlatformOrganizationSummary, Plot,
+    PlotLoanAccount, PlotSale, PlotStatus, PlotWithColor, Project, ProjectStatus, ProjectSummary,
+    Quotation, QuotationDetail, QuotationStatus, QuotationSummary, RecordPaymentInput,
     SignupInput, UpdateLeadInput, User,
 };
 use rust_decimal::Decimal;
@@ -32,6 +33,7 @@ struct MockDb {
     sales: Vec<PlotSale>,
     loan_accounts: Vec<PlotLoanAccount>,
     payments: Vec<Payment>,
+    quotations: Vec<Quotation>,
 }
 
 // Arc<Mutex<..>>, not Rc<RefCell<..>>: Leptos 0.7's `provide_context`
@@ -408,49 +410,13 @@ impl MockApi {
     pub async fn create_sale(&self, input: CreateSaleInput) -> Result<PlotSale, ApiError> {
         settle(300).await;
         let mut db = self.db.lock().unwrap();
-
-        if !db.customers.iter().any(|c| c.id == input.customer_id) {
-            return Err(ApiError::NotFound);
-        }
-
-        let already_sold = db.sales.iter().any(|s| s.plot_id == input.plot_id);
-        if already_sold {
-            return Err(ApiError::InvalidCredentials(
-                "This plot already has an active sale.".to_string(),
-            ));
-        }
-
-        let organization_id = db.organization.id;
-        let agent_id = db.demo_user.id;
-        let sale = PlotSale {
-            id: Uuid::new_v4(),
-            plot_id: input.plot_id,
-            customer_id: input.customer_id,
-            organization_id,
-            agent_id: Some(agent_id),
-            payment_mode: input.payment_mode,
-            agreed_price: input.agreed_price,
-            created_at: Utc::now(),
-        };
-        db.sales.push(sale.clone());
-
-        if input.payment_mode != PaymentMode::FullCash {
-            let seq = db.loan_accounts.len() + 1;
-            let today = Utc::now().date_naive();
-            db.loan_accounts
-                .push(new_loan_account(&sale, seq, today));
-        }
-
-        if let Some(plot) = db.plots.iter_mut().find(|p| p.id == input.plot_id) {
-            plot.status = match input.payment_mode {
-                PaymentMode::FullCash => PlotStatus::Reserved,
-                PaymentMode::LipaPolePoleInterestFree
-                | PaymentMode::LipaPolePoleInterestBearing => PlotStatus::Booked,
-            };
-            plot.assigned_customer_id = Some(input.customer_id);
-        }
-
-        Ok(sale)
+        execute_sale_locked(
+            &mut db,
+            input.plot_id,
+            input.customer_id,
+            input.payment_mode,
+            input.agreed_price,
+        )
     }
 
     pub async fn get_loan_account(&self, id: Uuid) -> Result<LoanAccountDetail, ApiError> {
@@ -590,6 +556,221 @@ impl MockApi {
             "This account doesn't have platform administrator access.".to_string(),
         ))
     }
+
+    pub async fn list_quotations(
+        &self,
+        customer_id: Option<Uuid>,
+    ) -> Result<Vec<QuotationSummary>, ApiError> {
+        settle(200).await;
+        let db = self.db.lock().unwrap();
+        Ok(db
+            .quotations
+            .iter()
+            .filter(|q| customer_id.is_none_or(|id| q.customer_id == id))
+            .filter_map(|q| quotation_summary(&db, q))
+            .collect())
+    }
+
+    pub async fn get_quotation(&self, id: Uuid) -> Result<QuotationDetail, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+        let quotation = db.quotations.iter().find(|q| q.id == id).ok_or(ApiError::NotFound)?;
+        quotation_detail(&db, quotation).ok_or(ApiError::NotFound)
+    }
+
+    pub async fn create_quotation(&self, input: CreateQuotationInput) -> Result<Quotation, ApiError> {
+        settle(300).await;
+        let mut db = self.db.lock().unwrap();
+
+        if input.quoted_price <= Decimal::ZERO {
+            return Err(ApiError::InvalidCredentials(
+                "Enter a quoted price greater than zero.".to_string(),
+            ));
+        }
+        if !db.plots.iter().any(|p| p.id == input.plot_id) {
+            return Err(ApiError::NotFound);
+        }
+        if !db.customers.iter().any(|c| c.id == input.customer_id) {
+            return Err(ApiError::NotFound);
+        }
+
+        let quotation = Quotation {
+            id: Uuid::new_v4(),
+            organization_id: db.organization.id,
+            plot_id: input.plot_id,
+            customer_id: input.customer_id,
+            agent_id: Some(db.demo_user.id),
+            payment_mode: input.payment_mode,
+            quoted_price: input.quoted_price,
+            valid_until: input.valid_until,
+            status: QuotationStatus::Draft,
+            notes: input.notes.filter(|s| !s.trim().is_empty()),
+            converted_sale_id: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db.quotations.push(quotation.clone());
+        Ok(quotation)
+    }
+
+    pub async fn send_quotation(&self, id: Uuid) -> Result<Quotation, ApiError> {
+        settle(200).await;
+        self.transition_quotation(id, QuotationStatus::Draft, QuotationStatus::Sent)
+    }
+
+    pub async fn reject_quotation(&self, id: Uuid) -> Result<Quotation, ApiError> {
+        settle(200).await;
+        self.transition_quotation(id, QuotationStatus::Sent, QuotationStatus::Rejected)
+    }
+
+    fn transition_quotation(
+        &self,
+        id: Uuid,
+        from: QuotationStatus,
+        to: QuotationStatus,
+    ) -> Result<Quotation, ApiError> {
+        let mut db = self.db.lock().unwrap();
+        let quotation = db.quotations.iter_mut().find(|q| q.id == id).ok_or(ApiError::NotFound)?;
+        if quotation.status != from {
+            return Err(ApiError::InvalidCredentials(
+                "This quotation isn't in the right state for that action anymore.".to_string(),
+            ));
+        }
+        quotation.status = to;
+        quotation.updated_at = Utc::now();
+        Ok(quotation.clone())
+    }
+
+    pub async fn accept_quotation(&self, id: Uuid) -> Result<Quotation, ApiError> {
+        settle(300).await;
+        let mut db = self.db.lock().unwrap();
+
+        let Some(quotation) = db.quotations.iter().find(|q| q.id == id).cloned() else {
+            return Err(ApiError::NotFound);
+        };
+        if quotation.status != QuotationStatus::Sent {
+            return Err(ApiError::InvalidCredentials(
+                "Only a sent quotation can be accepted.".to_string(),
+            ));
+        }
+
+        let sale = execute_sale_locked(
+            &mut db,
+            quotation.plot_id,
+            quotation.customer_id,
+            quotation.payment_mode,
+            quotation.quoted_price,
+        )?;
+
+        let quotation = db.quotations.iter_mut().find(|q| q.id == id).unwrap();
+        quotation.status = QuotationStatus::Accepted;
+        quotation.converted_sale_id = Some(sale.id);
+        quotation.updated_at = Utc::now();
+        Ok(quotation.clone())
+    }
+}
+
+fn quotation_is_expired(q: &Quotation) -> bool {
+    q.status == QuotationStatus::Sent && q.valid_until < Utc::now().date_naive()
+}
+
+fn quotation_summary(db: &MockDb, q: &Quotation) -> Option<QuotationSummary> {
+    let plot = db.plots.iter().find(|p| p.id == q.plot_id)?;
+    let project = db.projects.iter().find(|p| p.id == plot.project_id)?;
+    let customer = db.customers.iter().find(|c| c.id == q.customer_id)?;
+    let expired = quotation_is_expired(q);
+    let (label, color) = quotation_status_meta(q.status, expired);
+    Some(QuotationSummary {
+        quotation: q.clone(),
+        plot_number: plot.plot_number.clone(),
+        project_name: project.name.clone(),
+        customer_name: customer.full_name.clone(),
+        status_label: label.to_string(),
+        status_color: color.to_string(),
+        is_expired: expired,
+    })
+}
+
+fn quotation_detail(db: &MockDb, q: &Quotation) -> Option<QuotationDetail> {
+    let plot = db.plots.iter().find(|p| p.id == q.plot_id)?;
+    let project = db.projects.iter().find(|p| p.id == plot.project_id)?;
+    let customer = db.customers.iter().find(|c| c.id == q.customer_id)?;
+    let expired = quotation_is_expired(q);
+    let (label, color) = quotation_status_meta(q.status, expired);
+    Some(QuotationDetail {
+        quotation: q.clone(),
+        plot_id: plot.id,
+        plot_number: plot.plot_number.clone(),
+        project_id: project.id,
+        project_name: project.name.clone(),
+        asking_price: plot.asking_price,
+        minimum_price: plot.minimum_price,
+        customer_id: customer.id,
+        customer_name: customer.full_name.clone(),
+        status_label: label.to_string(),
+        status_color: color.to_string(),
+        is_expired: expired,
+        below_minimum_price: q.quoted_price < plot.minimum_price,
+    })
+}
+
+/// The actual "commit to a sale" logic, taking the already-locked
+/// `MockDb` — a plain function rather than a `&self` method because
+/// `accept_quotation` needs to run it from inside its own already-held
+/// lock (the `Mutex` isn't reentrant, so calling `self.create_sale()`
+/// from there would deadlock). Mirrors
+/// `crates/backend/src/routes/sales.rs`'s `execute_sale` split for
+/// exactly the same reason: one place both `create_sale` and quotation
+/// acceptance go through, so they can't drift.
+fn execute_sale_locked(
+    db: &mut MockDb,
+    plot_id: Uuid,
+    customer_id: Uuid,
+    payment_mode: PaymentMode,
+    agreed_price: Decimal,
+) -> Result<PlotSale, ApiError> {
+    if !db.customers.iter().any(|c| c.id == customer_id) {
+        return Err(ApiError::NotFound);
+    }
+
+    let already_sold = db.sales.iter().any(|s| s.plot_id == plot_id);
+    if already_sold {
+        return Err(ApiError::InvalidCredentials(
+            "This plot already has an active sale.".to_string(),
+        ));
+    }
+
+    let organization_id = db.organization.id;
+    let agent_id = db.demo_user.id;
+    let sale = PlotSale {
+        id: Uuid::new_v4(),
+        plot_id,
+        customer_id,
+        organization_id,
+        agent_id: Some(agent_id),
+        payment_mode,
+        agreed_price,
+        created_at: Utc::now(),
+    };
+    db.sales.push(sale.clone());
+
+    if payment_mode != PaymentMode::FullCash {
+        let seq = db.loan_accounts.len() + 1;
+        let today = Utc::now().date_naive();
+        db.loan_accounts.push(new_loan_account(&sale, seq, today));
+    }
+
+    if let Some(plot) = db.plots.iter_mut().find(|p| p.id == plot_id) {
+        plot.status = match payment_mode {
+            PaymentMode::FullCash => PlotStatus::Reserved,
+            PaymentMode::LipaPolePoleInterestFree | PaymentMode::LipaPolePoleInterestBearing => {
+                PlotStatus::Booked
+            }
+        };
+        plot.assigned_customer_id = Some(customer_id);
+    }
+
+    Ok(sale)
 }
 
 /// Deliberately simple defaults (10% deposit, 12 monthly instalments) —
@@ -842,5 +1023,6 @@ fn seed() -> MockDb {
         sales,
         loan_accounts,
         payments,
+        quotations: Vec::new(),
     }
 }

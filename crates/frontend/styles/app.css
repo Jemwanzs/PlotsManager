@@ -182,6 +182,11 @@ a {
   color: var(--color-danger);
   border: 1px solid #fecaca;
 }
+.alert-warning {
+  background: var(--color-warning-bg);
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
 
 /* ---------- Cards, badges ---------- */
 

@@ -24,9 +24,10 @@ use uuid::Uuid;
 
 use domain::{
     ApiError, AuthSession, CreateCustomerInput, CreatePlotInput, CreateProjectInput,
-    CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary, LoanAccountDetail,
-    LoginInput, PlatformOrganizationDetail, PlatformOrganizationSummary, PlotWithColor,
-    ProjectSummary, RecordPaymentInput, SignupInput, UpdateLeadInput,
+    CreateQuotationInput, CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary,
+    LoanAccountDetail, LoginInput, PlatformOrganizationDetail, PlatformOrganizationSummary,
+    PlotWithColor, ProjectSummary, QuotationDetail, QuotationSummary, RecordPaymentInput,
+    SignupInput, UpdateLeadInput,
 };
 
 #[derive(Clone)]
@@ -226,5 +227,38 @@ impl HttpApi {
             )
             .await?;
         Ok(())
+    }
+
+    pub async fn list_quotations(
+        &self,
+        customer_id: Option<Uuid>,
+    ) -> Result<Vec<QuotationSummary>, ApiError> {
+        match customer_id {
+            Some(id) => self.get(&format!("/api/v1/quotations?customer_id={id}")).await,
+            None => self.get("/api/v1/quotations").await,
+        }
+    }
+
+    pub async fn get_quotation(&self, id: Uuid) -> Result<QuotationDetail, ApiError> {
+        self.get(&format!("/api/v1/quotations/{id}")).await
+    }
+
+    pub async fn create_quotation(
+        &self,
+        input: CreateQuotationInput,
+    ) -> Result<domain::Quotation, ApiError> {
+        self.post("/api/v1/quotations", &input).await
+    }
+
+    pub async fn send_quotation(&self, id: Uuid) -> Result<domain::Quotation, ApiError> {
+        self.post(&format!("/api/v1/quotations/{id}/send"), &()).await
+    }
+
+    pub async fn accept_quotation(&self, id: Uuid) -> Result<domain::Quotation, ApiError> {
+        self.post(&format!("/api/v1/quotations/{id}/accept"), &()).await
+    }
+
+    pub async fn reject_quotation(&self, id: Uuid) -> Result<domain::Quotation, ApiError> {
+        self.post(&format!("/api/v1/quotations/{id}/reject"), &()).await
     }
 }

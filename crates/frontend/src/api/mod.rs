@@ -165,4 +165,52 @@ impl ApiClient {
             Self::Http(api) => api.reactivate_organization(id).await,
         }
     }
+
+    pub async fn list_quotations(
+        &self,
+        customer_id: Option<Uuid>,
+    ) -> Result<Vec<QuotationSummary>, ApiError> {
+        match self {
+            Self::Mock(api) => api.list_quotations(customer_id).await,
+            Self::Http(api) => api.list_quotations(customer_id).await,
+        }
+    }
+
+    pub async fn get_quotation(&self, id: Uuid) -> Result<QuotationDetail, ApiError> {
+        match self {
+            Self::Mock(api) => api.get_quotation(id).await,
+            Self::Http(api) => api.get_quotation(id).await,
+        }
+    }
+
+    pub async fn create_quotation(
+        &self,
+        input: CreateQuotationInput,
+    ) -> Result<domain::Quotation, ApiError> {
+        match self {
+            Self::Mock(api) => api.create_quotation(input).await,
+            Self::Http(api) => api.create_quotation(input).await,
+        }
+    }
+
+    pub async fn send_quotation(&self, id: Uuid) -> Result<domain::Quotation, ApiError> {
+        match self {
+            Self::Mock(api) => api.send_quotation(id).await,
+            Self::Http(api) => api.send_quotation(id).await,
+        }
+    }
+
+    pub async fn accept_quotation(&self, id: Uuid) -> Result<domain::Quotation, ApiError> {
+        match self {
+            Self::Mock(api) => api.accept_quotation(id).await,
+            Self::Http(api) => api.accept_quotation(id).await,
+        }
+    }
+
+    pub async fn reject_quotation(&self, id: Uuid) -> Result<domain::Quotation, ApiError> {
+        match self {
+            Self::Mock(api) => api.reject_quotation(id).await,
+            Self::Http(api) => api.reject_quotation(id).await,
+        }
+    }
 }

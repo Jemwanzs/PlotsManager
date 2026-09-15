@@ -10,6 +10,8 @@ mod platform_organization_detail;
 mod platform_organizations;
 mod project_detail;
 mod projects_list;
+mod quotation_detail;
+mod quotations_list;
 mod signup;
 
 pub use customer_detail::CustomerDetail;
@@ -24,4 +26,6 @@ pub use platform_organization_detail::PlatformOrganizationDetailPage;
 pub use platform_organizations::PlatformOrganizations;
 pub use project_detail::ProjectDetail;
 pub use projects_list::ProjectsList;
+pub use quotation_detail::QuotationDetailPage;
+pub use quotations_list::QuotationsList;
 pub use signup::Signup;
