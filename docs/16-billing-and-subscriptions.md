@@ -62,14 +62,38 @@ Keeping them separate means:
    organisation) to decide whether to show a paywall, a "past due"
    banner, or full access.
 
+## Platform ownership (2026-09-15)
+
+One account — the platform operator, not a customer tenant — can see
+and manage every organization: list tenants, view their users and
+billing/subscription state, view access history, and deactivate a
+tenant. This is `users.is_platform_owner`
+([0004_platform_ownership.sql](../database/migrations/0004_platform_ownership.sql)),
+checked by `crates/backend/src/routes/platform.rs`'s
+`/api/v1/platform/*` endpoints — deliberately not another
+organization-scoped role, since the whole point is seeing *across*
+organizations, which the per-tenant `roles`/`role_assignments` RBAC
+can't express.
+
+This also resolved two of the "not decided" items below, at least for
+login: a `deactivated` organization can't log in, and login is
+rejected once `organization_subscriptions.status = 'trialing'` and
+`current_period_end` has passed — except for the platform owner's own
+organization, which is exempt by construction. Trial length is a
+per-`organization_subscriptions` row (`current_period_start`/
+`current_period_end`), set to 365 days for the platform owner's own
+account; **48 hours is the intended default for a newly-signed-up
+tenant, but nothing creates that row automatically yet** — it only
+exists today because it was inserted by hand for the platform owner's
+bootstrap. That's the signup-sequencing gap below, still open.
+
 ## What's not decided yet
 
-- **Enforcement**: whether a `past_due`/`expired` subscription actually
-  blocks access (and to what — read-only? fully locked?) is a product
-  decision, not yet made. The backend would need to check
-  `organization_subscriptions.status` on relevant requests if so.
-- **Trial policy**: length, what happens at expiry, whether a card is
-  required up front.
+- **Enforcement beyond login**: a request already in flight to a
+  deactivated/expired organization isn't currently blocked — only the
+  login endpoint checks. Whether other endpoints should re-check per
+  request (and whether `past_due`, not just `expired`, should also
+  block) isn't decided.
 - **Plan changes and proration**: upgrade/downgrade mid-cycle isn't
   modelled yet — `organization_subscriptions` has no history of past
   plans.
@@ -78,4 +102,7 @@ Keeping them separate means:
   password) together, in one transaction, before anything else can
   reference that organisation — the exact signup endpoint contract isn't
   designed yet ([10](10-database-and-security-design.md),
-  [14](14-development-roadmap.md)).
+  [14](14-development-roadmap.md)). This is also where the 48-hour
+  tenant trial default needs to be wired up: create the
+  `organization_subscriptions` row (`status = 'trialing'`,
+  `current_period_end = now() + 48h`) as part of the same transaction.
