@@ -1026,6 +1026,55 @@ impl MockApi {
             .map(|m| m.image_url.clone())
             .unwrap_or_default()
     }
+
+    /// Reuses `create_plot`/`create_customer` per row rather than a
+    /// separate in-memory insert path — mirrors
+    /// `crates/backend/src/routes/projects.rs`'s `insert_plot` /
+    /// `routes/customers.rs`'s `insert_customer` being the single
+    /// place both the one-row and bulk endpoints go through.
+    pub async fn bulk_create_plots(
+        &self,
+        project_id: Uuid,
+        inputs: Vec<CreatePlotInput>,
+    ) -> Result<domain::BulkImportResult, ApiError> {
+        let mut created = 0u32;
+        let mut errors = Vec::new();
+        for (idx, mut input) in inputs.into_iter().enumerate() {
+            input.project_id = project_id;
+            match self.create_plot(input).await {
+                Ok(_) => created += 1,
+                Err(ApiError::InvalidCredentials(message)) => {
+                    errors.push(domain::BulkImportRowError { row: idx as u32 + 1, message })
+                }
+                Err(e) => errors.push(domain::BulkImportRowError {
+                    row: idx as u32 + 1,
+                    message: format!("{e}"),
+                }),
+            }
+        }
+        Ok(domain::BulkImportResult { created, errors })
+    }
+
+    pub async fn bulk_create_customers(
+        &self,
+        inputs: Vec<CreateCustomerInput>,
+    ) -> Result<domain::BulkImportResult, ApiError> {
+        let mut created = 0u32;
+        let mut errors = Vec::new();
+        for (idx, input) in inputs.into_iter().enumerate() {
+            match self.create_customer(input).await {
+                Ok(_) => created += 1,
+                Err(ApiError::InvalidCredentials(message)) => {
+                    errors.push(domain::BulkImportRowError { row: idx as u32 + 1, message })
+                }
+                Err(e) => errors.push(domain::BulkImportRowError {
+                    row: idx as u32 + 1,
+                    message: format!("{e}"),
+                }),
+            }
+        }
+        Ok(domain::BulkImportResult { created, errors })
+    }
 }
 
 fn to_pg_str(status: ApprovalStatus) -> &'static str {

@@ -37,24 +37,44 @@ impl AppError {
     pub fn conflict(msg: impl Into<String>) -> Self {
         Self::Conflict(msg.into())
     }
+
+    fn status(&self) -> StatusCode {
+        match self {
+            AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            AppError::Unauthorized => StatusCode::UNAUTHORIZED,
+            AppError::Forbidden(_) => StatusCode::FORBIDDEN,
+            AppError::NotFound => StatusCode::NOT_FOUND,
+            AppError::Conflict(_) => StatusCode::CONFLICT,
+            AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    /// The user-facing message alone, without wrapping it in an HTTP
+    /// response — a bulk-import endpoint (`routes/projects.rs`'s
+    /// `bulk_create_plots`, `routes/customers.rs`'s
+    /// `bulk_create_customers`) attempts one row at a time and reports
+    /// each failure's message in a 200 OK summary rather than as its
+    /// own HTTP error, so it needs this without `into_response`'s
+    /// status-code wrapping.
+    pub fn client_message(&self) -> String {
+        match self {
+            AppError::BadRequest(msg) => msg.clone(),
+            AppError::Unauthorized => "not signed in".to_string(),
+            AppError::Forbidden(msg) => msg.clone(),
+            AppError::NotFound => "not found".to_string(),
+            AppError::Conflict(msg) => msg.clone(),
+            AppError::Internal(err) => {
+                tracing::error!("internal error: {err:#}");
+                "something went wrong".to_string()
+            }
+        }
+    }
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, message) = match &self {
-            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
-            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "not signed in".to_string()),
-            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
-            AppError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
-            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
-            AppError::Internal(err) => {
-                tracing::error!("internal error: {err:#}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "something went wrong".to_string(),
-                )
-            }
-        };
+        let status = self.status();
+        let message = self.client_message();
         (status, Json(json!({ "error": message }))).into_response()
     }
 }

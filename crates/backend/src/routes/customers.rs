@@ -3,8 +3,8 @@ use axum::routing::post;
 use axum::{extract::State, routing::get, Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
 use domain::{
-    Customer, CustomerDetail, CustomerSaleView, CustomerSummary, CreateCustomerInput,
-    UpdateLeadInput,
+    BulkImportResult, BulkImportRowError, Customer, CustomerDetail, CustomerSaleView,
+    CustomerSummary, CreateCustomerInput, UpdateLeadInput,
 };
 use uuid::Uuid;
 
@@ -16,6 +16,7 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/customers", get(list_customers).post(create_customer))
+        .route("/api/v1/customers/bulk", post(bulk_create_customers))
         .route("/api/v1/customers/:id", get(get_customer))
         .route("/api/v1/customers/:id/stage", post(update_lead))
 }
@@ -135,6 +136,18 @@ async fn create_customer(
     auth: AuthUser,
     Json(input): Json<CreateCustomerInput>,
 ) -> Result<Json<Customer>, AppError> {
+    Ok(Json(insert_customer(&state, auth.organization_id, auth.user_id, &input).await?))
+}
+
+/// The single-row validation-and-insert `create_customer` and
+/// `bulk_create_customers` both go through, so a bulk CSV import
+/// can't drift from what adding one customer by hand enforces.
+async fn insert_customer(
+    state: &AppState,
+    organization_id: Uuid,
+    agent_id: Uuid,
+    input: &CreateCustomerInput,
+) -> Result<Customer, AppError> {
     let full_name = input.full_name.trim();
     if full_name.is_empty() {
         return Err(AppError::bad_request("Enter the customer's name."));
@@ -145,7 +158,7 @@ async fn create_customer(
         let duplicate: bool = sqlx::query_scalar(
             "select exists(select 1 from customers where organization_id = $1 and id_number = $2)",
         )
-        .bind(auth.organization_id)
+        .bind(organization_id)
         .bind(id_number)
         .fetch_one(&state.db)
         .await?;
@@ -167,17 +180,40 @@ async fn create_customer(
         returning {CUSTOMER_COLUMNS}
         "#
     ))
-    .bind(auth.organization_id)
+    .bind(organization_id)
     .bind(full_name)
     .bind(email)
     .bind(phone)
     .bind(id_number)
-    .bind(auth.user_id)
+    .bind(agent_id)
     .bind(source)
     .fetch_one(&state.db)
     .await?;
 
-    Ok(Json(row.into_domain()?))
+    row.into_domain()
+}
+
+/// Best-effort bulk import (see `domain::BulkImportResult`'s module
+/// docs) — a CSV upload during tenant onboarding, parsed to
+/// `CreateCustomerInput` rows client-side and posted here as JSON.
+async fn bulk_create_customers(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(inputs): Json<Vec<CreateCustomerInput>>,
+) -> Result<Json<BulkImportResult>, AppError> {
+    let mut created = 0u32;
+    let mut errors = Vec::new();
+    for (idx, input) in inputs.iter().enumerate() {
+        match insert_customer(&state, auth.organization_id, auth.user_id, input).await {
+            Ok(_) => created += 1,
+            Err(e) => errors.push(BulkImportRowError {
+                row: idx as u32 + 1,
+                message: e.client_message(),
+            }),
+        }
+    }
+
+    Ok(Json(BulkImportResult { created, errors }))
 }
 
 async fn update_lead(

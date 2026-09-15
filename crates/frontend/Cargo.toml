@@ -36,3 +36,13 @@ web-sys = { version = "0.3", features = [
     "Blob", "DomRect", "Element", "File", "FileList", "FormData",
     "HtmlImageElement", "HtmlInputElement", "Url",
 ] }
+# Awaiting `Blob::text()`'s JS Promise to read an uploaded CSV file's
+# contents, and percent-encoding the downloadable CSV template into a
+# `data:` URI — leptos re-exports `wasm_bindgen` (for `JsCast`) but
+# not these.
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+# Parsing a bulk-import CSV (quoted fields, embedded commas) correctly
+# instead of hand-splitting on ',' — pure computation, no I/O, so it
+# compiles to wasm the same as anywhere else.
+csv = "1"

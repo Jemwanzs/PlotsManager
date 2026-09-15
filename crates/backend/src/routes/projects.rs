@@ -1,7 +1,10 @@
 use axum::extract::Path;
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{extract::State, routing::get, routing::post, Json, Router};
 use chrono::{DateTime, Utc};
-use domain::{CreatePlotInput, CreateProjectInput, Plot, PlotWithColor, Project, ProjectSummary};
+use domain::{
+    BulkImportResult, BulkImportRowError, CreatePlotInput, CreateProjectInput, Plot,
+    PlotWithColor, Project, ProjectSummary,
+};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
@@ -18,6 +21,7 @@ pub fn router() -> Router<AppState> {
             "/api/v1/projects/:id/plots",
             get(list_plots).post(create_plot),
         )
+        .route("/api/v1/projects/:id/plots/bulk", post(bulk_create_plots))
 }
 
 #[derive(sqlx::FromRow)]
@@ -255,7 +259,19 @@ async fn create_plot(
     Json(input): Json<CreatePlotInput>,
 ) -> Result<Json<Plot>, AppError> {
     ensure_project_in_org(&state, project_id, auth.organization_id).await?;
+    Ok(Json(insert_plot(&state, project_id, &input).await?))
+}
 
+/// The single-row validation-and-insert `create_plot` and
+/// `bulk_create_plots` both go through, so a bulk CSV import can't
+/// drift from what adding one plot by hand enforces. Does **not**
+/// check the caller's org owns `project_id` — callers must do that
+/// once up front (`ensure_project_in_org`), not per row.
+async fn insert_plot(
+    state: &AppState,
+    project_id: Uuid,
+    input: &CreatePlotInput,
+) -> Result<Plot, AppError> {
     let plot_number = input.plot_number.trim();
     if plot_number.is_empty() {
         return Err(AppError::bad_request("Enter a plot number."));
@@ -300,7 +316,33 @@ async fn create_plot(
     .fetch_one(&state.db)
     .await?;
 
-    Ok(Json(row.into_domain()?))
+    row.into_domain()
+}
+
+/// Best-effort bulk import (see `domain::BulkImportResult`'s module
+/// docs) — a CSV upload during tenant onboarding, parsed to
+/// `CreatePlotInput` rows client-side and posted here as JSON.
+async fn bulk_create_plots(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(project_id): Path<Uuid>,
+    Json(inputs): Json<Vec<CreatePlotInput>>,
+) -> Result<Json<BulkImportResult>, AppError> {
+    ensure_project_in_org(&state, project_id, auth.organization_id).await?;
+
+    let mut created = 0u32;
+    let mut errors = Vec::new();
+    for (idx, input) in inputs.iter().enumerate() {
+        match insert_plot(&state, project_id, input).await {
+            Ok(_) => created += 1,
+            Err(e) => errors.push(BulkImportRowError {
+                row: idx as u32 + 1,
+                message: e.client_message(),
+            }),
+        }
+    }
+
+    Ok(Json(BulkImportResult { created, errors }))
 }
 
 /// Shared by every plot route: 404s (not a bare permission error) if the

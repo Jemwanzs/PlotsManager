@@ -353,3 +353,25 @@ pub struct ProjectMapSummary {
 pub struct UpdateMapPolygonsInput {
     pub polygons: MapPolygons,
 }
+
+/// One failed row from a bulk-import endpoint (`POST
+/// /projects/:id/plots/bulk`, `POST /customers/bulk`) — `row` is
+/// 1-based against the uploaded CSV (header excluded), matching how a
+/// spreadsheet user thinks about "row 3", not a 0-based array index.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BulkImportRowError {
+    pub row: u32,
+    pub message: String,
+}
+
+/// Best-effort, not all-or-nothing: onboarding data is rarely clean
+/// (duplicate plot numbers, a blank required field), and failing the
+/// whole batch over one bad row would be worse than importing what's
+/// valid and reporting the rest — each row is validated and inserted
+/// independently, exactly like `POST /projects/:id/plots` or `POST
+/// /customers` would for a single row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BulkImportResult {
+    pub created: u32,
+    pub errors: Vec<BulkImportRowError>,
+}

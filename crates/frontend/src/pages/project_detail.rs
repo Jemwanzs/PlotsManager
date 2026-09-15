@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::api::{status_meta, CreatePlotInput, CreateQuotationInput, CreateSaleInput, PlotWithColor};
 use crate::auth::use_api;
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
+use crate::csv_import::{self, ParsedRow};
 use crate::format::format_kes;
 use domain::{MapFeature, MapPolygons, PaymentMode, PlotStatus};
 
@@ -83,6 +84,7 @@ pub fn ProjectDetail() -> impl IntoView {
 
     let selected: RwSignal<Option<PlotWithColor>> = RwSignal::new(None);
     let show_add_plot = RwSignal::new(false);
+    let show_bulk_import = RwSignal::new(false);
     let show_map = RwSignal::new(false);
 
     view! {
@@ -101,13 +103,36 @@ pub fn ProjectDetail() -> impl IntoView {
                                         <h1>{p.name.clone()}</h1>
                                         <p>{p.location.clone()} " · " {p.code.clone()}</p>
                                     </div>
-                                    <button
-                                        class="btn btn-secondary"
-                                        on:click=move |_| show_add_plot.update(|v| *v = !*v)
-                                    >
-                                        {move || if show_add_plot.get() { "Cancel" } else { "+ Add plot" }}
-                                    </button>
+                                    <div style="display:flex; gap: var(--space-2);">
+                                        <button
+                                            class="btn btn-secondary"
+                                            on:click=move |_| {
+                                                show_bulk_import.update(|v| *v = !*v);
+                                                show_add_plot.set(false);
+                                            }
+                                        >
+                                            {move || if show_bulk_import.get() { "Cancel" } else { "Bulk import" }}
+                                        </button>
+                                        <button
+                                            class="btn btn-secondary"
+                                            on:click=move |_| {
+                                                show_add_plot.update(|v| *v = !*v);
+                                                show_bulk_import.set(false);
+                                            }
+                                        >
+                                            {move || if show_add_plot.get() { "Cancel" } else { "+ Add plot" }}
+                                        </button>
+                                    </div>
                                 </div>
+
+                                <Show when=move || show_bulk_import.get()>
+                                    <BulkPlotImport
+                                        project_id=project_id_val
+                                        on_imported=move || {
+                                            plots.refetch();
+                                        }
+                                    />
+                                </Show>
 
                                 <Show when=move || show_add_plot.get()>
                                     <div class="card" style="margin-bottom: var(--space-4)">
@@ -402,6 +427,173 @@ fn AddPlotForm(project_id: Uuid, on_added: impl Fn() + Clone + 'static) -> impl 
                 {move || if submitting.get() { "Adding…" } else { "Add plot" }}
             </button>
         </form>
+    }
+}
+
+/// Uploads a CSV during tenant onboarding — parses client-side
+/// (`crate::csv_import::parse_plots_csv`) so the user sees per-row
+/// problems before anything reaches the server, then posts only the
+/// rows that parsed cleanly to `POST /projects/:id/plots/bulk`, which
+/// re-validates each one independently
+/// (`crates/backend/src/routes/projects.rs::insert_plot`) — a row
+/// that parses fine can still fail there (a duplicate plot number).
+#[component]
+fn BulkPlotImport(project_id: Uuid, on_imported: impl Fn() + Clone + Send + 'static) -> impl IntoView {
+    let api = use_api();
+    let rows: RwSignal<Vec<ParsedRow<CreatePlotInput>>> = RwSignal::new(Vec::new());
+    let parsing = RwSignal::new(false);
+    let importing = RwSignal::new(false);
+    let import_result: RwSignal<Option<domain::BulkImportResult>> = RwSignal::new(None);
+    let error = RwSignal::new(None::<String>);
+
+    let on_file_change = move |ev: leptos::ev::Event| {
+        let Some(input) = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+        else {
+            return;
+        };
+        let Some(files) = input.files() else { return };
+        let Some(file) = files.item(0) else { return };
+        error.set(None);
+        import_result.set(None);
+        parsing.set(true);
+        spawn_local(async move {
+            let text = wasm_bindgen_futures::JsFuture::from(file.text())
+                .await
+                .ok()
+                .and_then(|v| v.as_string());
+            match text {
+                Some(text) => rows.set(csv_import::parse_plots_csv(&text, project_id)),
+                None => error.set(Some("Couldn't read that file.".to_string())),
+            }
+            parsing.set(false);
+        });
+    };
+
+    let template_href = format!(
+        "data:text/csv;charset=utf-8,{}",
+        js_sys::encode_uri_component(csv_import::PLOTS_TEMPLATE)
+    );
+
+    view! {
+        <div class="card" style="margin-bottom: var(--space-4)">
+            <h3 class="mt-0">"Bulk import plots"</h3>
+            <p class="meta mt-0">"CSV columns, in order: plot_number, size, asking_price, minimum_price."</p>
+            <a
+                href=template_href
+                download="plots_template.csv"
+                class="btn btn-secondary"
+                style="margin-bottom: var(--space-3); display:inline-block;"
+            >
+                "Download CSV template"
+            </a>
+
+            {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+
+            <div class="field">
+                <label for="bulk-plots-file">
+                    {move || if parsing.get() { "Reading…" } else { "CSV file" }}
+                </label>
+                <input
+                    id="bulk-plots-file"
+                    type="file"
+                    accept=".csv,text/csv"
+                    disabled=parsing
+                    on:change=on_file_change
+                />
+            </div>
+
+            {move || {
+                let parsed = rows.get();
+                if parsed.is_empty() || import_result.get().is_some() {
+                    return None;
+                }
+                let api = api.clone();
+                let on_imported = on_imported.clone();
+                let valid_count = parsed.iter().filter(|r| r.result.is_ok()).count();
+                let error_count = parsed.len() - valid_count;
+                Some(view! {
+                    <p>
+                        {format!(
+                            "{} row(s) found — {} valid, {} with problems.",
+                            parsed.len(), valid_count, error_count,
+                        )}
+                    </p>
+                    {(error_count > 0).then(|| view! {
+                        <ul class="meta">
+                            {parsed
+                                .iter()
+                                .filter_map(|r| r.result.as_ref().err().map(|e| {
+                                    view! { <li>"Row " {r.row} ": " {e.clone()}</li> }
+                                }))
+                                .collect_view()}
+                        </ul>
+                    })}
+                    <button
+                        class="btn btn-primary"
+                        disabled=move || importing.get() || valid_count == 0
+                        on:click=move |_| {
+                            if importing.get() {
+                                return;
+                            }
+                            error.set(None);
+                            importing.set(true);
+                            let api = api.clone();
+                            let on_imported = on_imported.clone();
+                            let valid: Vec<(u32, CreatePlotInput)> = rows
+                                .get()
+                                .into_iter()
+                                .filter_map(|r| r.result.ok().map(|input| (r.row, input)))
+                                .collect();
+                            let original_rows: Vec<u32> = valid.iter().map(|(row, _)| *row).collect();
+                            let inputs: Vec<CreatePlotInput> =
+                                valid.into_iter().map(|(_, input)| input).collect();
+                            spawn_local(async move {
+                                match api.bulk_create_plots(project_id, inputs).await {
+                                    Ok(mut r) => {
+                                        for e in r.errors.iter_mut() {
+                                            if let Some(&orig) = original_rows.get(e.row as usize - 1) {
+                                                e.row = orig;
+                                            }
+                                        }
+                                        let had_created = r.created > 0;
+                                        import_result.set(Some(r));
+                                        if had_created {
+                                            on_imported();
+                                        }
+                                    }
+                                    Err(e) => error.set(Some(format!("{e}"))),
+                                }
+                                importing.set(false);
+                            });
+                        }
+                    >
+                        {move || {
+                            if importing.get() {
+                                "Importing…".to_string()
+                            } else {
+                                format!("Import {valid_count} plot(s)")
+                            }
+                        }}
+                    </button>
+                })
+            }}
+
+            {move || import_result.get().map(|r| view! {
+                <div class="alert alert-warning">
+                    <p>{format!("{} plot(s) imported.", r.created)}</p>
+                    {(!r.errors.is_empty()).then(|| view! {
+                        <ul>
+                            {r.errors
+                                .iter()
+                                .map(|e| view! { <li>"Row " {e.row} ": " {e.message.clone()}</li> })
+                                .collect_view()}
+                        </ul>
+                    })}
+                </div>
+            })}
+        </div>
     }
 }
 

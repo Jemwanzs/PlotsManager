@@ -24,12 +24,13 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use domain::{
-    AgentPerformanceReport, ApiError, ApprovalRequestSummary, AuthSession, CreateCustomerInput,
-    CreatePlotInput, CreateProjectInput, CreateQuotationInput, CreateSaleInput, CustomerDetail,
-    CustomerSummary, DashboardSummary, DecideApprovalInput, InventoryReport, LoanAccountDetail,
-    LoginInput, MapPolygons, PlatformOrganizationDetail, PlatformOrganizationSummary,
-    PlotWithColor, ProjectMapSummary, ProjectSummary, QuotationDetail, QuotationSummary,
-    RecordPaymentInput, SalesReport, SignupInput, UpdateLeadInput, UpdateMapPolygonsInput,
+    AgentPerformanceReport, ApiError, ApprovalRequestSummary, AuthSession, BulkImportResult,
+    CreateCustomerInput, CreatePlotInput, CreateProjectInput, CreateQuotationInput,
+    CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary, DecideApprovalInput,
+    InventoryReport, LoanAccountDetail, LoginInput, MapPolygons, PlatformOrganizationDetail,
+    PlatformOrganizationSummary, PlotWithColor, ProjectMapSummary, ProjectSummary,
+    QuotationDetail, QuotationSummary, RecordPaymentInput, SalesReport, SignupInput,
+    UpdateLeadInput, UpdateMapPolygonsInput,
 };
 
 #[derive(Clone)]
@@ -412,5 +413,20 @@ impl HttpApi {
     pub fn map_image_url(&self, project_id: Uuid) -> String {
         let token = self.token.lock().unwrap().clone().unwrap_or_default();
         format!("{}/api/v1/projects/{project_id}/map/image?token={token}", self.base_url)
+    }
+
+    pub async fn bulk_create_plots(
+        &self,
+        project_id: Uuid,
+        inputs: Vec<CreatePlotInput>,
+    ) -> Result<BulkImportResult, ApiError> {
+        self.post(&format!("/api/v1/projects/{project_id}/plots/bulk"), &inputs).await
+    }
+
+    pub async fn bulk_create_customers(
+        &self,
+        inputs: Vec<CreateCustomerInput>,
+    ) -> Result<BulkImportResult, ApiError> {
+        self.post("/api/v1/customers/bulk", &inputs).await
     }
 }

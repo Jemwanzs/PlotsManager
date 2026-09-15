@@ -312,4 +312,25 @@ impl ApiClient {
             Self::Http(api) => api.map_image_url(project_id),
         }
     }
+
+    pub async fn bulk_create_plots(
+        &self,
+        project_id: Uuid,
+        inputs: Vec<CreatePlotInput>,
+    ) -> Result<domain::BulkImportResult, ApiError> {
+        match self {
+            Self::Mock(api) => api.bulk_create_plots(project_id, inputs).await,
+            Self::Http(api) => api.bulk_create_plots(project_id, inputs).await,
+        }
+    }
+
+    pub async fn bulk_create_customers(
+        &self,
+        inputs: Vec<CreateCustomerInput>,
+    ) -> Result<domain::BulkImportResult, ApiError> {
+        match self {
+            Self::Mock(api) => api.bulk_create_customers(inputs).await,
+            Self::Http(api) => api.bulk_create_customers(inputs).await,
+        }
+    }
 }
