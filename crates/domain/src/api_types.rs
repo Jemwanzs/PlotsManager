@@ -37,6 +37,20 @@ pub struct LoginInput {
     pub password: String,
 }
 
+/// Creates a brand-new tenant: the organization, its first (admin) user,
+/// and a 48-hour trial subscription, all in one transaction — see
+/// `crates/backend/src/routes/auth.rs`'s `signup` handler and
+/// docs/16-billing-and-subscriptions.md. Returns an `AuthSession` just
+/// like login, since signing up should land you straight in the app.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignupInput {
+    pub organization_name: String,
+    pub organization_code: String,
+    pub admin_full_name: String,
+    pub admin_email: String,
+    pub admin_password: String,
+}
+
 /// A project plus the counts a list screen needs, without shipping every
 /// plot over the wire just to show "12 available / 40 plots".
 #[derive(Debug, Clone, Serialize, Deserialize)]

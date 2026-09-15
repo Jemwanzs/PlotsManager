@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use leptos_router::components::A;
 use leptos_router::hooks::use_navigate;
 
 use crate::api::ApiError;
@@ -85,6 +86,9 @@ pub fn Login() -> impl IntoView {
 
                 <p class="auth-hint">
                     "Demo credentials: admin@acaciagrove.example / password123"
+                </p>
+                <p class="auth-hint">
+                    "New here? " <A href="/signup">"Create an organization"</A>
                 </p>
             </div>
         </div>

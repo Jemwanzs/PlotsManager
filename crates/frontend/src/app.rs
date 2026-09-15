@@ -7,7 +7,7 @@ use crate::auth::AuthSignal;
 use crate::layout::AppShell;
 use crate::pages::{
     CustomerDetail, CustomersList, Dashboard, LoanAccountDetailPage, Login, NewCustomer,
-    NewProject, NotFound, ProjectDetail, ProjectsList,
+    NewProject, NotFound, ProjectDetail, ProjectsList, Signup,
 };
 
 /// `API_BASE_URL` is read at compile time (Trunk shells out to `cargo
@@ -32,6 +32,7 @@ pub fn App() -> impl IntoView {
         <Router>
             <Routes fallback=NotFound>
                 <Route path=StaticSegment("login") view=Login />
+                <Route path=StaticSegment("signup") view=Signup />
                 <Route
                     path=StaticSegment("")
                     view=|| view! { <AppShell><Dashboard /></AppShell> }

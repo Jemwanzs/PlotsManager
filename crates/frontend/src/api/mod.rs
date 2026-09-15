@@ -35,6 +35,13 @@ impl ApiClient {
         }
     }
 
+    pub async fn signup(&self, input: SignupInput) -> Result<AuthSession, ApiError> {
+        match self {
+            Self::Mock(api) => api.signup(input).await,
+            Self::Http(api) => api.signup(input).await,
+        }
+    }
+
     pub async fn dashboard_summary(&self) -> Result<DashboardSummary, ApiError> {
         match self {
             Self::Mock(api) => api.dashboard_summary().await,

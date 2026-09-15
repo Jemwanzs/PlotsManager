@@ -8,6 +8,7 @@ mod new_project;
 mod not_found;
 mod project_detail;
 mod projects_list;
+mod signup;
 
 pub use customer_detail::CustomerDetail;
 pub use customers_list::CustomersList;
@@ -19,3 +20,4 @@ pub use new_project::NewProject;
 pub use not_found::NotFound;
 pub use project_detail::ProjectDetail;
 pub use projects_list::ProjectsList;
+pub use signup::Signup;

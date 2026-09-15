@@ -14,7 +14,7 @@ use domain::{
     CustomerDetail, CustomerSaleView, CustomerSummary, DashboardSummary, LoanAccountDetail,
     LoanAccountStatus, Organization, Payment, PaymentMode, PaymentStatus, Plot, PlotLoanAccount,
     PlotSale, PlotStatus, PlotWithColor, Project, ProjectStatus, ProjectSummary,
-    RecordPaymentInput, User,
+    RecordPaymentInput, SignupInput, User,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -67,6 +67,34 @@ impl MockApi {
                 "That email/password combination doesn't match our records.".to_string(),
             ))
         }
+    }
+
+    /// `MockDb` models one fixed demo organization, not a list — a real
+    /// multi-tenant signup can't be simulated here the way it works
+    /// against the real backend (crates/backend/src/routes/auth.rs).
+    /// This just mints a session for whatever was typed in, without
+    /// touching shared state, so the signup screen is previewable
+    /// against mock data the same way every other screen is.
+    pub async fn signup(&self, input: SignupInput) -> Result<AuthSession, ApiError> {
+        settle(400).await;
+        if input.admin_password.len() < 8 {
+            return Err(ApiError::InvalidCredentials(
+                "Password must be at least 8 characters.".to_string(),
+            ));
+        }
+        Ok(AuthSession {
+            token: "mock-session-token".to_string(),
+            user: User {
+                id: Uuid::new_v4(),
+                organization_id: Uuid::new_v4(),
+                branch_id: None,
+                full_name: input.admin_full_name,
+                email: input.admin_email,
+                is_active: true,
+                is_platform_owner: false,
+                created_at: Utc::now(),
+            },
+        })
     }
 
     pub async fn dashboard_summary(&self) -> Result<DashboardSummary, ApiError> {

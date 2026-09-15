@@ -1,10 +1,7 @@
 //! Password hashing and session-token primitives the backend owns outright
 //! (see docs/10-database-and-security-design.md — no Auth-as-a-service
-//! dependency). `verify_password`/`issue_session_token` back the login
-//! handler (`routes/auth.rs`); `hash_password` isn't called yet since
-//! there's no signup/create-user endpoint (users only exist via
-//! `database/seeds/`), but it's the same tested primitive that endpoint
-//! will use once it exists.
+//! dependency). Backs `routes/auth.rs`'s login (`verify_password`,
+//! `issue_session_token`) and signup (`hash_password`) handlers.
 
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
@@ -24,7 +21,6 @@ pub enum AuthError {
     InvalidToken,
 }
 
-#[allow(dead_code)] // no signup/create-user endpoint yet — see the module docs above
 pub fn hash_password(plain: &str) -> Result<String, AuthError> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()

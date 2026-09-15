@@ -25,7 +25,7 @@ use uuid::Uuid;
 use domain::{
     ApiError, AuthSession, CreateCustomerInput, CreatePlotInput, CreateProjectInput,
     CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary, LoanAccountDetail,
-    LoginInput, PlotWithColor, ProjectSummary, RecordPaymentInput,
+    LoginInput, PlotWithColor, ProjectSummary, RecordPaymentInput, SignupInput,
 };
 
 #[derive(Clone)]
@@ -114,6 +114,12 @@ impl HttpApi {
             password: password.to_string(),
         };
         let session: AuthSession = self.post("/api/v1/auth/login", &input).await?;
+        *self.token.lock().unwrap() = Some(session.token.clone());
+        Ok(session)
+    }
+
+    pub async fn signup(&self, input: SignupInput) -> Result<AuthSession, ApiError> {
+        let session: AuthSession = self.post("/api/v1/auth/signup", &input).await?;
         *self.token.lock().unwrap() = Some(session.token.clone());
         Ok(session)
     }
