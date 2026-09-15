@@ -105,9 +105,11 @@ storage backend as uploaded documents
 ## Deployment: Railway
 
 Railway project `c7bee255-492d-40b6-af50-30374625b279` hosts the
-frontend, backend, and Postgres. Deployment configs (Dockerfiles,
-per-service Railway settings) aren't committed yet — deliberately
-sequenced after the frontend's UI/UX work per
-[14](14-development-roadmap.md)'s priority order. `crates/backend`
-already reads `PORT` from the environment (Railway's convention) so it's
-ready to deploy once that work starts.
+frontend, backend, and Postgres. Dockerfiles for `backend` and
+`frontend` exist and are validated (local `docker build`/`docker run`
+against a real Postgres, real login, real rendered UI — see
+[17](17-deployment.md) for exact commands and required environment
+variables per service). Not yet done: actually creating the three
+Railway services and wiring them to this repo — that's an account-scoped
+action for whoever owns the Railway project, not something committed to
+the repo.

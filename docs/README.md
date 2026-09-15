@@ -22,6 +22,7 @@ the original scoping conversation and the legacy Excel/VBA workbook
 | [14 Development Roadmap](14-development-roadmap.md) | drafted, tracks current build status |
 | [15 Testing and Acceptance Criteria](15-testing-and-acceptance-criteria.md) | drafted |
 | [16 Billing and Subscriptions](16-billing-and-subscriptions.md) | drafted — Paystack SaaS billing, schema + webhook receiver built |
+| [17 Deployment (Railway)](17-deployment.md) | Dockerfiles for `backend`/`frontend` built, run, and verified locally (real Postgres, real login, real rendered UI); Railway services not yet created |
 
 "Drafted" means the requirements are captured from the original spec
 conversation; docs 03–15 have since been cross-checked against the actual

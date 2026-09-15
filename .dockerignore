@@ -1,0 +1,8 @@
+target/
+crates/frontend/dist/
+legacy-excel/
+.git/
+.github/
+node_modules/
+*.output
+.env
