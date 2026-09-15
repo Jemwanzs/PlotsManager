@@ -23,11 +23,11 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use domain::{
-    ApiError, AuthSession, CreateCustomerInput, CreatePlotInput, CreateProjectInput,
-    CreateQuotationInput, CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary,
-    LoanAccountDetail, LoginInput, PlatformOrganizationDetail, PlatformOrganizationSummary,
-    PlotWithColor, ProjectSummary, QuotationDetail, QuotationSummary, RecordPaymentInput,
-    SignupInput, UpdateLeadInput,
+    ApiError, ApprovalRequestSummary, AuthSession, CreateCustomerInput, CreatePlotInput,
+    CreateProjectInput, CreateQuotationInput, CreateSaleInput, CustomerDetail, CustomerSummary,
+    DashboardSummary, DecideApprovalInput, LoanAccountDetail, LoginInput,
+    PlatformOrganizationDetail, PlatformOrganizationSummary, PlotWithColor, ProjectSummary,
+    QuotationDetail, QuotationSummary, RecordPaymentInput, SignupInput, UpdateLeadInput,
 };
 
 #[derive(Clone)]
@@ -260,5 +260,33 @@ impl HttpApi {
 
     pub async fn reject_quotation(&self, id: Uuid) -> Result<domain::Quotation, ApiError> {
         self.post(&format!("/api/v1/quotations/{id}/reject"), &()).await
+    }
+
+    pub async fn list_approvals(
+        &self,
+        status: Option<&str>,
+    ) -> Result<Vec<ApprovalRequestSummary>, ApiError> {
+        match status {
+            Some(status) => self.get(&format!("/api/v1/approvals?status={status}")).await,
+            None => self.get("/api/v1/approvals").await,
+        }
+    }
+
+    pub async fn approve_request(
+        &self,
+        id: Uuid,
+        notes: Option<String>,
+    ) -> Result<ApprovalRequestSummary, ApiError> {
+        self.post(&format!("/api/v1/approvals/{id}/approve"), &DecideApprovalInput { notes })
+            .await
+    }
+
+    pub async fn reject_request(
+        &self,
+        id: Uuid,
+        notes: Option<String>,
+    ) -> Result<ApprovalRequestSummary, ApiError> {
+        self.post(&format!("/api/v1/approvals/{id}/reject"), &DecideApprovalInput { notes })
+            .await
     }
 }

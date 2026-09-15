@@ -1,3 +1,4 @@
+mod approvals_list;
 mod customer_detail;
 mod customers_list;
 mod dashboard;
@@ -14,6 +15,7 @@ mod quotation_detail;
 mod quotations_list;
 mod signup;
 
+pub use approvals_list::ApprovalsList;
 pub use customer_detail::CustomerDetail;
 pub use customers_list::CustomersList;
 pub use dashboard::Dashboard;

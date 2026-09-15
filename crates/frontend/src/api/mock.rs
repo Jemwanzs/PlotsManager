@@ -9,14 +9,15 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{NaiveDate, Utc};
 use domain::{
-    loan_status_meta, plot_status_meta as status_meta, quotation_status_meta, AreaUnit, ApiError,
-    AuthSession, CreateCustomerInput, CreatePlotInput, CreateProjectInput, CreateQuotationInput,
-    CreateSaleInput, Customer, CustomerDetail, CustomerSaleView, CustomerSummary,
-    DashboardSummary, LeadStage, LoanAccountDetail, LoanAccountStatus, Organization, Payment,
-    PaymentMode, PaymentStatus, PlatformOrganizationDetail, PlatformOrganizationSummary, Plot,
-    PlotLoanAccount, PlotSale, PlotStatus, PlotWithColor, Project, ProjectStatus, ProjectSummary,
-    Quotation, QuotationDetail, QuotationStatus, QuotationSummary, RecordPaymentInput,
-    SignupInput, UpdateLeadInput, User,
+    approval_status_meta, loan_status_meta, plot_status_meta as status_meta,
+    quotation_status_meta, ApiError, ApprovalRequest, ApprovalRequestSummary, ApprovalStatus,
+    AreaUnit, AuthSession, CreateCustomerInput, CreatePlotInput, CreateProjectInput,
+    CreateQuotationInput, CreateSaleInput, Customer, CustomerDetail, CustomerSaleView,
+    CustomerSummary, DashboardSummary, LeadStage, LoanAccountDetail, LoanAccountStatus,
+    Organization, Payment, PaymentMode, PaymentStatus, PlatformOrganizationDetail,
+    PlatformOrganizationSummary, Plot, PlotLoanAccount, PlotSale, PlotStatus, PlotWithColor,
+    Project, ProjectStatus, ProjectSummary, Quotation, QuotationDetail, QuotationStatus,
+    QuotationSummary, RecordPaymentInput, SignupInput, UpdateLeadInput, User,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -34,6 +35,7 @@ struct MockDb {
     loan_accounts: Vec<PlotLoanAccount>,
     payments: Vec<Payment>,
     quotations: Vec<Quotation>,
+    approval_requests: Vec<ApprovalRequest>,
 }
 
 // Arc<Mutex<..>>, not Rc<RefCell<..>>: Leptos 0.7's `provide_context`
@@ -410,13 +412,31 @@ impl MockApi {
     pub async fn create_sale(&self, input: CreateSaleInput) -> Result<PlotSale, ApiError> {
         settle(300).await;
         let mut db = self.db.lock().unwrap();
-        execute_sale_locked(
+
+        let approval_id = gate_price_locked(
             &mut db,
             input.plot_id,
             input.customer_id,
             input.payment_mode,
             input.agreed_price,
-        )
+            None,
+        )?;
+
+        let sale = execute_sale_locked(
+            &mut db,
+            input.plot_id,
+            input.customer_id,
+            input.payment_mode,
+            input.agreed_price,
+        )?;
+
+        if let Some(approval_id) = approval_id {
+            if let Some(req) = db.approval_requests.iter_mut().find(|r| r.id == approval_id) {
+                req.resulting_sale_id = Some(sale.id);
+            }
+        }
+
+        Ok(sale)
     }
 
     pub async fn get_loan_account(&self, id: Uuid) -> Result<LoanAccountDetail, ApiError> {
@@ -654,6 +674,15 @@ impl MockApi {
             ));
         }
 
+        let approval_id = gate_price_locked(
+            &mut db,
+            quotation.plot_id,
+            quotation.customer_id,
+            quotation.payment_mode,
+            quotation.quoted_price,
+            Some(id),
+        )?;
+
         let sale = execute_sale_locked(
             &mut db,
             quotation.plot_id,
@@ -662,12 +691,202 @@ impl MockApi {
             quotation.quoted_price,
         )?;
 
+        if let Some(approval_id) = approval_id {
+            if let Some(req) = db.approval_requests.iter_mut().find(|r| r.id == approval_id) {
+                req.resulting_sale_id = Some(sale.id);
+            }
+        }
+
         let quotation = db.quotations.iter_mut().find(|q| q.id == id).unwrap();
         quotation.status = QuotationStatus::Accepted;
         quotation.converted_sale_id = Some(sale.id);
         quotation.updated_at = Utc::now();
         Ok(quotation.clone())
     }
+
+    pub async fn list_approvals(&self, status: Option<&str>) -> Result<Vec<ApprovalRequestSummary>, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+        let mut out: Vec<ApprovalRequestSummary> = db
+            .approval_requests
+            .iter()
+            .filter(|r| match status {
+                Some(s) => to_pg_str(r.status) == s,
+                None => true,
+            })
+            .filter_map(|r| approval_summary(&db, r))
+            .collect();
+        out.sort_by(|a, b| b.request.created_at.cmp(&a.request.created_at));
+        Ok(out)
+    }
+
+    pub async fn approve_request(
+        &self,
+        id: Uuid,
+        notes: Option<String>,
+    ) -> Result<ApprovalRequestSummary, ApiError> {
+        settle(200).await;
+        self.decide_request(id, ApprovalStatus::Approved, notes)
+    }
+
+    pub async fn reject_request(
+        &self,
+        id: Uuid,
+        notes: Option<String>,
+    ) -> Result<ApprovalRequestSummary, ApiError> {
+        settle(200).await;
+        self.decide_request(id, ApprovalStatus::Rejected, notes)
+    }
+
+    fn decide_request(
+        &self,
+        id: Uuid,
+        to: ApprovalStatus,
+        notes: Option<String>,
+    ) -> Result<ApprovalRequestSummary, ApiError> {
+        let mut db = self.db.lock().unwrap();
+        let requested_by = {
+            let req = db
+                .approval_requests
+                .iter()
+                .find(|r| r.id == id)
+                .ok_or(ApiError::NotFound)?;
+            if req.status != ApprovalStatus::Pending {
+                return Err(ApiError::InvalidCredentials(
+                    "This request has already been decided.".to_string(),
+                ));
+            }
+            req.requested_by
+        };
+
+        // Mirrors `crates/backend/src/routes/approvals.rs::decide`'s
+        // fallback: the mock only ever has one user, so unconditionally
+        // blocking self-decision would make every gated sale
+        // permanently stuck in this demo.
+        let other_users_exist = false;
+        if requested_by == db.demo_user.id && other_users_exist {
+            return Err(ApiError::InvalidCredentials(
+                "You can't decide on a request you submitted yourself.".to_string(),
+            ));
+        }
+
+        let decided_by = db.demo_user.id;
+        let req = db.approval_requests.iter_mut().find(|r| r.id == id).unwrap();
+        req.status = to;
+        req.decided_by = Some(decided_by);
+        req.decided_at = Some(Utc::now());
+        req.decision_notes = notes.filter(|s| !s.trim().is_empty());
+
+        approval_summary(&db, db.approval_requests.iter().find(|r| r.id == id).unwrap())
+            .ok_or(ApiError::NotFound)
+    }
+}
+
+fn to_pg_str(status: ApprovalStatus) -> &'static str {
+    match status {
+        ApprovalStatus::Pending => "pending",
+        ApprovalStatus::Approved => "approved",
+        ApprovalStatus::Rejected => "rejected",
+    }
+}
+
+fn approval_summary(db: &MockDb, r: &ApprovalRequest) -> Option<ApprovalRequestSummary> {
+    let plot = db.plots.iter().find(|p| p.id == r.plot_id)?;
+    let project = db.projects.iter().find(|p| p.id == plot.project_id)?;
+    let customer = db.customers.iter().find(|c| c.id == r.customer_id)?;
+    let (label, color) = approval_status_meta(r.status);
+    Some(ApprovalRequestSummary {
+        request: r.clone(),
+        plot_number: plot.plot_number.clone(),
+        project_name: project.name.clone(),
+        customer_name: customer.full_name.clone(),
+        requested_by_name: db.demo_user.full_name.clone(),
+        decided_by_name: r.decided_by.map(|_| db.demo_user.full_name.clone()),
+        status_label: label.to_string(),
+        status_color: color.to_string(),
+    })
+}
+
+/// Mirrors `crates/backend/src/routes/approvals.rs::gate_price` — see
+/// its docs for the full contract (`Ok(None)` = no gate needed,
+/// `Ok(Some(id))` = an approved request should be consumed by the
+/// caller, `Err` = now pending). No transaction-boundary subtlety here
+/// like the real one has to worry about (recording a pending request
+/// must survive even though the sale doesn't happen) — `MockDb` isn't
+/// transactional, a `Vec::push` just stays pushed.
+fn gate_price_locked(
+    db: &mut MockDb,
+    plot_id: Uuid,
+    customer_id: Uuid,
+    payment_mode: PaymentMode,
+    agreed_price: Decimal,
+    quotation_id: Option<Uuid>,
+) -> Result<Option<Uuid>, ApiError> {
+    let minimum_price = db
+        .plots
+        .iter()
+        .find(|p| p.id == plot_id)
+        .ok_or(ApiError::NotFound)?
+        .minimum_price;
+
+    if agreed_price >= minimum_price {
+        return Ok(None);
+    }
+
+    let approved = db
+        .approval_requests
+        .iter()
+        .find(|r| {
+            r.plot_id == plot_id
+                && r.customer_id == customer_id
+                && r.payment_mode == payment_mode
+                && r.agreed_price == agreed_price
+                && r.status == ApprovalStatus::Approved
+                && r.resulting_sale_id.is_none()
+        })
+        .map(|r| r.id);
+    if let Some(id) = approved {
+        return Ok(Some(id));
+    }
+
+    let already_pending = db.approval_requests.iter().any(|r| {
+        r.plot_id == plot_id
+            && r.customer_id == customer_id
+            && r.payment_mode == payment_mode
+            && r.agreed_price == agreed_price
+            && r.status == ApprovalStatus::Pending
+    });
+    if already_pending {
+        return Err(ApiError::InvalidCredentials(
+            "This price is below the plot's minimum and is still awaiting approval.".to_string(),
+        ));
+    }
+
+    let organization_id = db.organization.id;
+    let requested_by = db.demo_user.id;
+    db.approval_requests.push(ApprovalRequest {
+        id: Uuid::new_v4(),
+        organization_id,
+        plot_id,
+        customer_id,
+        agent_id: Some(requested_by),
+        payment_mode,
+        agreed_price,
+        minimum_price,
+        quotation_id,
+        requested_by,
+        reason: format!("Price {agreed_price} is below this plot's minimum of {minimum_price}."),
+        status: ApprovalStatus::Pending,
+        decided_by: None,
+        decided_at: None,
+        decision_notes: None,
+        resulting_sale_id: None,
+        created_at: Utc::now(),
+    });
+
+    Err(ApiError::InvalidCredentials(
+        "This price is below the plot's minimum. A request has been sent for approval — try again once it's approved.".to_string(),
+    ))
 }
 
 fn quotation_is_expired(q: &Quotation) -> bool {
@@ -1024,5 +1243,6 @@ fn seed() -> MockDb {
         loan_accounts,
         payments,
         quotations: Vec::new(),
+        approval_requests: Vec::new(),
     }
 }

@@ -213,4 +213,36 @@ impl ApiClient {
             Self::Http(api) => api.reject_quotation(id).await,
         }
     }
+
+    pub async fn list_approvals(
+        &self,
+        status: Option<&str>,
+    ) -> Result<Vec<ApprovalRequestSummary>, ApiError> {
+        match self {
+            Self::Mock(api) => api.list_approvals(status).await,
+            Self::Http(api) => api.list_approvals(status).await,
+        }
+    }
+
+    pub async fn approve_request(
+        &self,
+        id: Uuid,
+        notes: Option<String>,
+    ) -> Result<ApprovalRequestSummary, ApiError> {
+        match self {
+            Self::Mock(api) => api.approve_request(id, notes).await,
+            Self::Http(api) => api.approve_request(id, notes).await,
+        }
+    }
+
+    pub async fn reject_request(
+        &self,
+        id: Uuid,
+        notes: Option<String>,
+    ) -> Result<ApprovalRequestSummary, ApiError> {
+        match self {
+            Self::Mock(api) => api.reject_request(id, notes).await,
+            Self::Http(api) => api.reject_request(id, notes).await,
+        }
+    }
 }

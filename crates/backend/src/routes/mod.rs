@@ -1,3 +1,4 @@
+mod approvals;
 mod auth;
 mod customers;
 mod dashboard;
@@ -21,4 +22,5 @@ pub fn router() -> Router<AppState> {
         .merge(loan_accounts::router())
         .merge(platform::router())
         .merge(quotations::router())
+        .merge(approvals::router())
 }

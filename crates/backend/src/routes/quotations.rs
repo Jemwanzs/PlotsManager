@@ -17,6 +17,7 @@ use domain::{
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
+use super::approvals::gate_price;
 use super::sales::{execute_sale, ExecuteSaleParams};
 use crate::error::AppError;
 use crate::extractors::AuthUser;
@@ -395,6 +396,23 @@ async fn accept_quotation(
     }
     let payment_mode: PaymentMode = from_pg("quotations.payment_mode", &payment_mode)?;
 
+    // Below the plot's minimum_price? gate_price records/consumes an
+    // approval before we commit to converting this quotation — see its
+    // docs on why that has to run against the pool, not this tx (a
+    // freshly-recorded pending request must outlive our rollback below).
+    let approval_id = gate_price(
+        &state.db,
+        auth.organization_id,
+        auth.user_id,
+        plot_id,
+        customer_id,
+        agent_id,
+        payment_mode,
+        quoted_price,
+        Some(id),
+    )
+    .await?;
+
     let sale = execute_sale(
         &mut tx,
         auth.organization_id,
@@ -407,6 +425,14 @@ async fn accept_quotation(
         },
     )
     .await?;
+
+    if let Some(approval_id) = approval_id {
+        sqlx::query("update approval_requests set resulting_sale_id = $1 where id = $2")
+            .bind(sale.id)
+            .bind(approval_id)
+            .execute(&mut *tx)
+            .await?;
+    }
 
     let row: QuotationRow = sqlx::query_as(
         r#"

@@ -3,6 +3,7 @@ use domain::{CreateSaleInput, PaymentMode, PlotSale, PlotStatus};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
+use super::approvals::gate_price;
 use crate::error::AppError;
 use crate::extractors::AuthUser;
 use crate::pg_enum::to_pg;
@@ -21,6 +22,22 @@ async fn create_sale(
     auth: AuthUser,
     Json(input): Json<CreateSaleInput>,
 ) -> Result<Json<PlotSale>, AppError> {
+    // Below the plot's minimum_price? gate_price records/consumes an
+    // approval before we ever open the sale transaction — see its docs
+    // on why that has to happen against the pool, not this tx.
+    let approval_id = gate_price(
+        &state.db,
+        auth.organization_id,
+        auth.user_id,
+        input.plot_id,
+        input.customer_id,
+        Some(auth.user_id),
+        input.payment_mode,
+        input.agreed_price,
+        None,
+    )
+    .await?;
+
     let mut tx = state.db.begin().await?;
 
     let sale = execute_sale(
@@ -35,6 +52,14 @@ async fn create_sale(
         },
     )
     .await?;
+
+    if let Some(approval_id) = approval_id {
+        sqlx::query("update approval_requests set resulting_sale_id = $1 where id = $2")
+            .bind(sale.id)
+            .bind(approval_id)
+            .execute(&mut *tx)
+            .await?;
+    }
 
     tx.commit().await?;
 

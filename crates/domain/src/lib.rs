@@ -8,6 +8,7 @@
 //! schema (`database/migrations/`).
 
 pub mod api_types;
+pub mod approval;
 pub mod billing;
 pub mod customer;
 pub mod organization;
@@ -19,6 +20,7 @@ pub mod status_meta;
 pub mod user;
 
 pub use api_types::*;
+pub use approval::*;
 pub use billing::*;
 pub use customer::*;
 pub use organization::*;

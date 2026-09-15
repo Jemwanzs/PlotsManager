@@ -90,7 +90,9 @@ pub fn QuotationDetailPage() -> impl IntoView {
                                     <div class="alert alert-warning">
                                         "This quote is below the plot's minimum price ("
                                         {format_kes(d.minimum_price)}
-                                        "). It still needs a human sign-off — the approval workflow isn't wired up yet, so treat this as a flag, not a block."
+                                        "). Accepting it will require sign-off — see "
+                                        <A href="/approvals">"Approvals"</A>
+                                        "."
                                     </div>
                                 })}
 

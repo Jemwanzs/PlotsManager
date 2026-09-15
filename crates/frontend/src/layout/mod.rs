@@ -21,6 +21,7 @@ fn nav_items(is_platform_owner: bool) -> Vec<NavItem> {
         NavItem { href: "/projects", icon: "\u{1F3D8}\u{FE0F}", label: "Projects" },
         NavItem { href: "/customers", icon: "\u{1F464}", label: "Customers" },
         NavItem { href: "/quotations", icon: "\u{1F4C4}", label: "Quotations" },
+        NavItem { href: "/approvals", icon: "\u{2705}", label: "Approvals" },
     ];
     if is_platform_owner {
         items.push(NavItem {

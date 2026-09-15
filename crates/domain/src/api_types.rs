@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    AreaUnit, Customer, LeadStage, Payment, PaymentMode, Plot, PlotLoanAccount, ProjectStatus,
-    Quotation, User,
+    ApprovalRequest, AreaUnit, Customer, LeadStage, Payment, PaymentMode, Plot, PlotLoanAccount,
+    ProjectStatus, Quotation, User,
 };
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq, Serialize, Deserialize)]
@@ -266,10 +266,12 @@ pub struct PlatformOrganizationDetail {
 
 /// Creates a `Quotation` in `Draft` status — see
 /// `crates/backend/src/routes/quotations.rs`. `below_minimum_price` on
-/// the response types is informational only (docs/09's approval engine
-/// isn't implemented yet, see the migration's module comment), so
-/// there's deliberately no server-side rejection here for a price under
-/// the plot's `minimum_price`.
+/// the response types is still purely informational *here*, at draft
+/// creation — a draft is just an offer being drafted, nothing is
+/// committed yet. The gate is enforced later, when that offer would
+/// become a real sale (`POST /quotations/:id/accept`, and the
+/// equivalent direct path `POST /sales`) — see
+/// `crates/backend/src/routes/approvals.rs::gate_price`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateQuotationInput {
     pub plot_id: Uuid,
@@ -306,4 +308,27 @@ pub struct QuotationDetail {
     pub status_color: String,
     pub is_expired: bool,
     pub below_minimum_price: bool,
+}
+
+/// `ApprovalRequest` plus the display fields its list/detail views need
+/// — same shape as `QuotationSummary` above.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRequestSummary {
+    pub request: ApprovalRequest,
+    pub plot_number: String,
+    pub project_name: String,
+    pub customer_name: String,
+    pub requested_by_name: String,
+    pub decided_by_name: Option<String>,
+    pub status_label: String,
+    pub status_color: String,
+}
+
+/// Body for `POST /approvals/:id/approve` and `.../reject` — a note is
+/// optional either way (approving a below-minimum price is often
+/// self-explanatory; rejecting usually isn't, but nothing here forces
+/// the caller to explain).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DecideApprovalInput {
+    pub notes: Option<String>,
 }
