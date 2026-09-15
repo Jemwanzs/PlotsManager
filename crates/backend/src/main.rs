@@ -12,6 +12,7 @@ mod paystack;
 mod pg_enum;
 mod routes;
 mod state;
+mod tenant_gate;
 
 use state::AppState;
 

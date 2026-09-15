@@ -25,7 +25,8 @@ use uuid::Uuid;
 use domain::{
     ApiError, AuthSession, CreateCustomerInput, CreatePlotInput, CreateProjectInput,
     CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary, LoanAccountDetail,
-    LoginInput, PlotWithColor, ProjectSummary, RecordPaymentInput, SignupInput,
+    LoginInput, PlatformOrganizationDetail, PlatformOrganizationSummary, PlotWithColor,
+    ProjectSummary, RecordPaymentInput, SignupInput,
 };
 
 #[derive(Clone)]
@@ -102,7 +103,7 @@ impl HttpApi {
                 // just for login — matched here for the same UI code
                 // (new_project.rs, new_customer.rs, login.rs) to work
                 // unchanged against either backend.
-                400 | 409 => ApiError::InvalidCredentials(message),
+                400 | 403 | 409 => ApiError::InvalidCredentials(message),
                 _ => ApiError::Network(message),
             })
         }
@@ -182,5 +183,39 @@ impl HttpApi {
     ) -> Result<domain::Payment, ApiError> {
         let path = format!("/api/v1/loan-accounts/{}/payments", input.loan_account_id);
         self.post(&path, &input).await
+    }
+
+    pub async fn list_platform_organizations(
+        &self,
+    ) -> Result<Vec<PlatformOrganizationSummary>, ApiError> {
+        self.get("/api/v1/platform/organizations").await
+    }
+
+    pub async fn get_platform_organization(
+        &self,
+        id: Uuid,
+    ) -> Result<PlatformOrganizationDetail, ApiError> {
+        self.get(&format!("/api/v1/platform/organizations/{id}"))
+            .await
+    }
+
+    pub async fn deactivate_organization(&self, id: Uuid) -> Result<(), ApiError> {
+        let _: serde_json::Value = self
+            .post(
+                &format!("/api/v1/platform/organizations/{id}/deactivate"),
+                &(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn reactivate_organization(&self, id: Uuid) -> Result<(), ApiError> {
+        let _: serde_json::Value = self
+            .post(
+                &format!("/api/v1/platform/organizations/{id}/reactivate"),
+                &(),
+            )
+            .await?;
+        Ok(())
     }
 }

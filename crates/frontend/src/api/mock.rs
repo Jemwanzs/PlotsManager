@@ -12,9 +12,10 @@ use domain::{
     loan_status_meta, plot_status_meta as status_meta, AreaUnit, ApiError, AuthSession,
     CreateCustomerInput, CreatePlotInput, CreateProjectInput, CreateSaleInput, Customer,
     CustomerDetail, CustomerSaleView, CustomerSummary, DashboardSummary, LoanAccountDetail,
-    LoanAccountStatus, Organization, Payment, PaymentMode, PaymentStatus, Plot, PlotLoanAccount,
-    PlotSale, PlotStatus, PlotWithColor, Project, ProjectStatus, ProjectSummary,
-    RecordPaymentInput, SignupInput, User,
+    LoanAccountStatus, Organization, Payment, PaymentMode, PaymentStatus,
+    PlatformOrganizationDetail, PlatformOrganizationSummary, Plot, PlotLoanAccount, PlotSale,
+    PlotStatus, PlotWithColor, Project, ProjectStatus, ProjectSummary, RecordPaymentInput,
+    SignupInput, User,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -533,6 +534,43 @@ impl MockApi {
 
         db.payments.push(payment.clone());
         Ok(payment)
+    }
+
+    // MockDb's demo_user is never a platform owner (see `signup` above —
+    // there's no multi-tenant model to admin here), so these mirror the
+    // real backend's 403 for a non-owner caller rather than simulating
+    // real platform-admin data.
+    pub async fn list_platform_organizations(
+        &self,
+    ) -> Result<Vec<PlatformOrganizationSummary>, ApiError> {
+        settle(200).await;
+        Err(ApiError::InvalidCredentials(
+            "This account doesn't have platform administrator access.".to_string(),
+        ))
+    }
+
+    pub async fn get_platform_organization(
+        &self,
+        _id: Uuid,
+    ) -> Result<PlatformOrganizationDetail, ApiError> {
+        settle(200).await;
+        Err(ApiError::InvalidCredentials(
+            "This account doesn't have platform administrator access.".to_string(),
+        ))
+    }
+
+    pub async fn deactivate_organization(&self, _id: Uuid) -> Result<(), ApiError> {
+        settle(200).await;
+        Err(ApiError::InvalidCredentials(
+            "This account doesn't have platform administrator access.".to_string(),
+        ))
+    }
+
+    pub async fn reactivate_organization(&self, _id: Uuid) -> Result<(), ApiError> {
+        settle(200).await;
+        Err(ApiError::InvalidCredentials(
+            "This account doesn't have platform administrator access.".to_string(),
+        ))
     }
 }
 

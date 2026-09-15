@@ -63,27 +63,12 @@ async fn login(
         return Err(AppError::Unauthorized);
     }
 
-    if row.org_status == "deactivated" {
-        return Err(AppError::forbidden(
-            "This organization's account has been deactivated. Contact your platform administrator.",
-        ));
-    }
-
-    // The platform owner's own organization is never trial-gated. A
-    // tenant with no organization_subscriptions row at all (shouldn't
-    // happen for anything provisioned after 0004, but true of pre-existing
-    // dev/demo data) is likewise left unrestricted rather than locked out.
-    if !row.is_platform_owner {
-        if let (Some(status), Some(trial_ends_at)) =
-            (row.subscription_status.as_deref(), row.trial_ends_at)
-        {
-            if status == "trialing" && trial_ends_at < Utc::now() {
-                return Err(AppError::forbidden(
-                    "Your trial period has expired. Contact us to continue using Real Estate Manager.",
-                ));
-            }
-        }
-    }
+    crate::tenant_gate::check(
+        &row.org_status,
+        row.is_platform_owner,
+        row.subscription_status.as_deref(),
+        row.trial_ends_at,
+    )?;
 
     let valid =
         verify_password(&input.password, &row.password_hash).map_err(|e| AppError::Internal(e.into()))?;

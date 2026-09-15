@@ -6,7 +6,7 @@
 //! so they share the same types rather than three hand-kept-in-sync
 //! copies. See docs/12-api-and-integration-design.md.
 
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -201,4 +201,46 @@ pub struct DashboardSummary {
     pub performing_amount: Decimal,
     pub non_performing_count: u32,
     pub non_performing_amount: Decimal,
+}
+
+/// Cross-tenant administration — `crates/backend/src/routes/platform.rs`,
+/// gated by `AuthUser.is_platform_owner`. See
+/// `database/migrations/0004_platform_ownership.sql`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformOrganizationSummary {
+    pub id: Uuid,
+    pub name: String,
+    pub code: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub user_count: i64,
+    pub subscription_status: Option<String>,
+    pub trial_ends_at: Option<DateTime<Utc>>,
+    pub plan_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformOrganizationUser {
+    pub id: Uuid,
+    pub full_name: String,
+    pub email: String,
+    pub is_active: bool,
+    pub is_platform_owner: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformAccessLogEntry {
+    pub actor_id: Option<Uuid>,
+    pub actor_name: Option<String>,
+    pub action: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformOrganizationDetail {
+    #[serde(flatten)]
+    pub summary: PlatformOrganizationSummary,
+    pub users: Vec<PlatformOrganizationUser>,
+    pub recent_access: Vec<PlatformAccessLogEntry>,
 }

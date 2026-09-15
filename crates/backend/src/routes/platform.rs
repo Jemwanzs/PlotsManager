@@ -4,16 +4,14 @@
 //! `organization_id` the way every other route does: that's the entire
 //! point of this module, so each one starts by checking
 //! `AuthUser.is_platform_owner` instead.
-//!
-//! No frontend consumes this yet (see docs/14-development-roadmap.md) —
-//! response shapes live here rather than in `domain` until a UI actually
-//! needs to share them, per the project's established rule that `domain`
-//! holds the *wire contract*, not speculative future consumers.
 
 use axum::extract::Path;
 use axum::{extract::State, routing::get, routing::post, Json, Router};
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use domain::{
+    PlatformAccessLogEntry, PlatformOrganizationDetail, PlatformOrganizationSummary,
+    PlatformOrganizationUser,
+};
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -47,8 +45,8 @@ fn require_platform_owner(auth: &AuthUser) -> Result<(), AppError> {
     }
 }
 
-#[derive(Serialize, sqlx::FromRow)]
-struct TenantSummary {
+#[derive(sqlx::FromRow)]
+struct TenantSummaryRow {
     id: Uuid,
     name: String,
     code: String,
@@ -58,6 +56,22 @@ struct TenantSummary {
     subscription_status: Option<String>,
     trial_ends_at: Option<DateTime<Utc>>,
     plan_name: Option<String>,
+}
+
+impl From<TenantSummaryRow> for PlatformOrganizationSummary {
+    fn from(r: TenantSummaryRow) -> Self {
+        Self {
+            id: r.id,
+            name: r.name,
+            code: r.code,
+            status: r.status,
+            created_at: r.created_at,
+            user_count: r.user_count,
+            subscription_status: r.subscription_status,
+            trial_ends_at: r.trial_ends_at,
+            plan_name: r.plan_name,
+        }
+    }
 }
 
 const TENANT_SUMMARY_QUERY: &str = r#"
@@ -74,20 +88,20 @@ const TENANT_SUMMARY_QUERY: &str = r#"
 async fn list_organizations(
     State(state): State<AppState>,
     auth: AuthUser,
-) -> Result<Json<Vec<TenantSummary>>, AppError> {
+) -> Result<Json<Vec<PlatformOrganizationSummary>>, AppError> {
     require_platform_owner(&auth)?;
 
-    let rows: Vec<TenantSummary> = sqlx::query_as(&format!(
+    let rows: Vec<TenantSummaryRow> = sqlx::query_as(&format!(
         "{TENANT_SUMMARY_QUERY} order by o.created_at"
     ))
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(rows))
+    Ok(Json(rows.into_iter().map(Into::into).collect()))
 }
 
-#[derive(Serialize, sqlx::FromRow)]
-struct TenantUser {
+#[derive(sqlx::FromRow)]
+struct TenantUserRow {
     id: Uuid,
     full_name: String,
     email: String,
@@ -96,37 +110,53 @@ struct TenantUser {
     created_at: DateTime<Utc>,
 }
 
-#[derive(Serialize, sqlx::FromRow)]
-struct AccessLogEntry {
+impl From<TenantUserRow> for PlatformOrganizationUser {
+    fn from(r: TenantUserRow) -> Self {
+        Self {
+            id: r.id,
+            full_name: r.full_name,
+            email: r.email,
+            is_active: r.is_active,
+            is_platform_owner: r.is_platform_owner,
+            created_at: r.created_at,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct AccessLogRow {
     actor_id: Option<Uuid>,
     actor_name: Option<String>,
     action: String,
     created_at: DateTime<Utc>,
 }
 
-#[derive(Serialize)]
-struct TenantDetail {
-    #[serde(flatten)]
-    summary: TenantSummary,
-    users: Vec<TenantUser>,
-    recent_access: Vec<AccessLogEntry>,
+impl From<AccessLogRow> for PlatformAccessLogEntry {
+    fn from(r: AccessLogRow) -> Self {
+        Self {
+            actor_id: r.actor_id,
+            actor_name: r.actor_name,
+            action: r.action,
+            created_at: r.created_at,
+        }
+    }
 }
 
 async fn get_organization(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(id): Path<Uuid>,
-) -> Result<Json<TenantDetail>, AppError> {
+) -> Result<Json<PlatformOrganizationDetail>, AppError> {
     require_platform_owner(&auth)?;
 
-    let summary: Option<TenantSummary> =
+    let summary: Option<TenantSummaryRow> =
         sqlx::query_as(&format!("{TENANT_SUMMARY_QUERY} where o.id = $1"))
             .bind(id)
             .fetch_optional(&state.db)
             .await?;
-    let summary = summary.ok_or(AppError::NotFound)?;
+    let summary: PlatformOrganizationSummary = summary.ok_or(AppError::NotFound)?.into();
 
-    let users: Vec<TenantUser> = sqlx::query_as(
+    let user_rows: Vec<TenantUserRow> = sqlx::query_as(
         r#"select id, full_name, email, is_active, is_platform_owner, created_at
            from users where organization_id = $1 order by created_at"#,
     )
@@ -134,7 +164,7 @@ async fn get_organization(
     .fetch_all(&state.db)
     .await?;
 
-    let recent_access: Vec<AccessLogEntry> = sqlx::query_as(
+    let access_rows: Vec<AccessLogRow> = sqlx::query_as(
         r#"
         select a.actor_id, u.full_name as actor_name, a.action, a.created_at
         from audit_log a
@@ -148,10 +178,10 @@ async fn get_organization(
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(TenantDetail {
+    Ok(Json(PlatformOrganizationDetail {
         summary,
-        users,
-        recent_access,
+        users: user_rows.into_iter().map(Into::into).collect(),
+        recent_access: access_rows.into_iter().map(Into::into).collect(),
     }))
 }
 

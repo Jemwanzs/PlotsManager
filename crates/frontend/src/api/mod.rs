@@ -125,4 +125,37 @@ impl ApiClient {
             Self::Http(api) => api.record_payment(input).await,
         }
     }
+
+    pub async fn list_platform_organizations(
+        &self,
+    ) -> Result<Vec<PlatformOrganizationSummary>, ApiError> {
+        match self {
+            Self::Mock(api) => api.list_platform_organizations().await,
+            Self::Http(api) => api.list_platform_organizations().await,
+        }
+    }
+
+    pub async fn get_platform_organization(
+        &self,
+        id: Uuid,
+    ) -> Result<PlatformOrganizationDetail, ApiError> {
+        match self {
+            Self::Mock(api) => api.get_platform_organization(id).await,
+            Self::Http(api) => api.get_platform_organization(id).await,
+        }
+    }
+
+    pub async fn deactivate_organization(&self, id: Uuid) -> Result<(), ApiError> {
+        match self {
+            Self::Mock(api) => api.deactivate_organization(id).await,
+            Self::Http(api) => api.deactivate_organization(id).await,
+        }
+    }
+
+    pub async fn reactivate_organization(&self, id: Uuid) -> Result<(), ApiError> {
+        match self {
+            Self::Mock(api) => api.reactivate_organization(id).await,
+            Self::Http(api) => api.reactivate_organization(id).await,
+        }
+    }
 }

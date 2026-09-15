@@ -10,11 +10,26 @@ struct NavItem {
     label: &'static str,
 }
 
-const NAV_ITEMS: &[NavItem] = &[
-    NavItem { href: "/", icon: "\u{1F4CA}", label: "Dashboard" },
-    NavItem { href: "/projects", icon: "\u{1F3D8}\u{FE0F}", label: "Projects" },
-    NavItem { href: "/customers", icon: "\u{1F464}", label: "Customers" },
-];
+/// "Platform" only appears for `is_platform_owner` accounts — everyone
+/// else can't see it, and the backend enforces the same boundary on the
+/// `/api/v1/platform/*` endpoints regardless (see
+/// `crates/backend/src/routes/platform.rs`), so this is a convenience,
+/// not the access control.
+fn nav_items(is_platform_owner: bool) -> Vec<NavItem> {
+    let mut items = vec![
+        NavItem { href: "/", icon: "\u{1F4CA}", label: "Dashboard" },
+        NavItem { href: "/projects", icon: "\u{1F3D8}\u{FE0F}", label: "Projects" },
+        NavItem { href: "/customers", icon: "\u{1F464}", label: "Customers" },
+    ];
+    if is_platform_owner {
+        items.push(NavItem {
+            href: "/platform",
+            icon: "\u{1F6E1}\u{FE0F}",
+            label: "Platform",
+        });
+    }
+    items
+}
 
 /// Authenticated app layout: sidebar on laptop/desktop, top bar + bottom
 /// tab bar on phone/tablet. Route protection lives here too — every
@@ -46,6 +61,8 @@ pub fn AppShell(children: Children) -> impl IntoView {
             .unwrap_or_default()
     };
     let full_name = move || auth.get().map(|s| s.user.full_name).unwrap_or_default();
+    let is_platform_owner =
+        move || auth.get().map(|s| s.user.is_platform_owner).unwrap_or(false);
 
     // No <Show when=is_authenticated> around this: the Effect above already
     // redirects to /login the moment `auth` is None, and gating the whole
@@ -62,17 +79,19 @@ pub fn AppShell(children: Children) -> impl IntoView {
                     <span>"Real Estate Manager"</span>
                 </div>
                 <nav class="sidebar-nav">
-                    {NAV_ITEMS
-                        .iter()
-                        .map(|item| {
-                            view! {
-                                <A href=item.href exact=item.href == "/">
-                                    <span>{item.icon}</span>
-                                    <span>{item.label}</span>
-                                </A>
-                            }
-                        })
-                        .collect_view()}
+                    {move || {
+                        nav_items(is_platform_owner())
+                            .into_iter()
+                            .map(|item| {
+                                view! {
+                                    <A href=item.href exact=item.href == "/">
+                                        <span>{item.icon}</span>
+                                        <span>{item.label}</span>
+                                    </A>
+                                }
+                            })
+                            .collect_view()
+                    }}
                 </nav>
             </aside>
 
@@ -90,17 +109,19 @@ pub fn AppShell(children: Children) -> impl IntoView {
             <main class="main-content">{children()}</main>
 
             <nav class="bottom-nav">
-                {NAV_ITEMS
-                    .iter()
-                    .map(|item| {
-                        view! {
-                            <A href=item.href exact=item.href == "/">
-                                <span class="icon">{item.icon}</span>
-                                <span>{item.label}</span>
-                            </A>
-                        }
-                    })
-                    .collect_view()}
+                {move || {
+                    nav_items(is_platform_owner())
+                        .into_iter()
+                        .map(|item| {
+                            view! {
+                                <A href=item.href exact=item.href == "/">
+                                    <span class="icon">{item.icon}</span>
+                                    <span>{item.label}</span>
+                                </A>
+                            }
+                        })
+                        .collect_view()
+                }}
             </nav>
         </div>
     }
