@@ -333,4 +333,14 @@ impl ApiClient {
             Self::Http(api) => api.bulk_create_customers(inputs).await,
         }
     }
+
+    pub async fn bulk_create_sales(
+        &self,
+        inputs: Vec<domain::BulkSaleRow>,
+    ) -> Result<domain::BulkImportResult, ApiError> {
+        match self {
+            Self::Mock(api) => api.bulk_create_sales(inputs).await,
+            Self::Http(api) => api.bulk_create_sales(inputs).await,
+        }
+    }
 }

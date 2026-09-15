@@ -13,7 +13,7 @@ use chrono::{NaiveDate, Utc};
 use domain::{
     approval_status_meta, loan_status_meta, plot_status_meta as status_meta,
     quotation_status_meta, AgentPerformanceReport, AgentPerformanceRow, ApiError, ApprovalRequest,
-    ApprovalRequestSummary, ApprovalStatus, AreaUnit, AuthSession, CreateCustomerInput,
+    ApprovalRequestSummary, ApprovalStatus, AreaUnit, AuthSession, BulkSaleRow, CreateCustomerInput,
     CreatePlotInput, CreateProjectInput, CreateQuotationInput, CreateSaleInput, Customer,
     CustomerDetail, CustomerSaleView, CustomerSummary, DashboardSummary, InventoryReport,
     LeadStage, LoanAccountDetail, LoanAccountStatus, MapPolygons, Organization, Payment,
@@ -1075,6 +1075,33 @@ impl MockApi {
         }
         Ok(domain::BulkImportResult { created, errors })
     }
+
+    /// Mirrors `crates/backend/src/routes/sales.rs::bulk_create_sales`
+    /// — see `domain::BulkSaleRow`'s module docs for why this carries
+    /// `amount_paid` instead of starting every imported Lipa Pole
+    /// Pole account at zero like `execute_sale_locked` does for a
+    /// brand-new sale.
+    pub async fn bulk_create_sales(
+        &self,
+        inputs: Vec<BulkSaleRow>,
+    ) -> Result<domain::BulkImportResult, ApiError> {
+        let mut db = self.db.lock().unwrap();
+        let mut created = 0u32;
+        let mut errors = Vec::new();
+        for (idx, input) in inputs.iter().enumerate() {
+            match insert_bulk_sale_locked(&mut db, input) {
+                Ok(_) => created += 1,
+                Err(ApiError::InvalidCredentials(message)) => {
+                    errors.push(domain::BulkImportRowError { row: idx as u32 + 1, message })
+                }
+                Err(e) => errors.push(domain::BulkImportRowError {
+                    row: idx as u32 + 1,
+                    message: format!("{e}"),
+                }),
+            }
+        }
+        Ok(domain::BulkImportResult { created, errors })
+    }
 }
 
 fn to_pg_str(status: ApprovalStatus) -> &'static str {
@@ -1285,6 +1312,99 @@ fn execute_sale_locked(
     }
 
     Ok(sale)
+}
+
+/// Mirrors `crates/backend/src/routes/sales.rs::insert_bulk_sale` —
+/// its own function rather than reusing `execute_sale_locked`, since
+/// a historical import needs to set `amount_paid`/status/plot status
+/// from what's already been repaid instead of always starting at
+/// zero like a fresh sale does.
+fn insert_bulk_sale_locked(db: &mut MockDb, input: &BulkSaleRow) -> Result<(), ApiError> {
+    if input.agreed_price <= Decimal::ZERO {
+        return Err(ApiError::InvalidCredentials(
+            "Enter an agreed price greater than zero.".to_string(),
+        ));
+    }
+    let amount_paid = input.amount_paid.max(Decimal::ZERO).min(input.agreed_price);
+
+    let plot_id = db
+        .projects
+        .iter()
+        .find(|p| p.code == input.project_code)
+        .and_then(|p| db.plots.iter().find(|pl| pl.project_id == p.id && pl.plot_number == input.plot_number))
+        .map(|pl| pl.id)
+        .ok_or_else(|| {
+            ApiError::InvalidCredentials(format!(
+                "No plot \"{}\" found in project \"{}\".",
+                input.plot_number, input.project_code
+            ))
+        })?;
+
+    let lookup = input.customer_lookup.trim();
+    if lookup.is_empty() {
+        return Err(ApiError::InvalidCredentials(
+            "Provide a customer ID number, phone, or email to match an existing customer."
+                .to_string(),
+        ));
+    }
+    let customer_id = db
+        .customers
+        .iter()
+        .find(|c| {
+            c.id_number.as_deref() == Some(lookup)
+                || c.phone.as_deref() == Some(lookup)
+                || c.email.as_deref() == Some(lookup)
+        })
+        .map(|c| c.id)
+        .ok_or_else(|| {
+            ApiError::InvalidCredentials(format!(
+                "No existing customer matches \"{lookup}\" — import customers first."
+            ))
+        })?;
+
+    if db.sales.iter().any(|s| s.plot_id == plot_id) {
+        return Err(ApiError::InvalidCredentials(
+            "This plot already has an active sale.".to_string(),
+        ));
+    }
+
+    let organization_id = db.organization.id;
+    let sale = PlotSale {
+        id: Uuid::new_v4(),
+        plot_id,
+        customer_id,
+        organization_id,
+        agent_id: None,
+        payment_mode: input.payment_mode,
+        agreed_price: input.agreed_price,
+        created_at: input.sale_date.and_hms_opt(12, 0, 0).unwrap().and_utc(),
+    };
+
+    let fully_paid = input.payment_mode == PaymentMode::FullCash || amount_paid >= input.agreed_price;
+
+    if input.payment_mode != PaymentMode::FullCash {
+        let seq = db.loan_accounts.len() + 1;
+        let mut account = new_loan_account(&sale, seq, input.sale_date);
+        account.deposit_paid = amount_paid.min(account.deposit_required);
+        account.amount_paid = amount_paid;
+        account.outstanding_balance = input.agreed_price - amount_paid;
+        account.status = if fully_paid {
+            LoanAccountStatus::FullyPaid
+        } else if amount_paid > Decimal::ZERO {
+            LoanAccountStatus::ActivePartiallyPaid
+        } else {
+            LoanAccountStatus::ApprovedAwaitingDeposit
+        };
+        db.loan_accounts.push(account);
+    }
+
+    if let Some(plot) = db.plots.iter_mut().find(|p| p.id == plot_id) {
+        plot.status = if fully_paid { PlotStatus::Sold } else { PlotStatus::Booked };
+        plot.assigned_customer_id = Some(customer_id);
+    }
+
+    db.sales.push(sale);
+    Ok(())
 }
 
 /// Deliberately simple defaults (10% deposit, 12 monthly instalments) —

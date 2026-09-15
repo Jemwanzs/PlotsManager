@@ -25,7 +25,7 @@ use uuid::Uuid;
 
 use domain::{
     AgentPerformanceReport, ApiError, ApprovalRequestSummary, AuthSession, BulkImportResult,
-    CreateCustomerInput, CreatePlotInput, CreateProjectInput, CreateQuotationInput,
+    BulkSaleRow, CreateCustomerInput, CreatePlotInput, CreateProjectInput, CreateQuotationInput,
     CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary, DecideApprovalInput,
     InventoryReport, LoanAccountDetail, LoginInput, MapPolygons, PlatformOrganizationDetail,
     PlatformOrganizationSummary, PlotWithColor, ProjectMapSummary, ProjectSummary,
@@ -428,5 +428,12 @@ impl HttpApi {
         inputs: Vec<CreateCustomerInput>,
     ) -> Result<BulkImportResult, ApiError> {
         self.post("/api/v1/customers/bulk", &inputs).await
+    }
+
+    pub async fn bulk_create_sales(
+        &self,
+        inputs: Vec<BulkSaleRow>,
+    ) -> Result<BulkImportResult, ApiError> {
+        self.post("/api/v1/sales/bulk", &inputs).await
     }
 }

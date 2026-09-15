@@ -1,4 +1,5 @@
 mod approvals_list;
+mod bulk_sales_import;
 mod customer_detail;
 mod customers_list;
 mod dashboard;
@@ -17,6 +18,7 @@ mod reports;
 mod signup;
 
 pub use approvals_list::ApprovalsList;
+pub use bulk_sales_import::BulkSalesImport;
 pub use customer_detail::CustomerDetail;
 pub use customers_list::CustomersList;
 pub use dashboard::Dashboard;

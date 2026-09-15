@@ -345,6 +345,33 @@ pub struct ProjectMapSummary {
     pub updated_at: Option<DateTime<Utc>>,
 }
 
+/// One row of a bulk sales-*history* import (tenant onboarding —
+/// `POST /sales/bulk`, `crates/backend/src/routes/sales.rs`).
+/// Deliberately not `CreateSaleInput`: that type is for a fresh
+/// reservation made today, which always starts a Lipa Pole Pole
+/// account at zero paid (`execute_sale`'s 10%-deposit/12-instalment
+/// default). A migrated historical sale usually isn't at zero — a
+/// customer three years into their payments should import at three
+/// years in, not restart — so this carries `amount_paid` instead of
+/// assuming it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BulkSaleRow {
+    pub project_code: String,
+    pub plot_number: String,
+    /// Matched against an existing customer's id_number, then phone,
+    /// then email, in that order — the customer must already exist
+    /// (import customers first).
+    pub customer_lookup: String,
+    pub payment_mode: PaymentMode,
+    pub agreed_price: Decimal,
+    pub sale_date: NaiveDate,
+    /// Total already repaid toward this sale as of the import,
+    /// including any deposit. Ignored for `full_cash` (paid in full
+    /// by definition); 0 for a Lipa Pole Pole sale that's fully
+    /// outstanding.
+    pub amount_paid: Decimal,
+}
+
 /// Body for `PUT /projects/:id/map/polygons` — the client always sends
 /// the full desired polygon set, not a diff; matches this codebase's
 /// "derive, don't store incrementally" preference and keeps the

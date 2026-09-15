@@ -15,7 +15,8 @@
 
 use std::str::FromStr;
 
-use domain::{CreateCustomerInput, CreatePlotInput};
+use chrono::NaiveDate;
+use domain::{BulkSaleRow, CreateCustomerInput, CreatePlotInput, PaymentMode};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
@@ -29,6 +30,10 @@ pub const PLOTS_TEMPLATE: &str = "plot_number,size,asking_price,minimum_price\nA
 
 pub const CUSTOMERS_TEMPLATE: &str =
     "full_name,email,phone,id_number,source\nJane Wanjiku,jane@example.com,0722000000,12345678,Referral\n";
+
+pub const SALES_TEMPLATE: &str = "project_code,plot_number,customer_lookup,payment_mode,agreed_price,sale_date,amount_paid\n\
+AG-P1,AG-P1-003,0722000000,lipa_pole_pole_interest_free,755000,2023-06-01,300000\n\
+AG-P1,AG-P1-004,12345678,full_cash,720000,2024-02-14,720000\n";
 
 fn non_empty(s: &str) -> Option<String> {
     let s = s.trim();
@@ -90,6 +95,72 @@ pub fn parse_customers_csv(text: &str) -> Vec<ParsedRow<CreateCustomerInput>> {
                     phone: record.get(2).and_then(non_empty),
                     id_number: record.get(3).and_then(non_empty),
                     source: record.get(4).and_then(non_empty),
+                })
+            })();
+            ParsedRow { row, result }
+        })
+        .collect()
+}
+
+fn parse_payment_mode(s: &str) -> Result<PaymentMode, String> {
+    match s.trim() {
+        "full_cash" => Ok(PaymentMode::FullCash),
+        "lipa_pole_pole_interest_free" => Ok(PaymentMode::LipaPolePoleInterestFree),
+        "lipa_pole_pole_interest_bearing" => Ok(PaymentMode::LipaPolePoleInterestBearing),
+        other => Err(format!(
+            "payment_mode \"{other}\" isn't recognised — use full_cash, \
+             lipa_pole_pole_interest_free, or lipa_pole_pole_interest_bearing"
+        )),
+    }
+}
+
+/// A row of *historical* sales — see `domain::BulkSaleRow`'s module
+/// docs for why `amount_paid` carries the actual balance already
+/// repaid instead of assuming a fresh sale starting at zero.
+pub fn parse_sales_csv(text: &str) -> Vec<ParsedRow<BulkSaleRow>> {
+    let mut reader = csv::ReaderBuilder::new().trim(csv::Trim::All).from_reader(text.as_bytes());
+    reader
+        .records()
+        .enumerate()
+        .map(|(idx, record)| {
+            let row = idx as u32 + 1;
+            let result = (|| -> Result<BulkSaleRow, String> {
+                let record = record.map_err(|e| format!("couldn't read this row: {e}"))?;
+                let project_code = record.get(0).unwrap_or("").trim();
+                if project_code.is_empty() {
+                    return Err("project_code is required".to_string());
+                }
+                let plot_number = record.get(1).unwrap_or("").trim();
+                if plot_number.is_empty() {
+                    return Err("plot_number is required".to_string());
+                }
+                let customer_lookup = record.get(2).unwrap_or("").trim();
+                if customer_lookup.is_empty() {
+                    return Err(
+                        "customer_lookup is required (an existing customer's ID number, phone, or email)"
+                            .to_string(),
+                    );
+                }
+                let payment_mode = parse_payment_mode(record.get(3).unwrap_or(""))?;
+                let agreed_price = Decimal::from_str(record.get(4).unwrap_or("").trim())
+                    .map_err(|_| "agreed_price must be a number".to_string())?;
+                let sale_date = NaiveDate::parse_from_str(record.get(5).unwrap_or("").trim(), "%Y-%m-%d")
+                    .map_err(|_| "sale_date must be YYYY-MM-DD".to_string())?;
+                let amount_paid_field = record.get(6).unwrap_or("").trim();
+                let amount_paid = if amount_paid_field.is_empty() {
+                    Decimal::ZERO
+                } else {
+                    Decimal::from_str(amount_paid_field)
+                        .map_err(|_| "amount_paid must be a number".to_string())?
+                };
+                Ok(BulkSaleRow {
+                    project_code: project_code.to_string(),
+                    plot_number: plot_number.to_string(),
+                    customer_lookup: customer_lookup.to_string(),
+                    payment_mode,
+                    agreed_price,
+                    sale_date,
+                    amount_paid,
                 })
             })();
             ParsedRow { row, result }
