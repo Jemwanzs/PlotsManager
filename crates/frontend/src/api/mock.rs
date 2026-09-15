@@ -11,11 +11,11 @@ use chrono::{NaiveDate, Utc};
 use domain::{
     loan_status_meta, plot_status_meta as status_meta, AreaUnit, ApiError, AuthSession,
     CreateCustomerInput, CreatePlotInput, CreateProjectInput, CreateSaleInput, Customer,
-    CustomerDetail, CustomerSaleView, CustomerSummary, DashboardSummary, LoanAccountDetail,
-    LoanAccountStatus, Organization, Payment, PaymentMode, PaymentStatus,
+    CustomerDetail, CustomerSaleView, CustomerSummary, DashboardSummary, LeadStage,
+    LoanAccountDetail, LoanAccountStatus, Organization, Payment, PaymentMode, PaymentStatus,
     PlatformOrganizationDetail, PlatformOrganizationSummary, Plot, PlotLoanAccount, PlotSale,
     PlotStatus, PlotWithColor, Project, ProjectStatus, ProjectSummary, RecordPaymentInput,
-    SignupInput, User,
+    SignupInput, UpdateLeadInput, User,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -336,10 +336,28 @@ impl MockApi {
             phone: input.phone.filter(|s| !s.trim().is_empty()),
             id_number: input.id_number.filter(|s| !s.trim().is_empty()),
             assigned_agent_id: Some(db.demo_user.id),
+            stage: LeadStage::New,
+            source: input.source.filter(|s| !s.trim().is_empty()),
+            next_follow_up_at: None,
+            notes: None,
             created_at: Utc::now(),
         };
         db.customers.push(customer.clone());
         Ok(customer)
+    }
+
+    pub async fn update_lead(&self, id: Uuid, input: UpdateLeadInput) -> Result<Customer, ApiError> {
+        settle(200).await;
+        let mut db = self.db.lock().unwrap();
+        let customer = db
+            .customers
+            .iter_mut()
+            .find(|c| c.id == id)
+            .ok_or(ApiError::NotFound)?;
+        customer.stage = input.stage;
+        customer.next_follow_up_at = input.next_follow_up_at;
+        customer.notes = input.notes.filter(|s| !s.trim().is_empty());
+        Ok(customer.clone())
     }
 
     pub async fn get_customer(&self, id: Uuid) -> Result<CustomerDetail, ApiError> {
@@ -700,6 +718,10 @@ fn seed() -> MockDb {
             phone: Some("0722 000 111".to_string()),
             id_number: Some("29889001".to_string()),
             assigned_agent_id: Some(demo_user.id),
+            stage: LeadStage::New,
+            source: Some("Referral".to_string()),
+            next_follow_up_at: None,
+            notes: None,
             created_at: Utc::now(),
         },
         Customer {
@@ -710,6 +732,24 @@ fn seed() -> MockDb {
             phone: Some("0733 222 444".to_string()),
             id_number: Some("30112233".to_string()),
             assigned_agent_id: Some(demo_user.id),
+            stage: LeadStage::New,
+            source: Some("Walk-in".to_string()),
+            next_follow_up_at: None,
+            notes: None,
+            created_at: Utc::now(),
+        },
+        Customer {
+            id: Uuid::new_v4(),
+            organization_id: organization.id,
+            full_name: "Peter Kariuki".to_string(),
+            email: Some("p.kariuki@example.com".to_string()),
+            phone: Some("0711 555 222".to_string()),
+            id_number: None,
+            assigned_agent_id: Some(demo_user.id),
+            stage: LeadStage::SiteVisit,
+            source: Some("Website".to_string()),
+            next_follow_up_at: Some(Utc::now().date_naive() + chrono::Duration::days(3)),
+            notes: Some("Interested in a corner plot at Riverside Meadows, budget ~1.2M.".to_string()),
             created_at: Utc::now(),
         },
     ];
@@ -725,6 +765,10 @@ fn seed() -> MockDb {
     let mut payments = Vec::new();
     let today = Utc::now().date_naive();
     let mut next_customer = 0usize;
+    // Only the first two seeded customers (James, Grace) get a sale —
+    // Peter stays a pure lead with no plots_owned, so the Leads view has
+    // something real to show instead of an always-empty demo.
+    let converted_customer_pool = 2.min(customers.len());
     for plot in plots.iter_mut() {
         let payment_mode = match plot.status {
             PlotStatus::Reserved | PlotStatus::Sold | PlotStatus::Transferred => {
@@ -735,7 +779,7 @@ fn seed() -> MockDb {
             | PlotStatus::TransferInProgress => PaymentMode::LipaPolePoleInterestFree,
             _ => continue,
         };
-        let customer = &customers[next_customer % customers.len()];
+        let customer = &customers[next_customer % converted_customer_pool];
         next_customer += 1;
 
         plot.assigned_customer_id = Some(customer.id);

@@ -3,7 +3,7 @@
 //! real API responses) need the *same* mapping — see the module docs on
 //! `api_types` for why that means it lives here, not in either crate.
 
-use crate::{LoanAccountStatus, PlotStatus};
+use crate::{LeadStage, LoanAccountStatus, PlotStatus};
 
 /// Matches the suggested defaults in docs/05-project-and-plot-management.md.
 /// Organisations can reconfigure both per docs/05 once `plot_status_config`
@@ -42,5 +42,15 @@ pub fn loan_status_meta(status: LoanAccountStatus) -> (&'static str, &'static st
         LoanAccountStatus::Defaulted => ("Defaulted", "#7f1d1d"),
         LoanAccountStatus::RepossessedOrReallocated => ("Repossessed", "#111827"),
         LoanAccountStatus::Closed => ("Closed", "#6b7280"),
+    }
+}
+
+pub fn lead_stage_meta(stage: LeadStage) -> (&'static str, &'static str) {
+    match stage {
+        LeadStage::New => ("New", "#38bdf8"),
+        LeadStage::Contacted => ("Contacted", "#eab308"),
+        LeadStage::SiteVisit => ("Site Visit", "#f97316"),
+        LeadStage::Negotiating => ("Negotiating", "#9333ea"),
+        LeadStage::Lost => ("Lost", "#6b7280"),
     }
 }

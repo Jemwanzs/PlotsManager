@@ -26,7 +26,7 @@ use domain::{
     ApiError, AuthSession, CreateCustomerInput, CreatePlotInput, CreateProjectInput,
     CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary, LoanAccountDetail,
     LoginInput, PlatformOrganizationDetail, PlatformOrganizationSummary, PlotWithColor,
-    ProjectSummary, RecordPaymentInput, SignupInput,
+    ProjectSummary, RecordPaymentInput, SignupInput, UpdateLeadInput,
 };
 
 #[derive(Clone)]
@@ -167,6 +167,15 @@ impl HttpApi {
         input: CreateCustomerInput,
     ) -> Result<domain::Customer, ApiError> {
         self.post("/api/v1/customers", &input).await
+    }
+
+    pub async fn update_lead(
+        &self,
+        id: Uuid,
+        input: UpdateLeadInput,
+    ) -> Result<domain::Customer, ApiError> {
+        self.post(&format!("/api/v1/customers/{id}/stage"), &input)
+            .await
     }
 
     pub async fn create_sale(&self, input: CreateSaleInput) -> Result<domain::PlotSale, ApiError> {

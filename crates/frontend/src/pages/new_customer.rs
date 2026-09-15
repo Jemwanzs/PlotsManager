@@ -15,6 +15,7 @@ pub fn NewCustomer() -> impl IntoView {
     let phone = RwSignal::new(String::new());
     let email = RwSignal::new(String::new());
     let id_number = RwSignal::new(String::new());
+    let source = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
     let submitting = RwSignal::new(false);
 
@@ -33,6 +34,7 @@ pub fn NewCustomer() -> impl IntoView {
             phone: Some(phone.get()).filter(|s| !s.is_empty()),
             email: Some(email.get()).filter(|s| !s.is_empty()),
             id_number: Some(id_number.get()).filter(|s| !s.is_empty()),
+            source: Some(source.get()).filter(|s| !s.is_empty()),
         };
 
         spawn_local(async move {
@@ -96,6 +98,23 @@ pub fn NewCustomer() -> impl IntoView {
                         prop:value=id_number
                         on:input=move |ev| id_number.set(event_target_value(&ev))
                     />
+                </div>
+
+                <div class="field">
+                    <label for="source">"How did they find us?"</label>
+                    <select
+                        id="source"
+                        prop:value=source
+                        on:change=move |ev| source.set(event_target_value(&ev))
+                    >
+                        <option value="">"Not sure yet"</option>
+                        <option value="Walk-in">"Walk-in"</option>
+                        <option value="Referral">"Referral"</option>
+                        <option value="Website">"Website"</option>
+                        <option value="Phone inquiry">"Phone inquiry"</option>
+                        <option value="Agent outreach">"Agent outreach"</option>
+                        <option value="Social media">"Social media"</option>
+                    </select>
                 </div>
 
                 <button type="submit" class="btn btn-primary" disabled=submitting>

@@ -1,14 +1,47 @@
 use leptos::prelude::*;
 use leptos_router::components::A;
 
-use crate::api::CustomerSummary;
+use crate::api::{lead_stage_meta, CustomerSummary, LeadStage};
 use crate::auth::use_api;
-use crate::components::{EmptyState, ErrorAlert, LoadingState};
+use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
+
+#[derive(Clone, Copy, PartialEq)]
+enum PipelineFilter {
+    All,
+    Leads,
+    Converted,
+    Lost,
+}
+
+impl PipelineFilter {
+    fn matches(self, summary: &CustomerSummary) -> bool {
+        match self {
+            PipelineFilter::All => true,
+            PipelineFilter::Converted => summary.plots_owned > 0,
+            PipelineFilter::Lost => {
+                summary.plots_owned == 0 && summary.customer.stage == LeadStage::Lost
+            }
+            PipelineFilter::Leads => {
+                summary.plots_owned == 0 && summary.customer.stage != LeadStage::Lost
+            }
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            PipelineFilter::All => "All",
+            PipelineFilter::Leads => "Leads",
+            PipelineFilter::Converted => "Converted",
+            PipelineFilter::Lost => "Lost",
+        }
+    }
+}
 
 #[component]
 pub fn CustomersList() -> impl IntoView {
     let api = use_api();
     let search = RwSignal::new(String::new());
+    let filter = RwSignal::new(PipelineFilter::All);
 
     let customers = LocalResource::new(move || {
         let api = api.clone();
@@ -32,6 +65,29 @@ pub fn CustomersList() -> impl IntoView {
             on:input=move |ev| search.set(event_target_value(&ev))
         />
 
+        <div class="filter-tabs">
+            {[
+                PipelineFilter::All,
+                PipelineFilter::Leads,
+                PipelineFilter::Converted,
+                PipelineFilter::Lost,
+            ]
+                .into_iter()
+                .map(|f| {
+                    view! {
+                        <button
+                            type="button"
+                            class="filter-tab"
+                            class:active=move || filter.get() == f
+                            on:click=move |_| filter.set(f)
+                        >
+                            {f.label()}
+                        </button>
+                    }
+                })
+                .collect_view()}
+        </div>
+
         <Suspense fallback=|| view! { <LoadingState label="Loading customers…" /> }>
             {move || {
                 customers
@@ -40,8 +96,10 @@ pub fn CustomersList() -> impl IntoView {
                     .map(|result| match result {
                         Ok(list) => {
                             let query = search.get().to_lowercase();
+                            let active_filter = filter.get();
                             let filtered: Vec<CustomerSummary> = list
                                 .into_iter()
+                                .filter(|c| active_filter.matches(c))
                                 .filter(|c| {
                                     query.is_empty()
                                         || c.customer.full_name.to_lowercase().contains(&query)
@@ -54,8 +112,8 @@ pub fn CustomersList() -> impl IntoView {
                                 view! {
                                     <EmptyState
                                         icon="\u{1F464}"
-                                        title="No customers match your search"
-                                        detail="Try a different name, phone number, or email."
+                                        title="Nothing here"
+                                        detail="Try a different filter, or a different name, phone number, or email."
                                     />
                                 }
                                     .into_any()
@@ -83,9 +141,19 @@ pub fn CustomersList() -> impl IntoView {
 #[component]
 fn CustomerCard(summary: CustomerSummary) -> impl IntoView {
     let href = format!("/customers/{}", summary.customer.id);
+    let converted = summary.plots_owned > 0;
+    let (stage_label, stage_color) = if converted {
+        ("Converted", "#15734f")
+    } else {
+        lead_stage_meta(summary.customer.stage)
+    };
+
     view! {
         <A href=href attr:class="project-card card">
-            <h3>{summary.customer.full_name.clone()}</h3>
+            <div class="page-header" style="margin-bottom: var(--space-2)">
+                <h3 class="mt-0">{summary.customer.full_name.clone()}</h3>
+                <StatusBadge label=stage_label.to_string() color=stage_color.to_string() />
+            </div>
             <div class="meta">
                 {summary.customer.phone.clone().unwrap_or_else(|| "No phone on file".to_string())}
                 " · "

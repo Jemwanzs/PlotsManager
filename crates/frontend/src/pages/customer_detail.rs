@@ -1,11 +1,70 @@
+use chrono::NaiveDate;
 use leptos::prelude::*;
+use leptos::task::spawn_local;
 use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
 use uuid::Uuid;
 
+use crate::api::{lead_stage_meta, ApiClient, ApiError, LeadStage, UpdateLeadInput};
 use crate::auth::use_api;
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
 use crate::format::{format_kes, format_payment_mode};
+
+fn stage_value(stage: LeadStage) -> &'static str {
+    match stage {
+        LeadStage::New => "new",
+        LeadStage::Contacted => "contacted",
+        LeadStage::SiteVisit => "site_visit",
+        LeadStage::Negotiating => "negotiating",
+        LeadStage::Lost => "lost",
+    }
+}
+
+fn stage_from_value(value: &str) -> LeadStage {
+    match value {
+        "contacted" => LeadStage::Contacted,
+        "site_visit" => LeadStage::SiteVisit,
+        "negotiating" => LeadStage::Negotiating,
+        "lost" => LeadStage::Lost,
+        _ => LeadStage::New,
+    }
+}
+
+/// A free function rather than a closure captured from the component's
+/// top level — see the identical note in
+/// `pages/platform_organization_detail.rs`: this is called from inside
+/// `<Suspense>`'s reactive render closure, where moving a pre-built
+/// closure into a fresh `on:click` each render hits E0525.
+fn save_lead_update(
+    api: ApiClient,
+    id: Uuid,
+    stage: LeadStage,
+    next_follow_up_at: Option<NaiveDate>,
+    notes: Option<String>,
+    saving: RwSignal<bool>,
+    error: RwSignal<Option<String>>,
+    refresh: RwSignal<u32>,
+) {
+    if saving.get() {
+        return;
+    }
+    error.set(None);
+    saving.set(true);
+    spawn_local(async move {
+        let result = api
+            .update_lead(
+                id,
+                UpdateLeadInput { stage, next_follow_up_at, notes },
+            )
+            .await;
+        match result {
+            Ok(_) => refresh.update(|n| *n += 1),
+            Err(ApiError::InvalidCredentials(msg)) => error.set(Some(msg)),
+            Err(e) => error.set(Some(format!("Couldn't save: {e}"))),
+        }
+        saving.set(false);
+    });
+}
 
 #[component]
 pub fn CustomerDetail() -> impl IntoView {
@@ -13,12 +72,20 @@ pub fn CustomerDetail() -> impl IntoView {
     let params = use_params_map();
     let customer_id = move || -> Option<Uuid> { params.read().get("id").and_then(|id| Uuid::parse_str(&id).ok()) };
 
-    let detail = LocalResource::new(move || {
+    let save_error = RwSignal::new(None::<String>);
+    let saving = RwSignal::new(false);
+    let refresh = RwSignal::new(0u32);
+
+    let detail = LocalResource::new({
         let api = api.clone();
-        async move {
-            match customer_id() {
-                Some(id) => Some(api.get_customer(id).await),
-                None => None,
+        move || {
+            let api = api.clone();
+            refresh.get();
+            async move {
+                match customer_id() {
+                    Some(id) => Some(api.get_customer(id).await),
+                    None => None,
+                }
             }
         }
     });
@@ -31,18 +98,102 @@ pub fn CustomerDetail() -> impl IntoView {
                     .map(|wrapped| wrapped.take())
                     .flatten()
                     .map(|result| match result {
-                        Ok(d) => view! {
-                            <div class="page-header">
-                                <div>
-                                    <h1>{d.customer.full_name.clone()}</h1>
-                                    <p>
-                                        {d.customer.phone.clone().unwrap_or_else(|| "No phone on file".to_string())}
-                                        " · "
-                                        {d.customer.email.clone().unwrap_or_else(|| "No email on file".to_string())}
-                                        {d.customer.id_number.clone().map(|id| format!(" · ID {id}")).unwrap_or_default()}
-                                    </p>
+                        Ok(d) => {
+                            let converted = !d.sales.is_empty();
+                            let (stage_label, stage_color) = if converted {
+                                ("Converted", "#15734f")
+                            } else {
+                                lead_stage_meta(d.customer.stage)
+                            };
+                            let customer_id = d.customer.id;
+                            let api_for_save = api.clone();
+
+                            let stage_signal = RwSignal::new(d.customer.stage);
+                            let follow_up_signal = RwSignal::new(
+                                d.customer.next_follow_up_at.map(|dt| dt.to_string()).unwrap_or_default(),
+                            );
+                            let notes_signal = RwSignal::new(d.customer.notes.clone().unwrap_or_default());
+
+                            view! {
+                                <div class="page-header">
+                                    <div>
+                                        <h1>{d.customer.full_name.clone()}</h1>
+                                        <p>
+                                            {d.customer.phone.clone().unwrap_or_else(|| "No phone on file".to_string())}
+                                            " · "
+                                            {d.customer.email.clone().unwrap_or_else(|| "No email on file".to_string())}
+                                            {d.customer.id_number.clone().map(|id| format!(" · ID {id}")).unwrap_or_default()}
+                                        </p>
+                                    </div>
+                                    <StatusBadge label=stage_label.to_string() color=stage_color.to_string() />
                                 </div>
-                            </div>
+
+                                {if !converted {
+                                    let api = api_for_save.clone();
+                                    view! {
+                                        <div class="card" style="max-width: 480px; margin-bottom: var(--space-5)">
+                                            <h2 class="mt-0">"Pipeline"</h2>
+                                            {d.customer.source.clone().map(|s| view! {
+                                                <p class="meta">"Source: " {s}</p>
+                                            })}
+
+                                            {move || save_error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+
+                                            <div class="field">
+                                                <label for="stage">"Stage"</label>
+                                                <select
+                                                    id="stage"
+                                                    prop:value=move || stage_value(stage_signal.get()).to_string()
+                                                    on:change=move |ev| stage_signal.set(stage_from_value(&event_target_value(&ev)))
+                                                >
+                                                    <option value="new">"New"</option>
+                                                    <option value="contacted">"Contacted"</option>
+                                                    <option value="site_visit">"Site Visit"</option>
+                                                    <option value="negotiating">"Negotiating"</option>
+                                                    <option value="lost">"Lost"</option>
+                                                </select>
+                                            </div>
+
+                                            <div class="field">
+                                                <label for="follow_up">"Next follow-up"</label>
+                                                <input
+                                                    id="follow_up"
+                                                    type="date"
+                                                    prop:value=follow_up_signal
+                                                    on:input=move |ev| follow_up_signal.set(event_target_value(&ev))
+                                                />
+                                            </div>
+
+                                            <div class="field">
+                                                <label for="notes">"Notes"</label>
+                                                <textarea
+                                                    id="notes"
+                                                    prop:value=notes_signal
+                                                    on:input=move |ev| notes_signal.set(event_target_value(&ev))
+                                                ></textarea>
+                                            </div>
+
+                                            <button
+                                                type="button"
+                                                class="btn btn-primary"
+                                                disabled=move || saving.get()
+                                                on:click=move |_| {
+                                                    let follow_up = NaiveDate::parse_from_str(&follow_up_signal.get(), "%Y-%m-%d").ok();
+                                                    let notes = Some(notes_signal.get()).filter(|s| !s.trim().is_empty());
+                                                    save_lead_update(
+                                                        api.clone(), customer_id, stage_signal.get(), follow_up, notes,
+                                                        saving, save_error, refresh,
+                                                    );
+                                                }
+                                            >
+                                                {move || if saving.get() { "Saving…" } else { "Save" }}
+                                            </button>
+                                        </div>
+                                    }
+                                        .into_any()
+                                } else {
+                                    view! {}.into_any()
+                                }}
 
                             <h2>"Plots"</h2>
                             {if d.sales.is_empty() {
@@ -89,7 +240,8 @@ pub fn CustomerDetail() -> impl IntoView {
                                     .into_any()
                             }}
                         }
-                            .into_any(),
+                            .into_any()
+                        }
                         Err(e) => view! { <ErrorAlert message=format!("Couldn't load this customer: {e}") /> }
                             .into_any(),
                     })

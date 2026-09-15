@@ -1,19 +1,23 @@
 use axum::extract::Path;
+use axum::routing::post;
 use axum::{extract::State, routing::get, Json, Router};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use domain::{
     Customer, CustomerDetail, CustomerSaleView, CustomerSummary, CreateCustomerInput,
+    UpdateLeadInput,
 };
 use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extractors::AuthUser;
-use crate::pg_enum::from_pg;
+use crate::pg_enum::{from_pg, to_pg};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/api/v1/customers", get(list_customers).post(create_customer))
+    Router::new()
+        .route("/api/v1/customers", get(list_customers).post(create_customer))
         .route("/api/v1/customers/:id", get(get_customer))
+        .route("/api/v1/customers/:id/stage", post(update_lead))
 }
 
 #[derive(sqlx::FromRow)]
@@ -25,24 +29,40 @@ struct CustomerRow {
     phone: Option<String>,
     id_number: Option<String>,
     assigned_agent_id: Option<Uuid>,
+    stage: String,
+    source: Option<String>,
+    next_follow_up_at: Option<NaiveDate>,
+    notes: Option<String>,
     created_at: DateTime<Utc>,
 }
 
-impl From<CustomerRow> for Customer {
-    fn from(r: CustomerRow) -> Self {
-        Customer {
-            id: r.id,
-            organization_id: r.organization_id,
-            full_name: r.full_name,
-            email: r.email,
-            phone: r.phone,
-            id_number: r.id_number,
-            assigned_agent_id: r.assigned_agent_id,
-            created_at: r.created_at,
-        }
+impl CustomerRow {
+    fn into_domain(self) -> Result<Customer, AppError> {
+        Ok(Customer {
+            id: self.id,
+            organization_id: self.organization_id,
+            full_name: self.full_name,
+            email: self.email,
+            phone: self.phone,
+            id_number: self.id_number,
+            assigned_agent_id: self.assigned_agent_id,
+            stage: from_pg("customers.stage", &self.stage)?,
+            source: self.source,
+            next_follow_up_at: self.next_follow_up_at,
+            notes: self.notes,
+            created_at: self.created_at,
+        })
     }
 }
 
+const CUSTOMER_COLUMNS: &str = "id, organization_id, full_name, email, phone, id_number, \
+    assigned_agent_id, stage, source, next_follow_up_at, notes, created_at";
+
+// Manually flattened rather than `#[sqlx(flatten)]` on a nested
+// `CustomerRow` — that attribute's support was uncertain against the
+// pinned sqlx 0.7.4 when this was last checked (see routes/loan_accounts.rs
+// history), so every *SummaryRow/*Row pair in this codebase spells out
+// the columns twice instead of risking it.
 #[derive(sqlx::FromRow)]
 struct CustomerSummaryRow {
     id: Uuid,
@@ -52,8 +72,34 @@ struct CustomerSummaryRow {
     phone: Option<String>,
     id_number: Option<String>,
     assigned_agent_id: Option<Uuid>,
+    stage: String,
+    source: Option<String>,
+    next_follow_up_at: Option<NaiveDate>,
+    notes: Option<String>,
     created_at: DateTime<Utc>,
     plots_owned: i64,
+}
+
+impl CustomerSummaryRow {
+    fn into_domain(self) -> Result<CustomerSummary, AppError> {
+        Ok(CustomerSummary {
+            customer: Customer {
+                id: self.id,
+                organization_id: self.organization_id,
+                full_name: self.full_name,
+                email: self.email,
+                phone: self.phone,
+                id_number: self.id_number,
+                assigned_agent_id: self.assigned_agent_id,
+                stage: from_pg("customers.stage", &self.stage)?,
+                source: self.source,
+                next_follow_up_at: self.next_follow_up_at,
+                notes: self.notes,
+                created_at: self.created_at,
+            },
+            plots_owned: self.plots_owned as u32,
+        })
+    }
 }
 
 async fn list_customers(
@@ -62,7 +108,8 @@ async fn list_customers(
 ) -> Result<Json<Vec<CustomerSummary>>, AppError> {
     let rows: Vec<CustomerSummaryRow> = sqlx::query_as(
         r#"
-        select c.id, c.organization_id, c.full_name, c.email, c.phone, c.id_number, c.assigned_agent_id, c.created_at,
+        select c.id, c.organization_id, c.full_name, c.email, c.phone, c.id_number,
+            c.assigned_agent_id, c.stage, c.source, c.next_follow_up_at, c.notes, c.created_at,
             count(pl.id) as plots_owned
         from customers c
         left join plots pl on pl.assigned_customer_id = c.id
@@ -77,20 +124,8 @@ async fn list_customers(
 
     let summaries = rows
         .into_iter()
-        .map(|r| CustomerSummary {
-            customer: Customer {
-                id: r.id,
-                organization_id: r.organization_id,
-                full_name: r.full_name,
-                email: r.email,
-                phone: r.phone,
-                id_number: r.id_number,
-                assigned_agent_id: r.assigned_agent_id,
-                created_at: r.created_at,
-            },
-            plots_owned: r.plots_owned as u32,
-        })
-        .collect();
+        .map(CustomerSummaryRow::into_domain)
+        .collect::<Result<Vec<_>, AppError>>()?;
 
     Ok(Json(summaries))
 }
@@ -123,24 +158,52 @@ async fn create_customer(
 
     let email = input.email.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let phone = input.phone.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let source = input.source.as_deref().map(str::trim).filter(|s| !s.is_empty());
 
-    let row: CustomerRow = sqlx::query_as(
+    let row: CustomerRow = sqlx::query_as(&format!(
         r#"
-        insert into customers (organization_id, full_name, email, phone, id_number, assigned_agent_id)
-        values ($1, $2, $3, $4, $5, $6)
-        returning id, organization_id, full_name, email, phone, id_number, assigned_agent_id, created_at
-        "#,
-    )
+        insert into customers (organization_id, full_name, email, phone, id_number, assigned_agent_id, source)
+        values ($1, $2, $3, $4, $5, $6, $7)
+        returning {CUSTOMER_COLUMNS}
+        "#
+    ))
     .bind(auth.organization_id)
     .bind(full_name)
     .bind(email)
     .bind(phone)
     .bind(id_number)
     .bind(auth.user_id)
+    .bind(source)
     .fetch_one(&state.db)
     .await?;
 
-    Ok(Json(row.into()))
+    Ok(Json(row.into_domain()?))
+}
+
+async fn update_lead(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(input): Json<UpdateLeadInput>,
+) -> Result<Json<Customer>, AppError> {
+    let notes = input.notes.as_deref().map(str::trim).filter(|s| !s.is_empty());
+
+    let row: Option<CustomerRow> = sqlx::query_as(&format!(
+        r#"
+        update customers set stage = $1, next_follow_up_at = $2, notes = $3
+        where id = $4 and organization_id = $5
+        returning {CUSTOMER_COLUMNS}
+        "#
+    ))
+    .bind(to_pg(&input.stage))
+    .bind(input.next_follow_up_at)
+    .bind(notes)
+    .bind(id)
+    .bind(auth.organization_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    Ok(Json(row.ok_or(AppError::NotFound)?.into_domain()?))
 }
 
 #[derive(sqlx::FromRow)]
@@ -161,12 +224,9 @@ async fn get_customer(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<CustomerDetail>, AppError> {
-    let customer_row: Option<CustomerRow> = sqlx::query_as(
-        r#"
-        select id, organization_id, full_name, email, phone, id_number, assigned_agent_id, created_at
-        from customers where id = $1 and organization_id = $2
-        "#,
-    )
+    let customer_row: Option<CustomerRow> = sqlx::query_as(&format!(
+        r#"select {CUSTOMER_COLUMNS} from customers where id = $1 and organization_id = $2"#
+    ))
     .bind(id)
     .bind(auth.organization_id)
     .fetch_optional(&state.db)
@@ -211,7 +271,7 @@ async fn get_customer(
         .collect::<Result<Vec<_>, AppError>>()?;
 
     Ok(Json(CustomerDetail {
-        customer: customer_row.into(),
+        customer: customer_row.into_domain()?,
         sales,
     }))
 }

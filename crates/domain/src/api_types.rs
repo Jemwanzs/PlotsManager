@@ -11,7 +11,10 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{AreaUnit, Customer, Payment, PaymentMode, Plot, PlotLoanAccount, ProjectStatus, User};
+use crate::{
+    AreaUnit, Customer, LeadStage, Payment, PaymentMode, Plot, PlotLoanAccount, ProjectStatus,
+    User,
+};
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ApiError {
@@ -148,6 +151,22 @@ pub struct CreateCustomerInput {
     pub email: Option<String>,
     pub phone: Option<String>,
     pub id_number: Option<String>,
+    /// How this lead found us — free text (e.g. "Referral", "Walk-in",
+    /// "Website"), not a fixed list: the legacy system and every spec
+    /// doc are silent on a standard set, so this isn't a constraint to
+    /// invent one.
+    pub source: Option<String>,
+}
+
+/// Moving a lead through the pipeline (`docs/07`'s "Sales funnel") — a
+/// separate input from `CreateCustomerInput` because updating stage/
+/// notes/follow-up happens repeatedly over a lead's life, independently
+/// of (and usually much more often than) editing their contact details.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateLeadInput {
+    pub stage: LeadStage,
+    pub next_follow_up_at: Option<NaiveDate>,
+    pub notes: Option<String>,
 }
 
 /// What it takes to reserve a plot for a customer — the first step of the
