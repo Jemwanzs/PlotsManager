@@ -1,0 +1,44 @@
+use axum::async_trait;
+use axum::extract::FromRequestParts;
+use axum::http::{header, request::Parts};
+use uuid::Uuid;
+
+use crate::auth::verify_session_token;
+use crate::error::AppError;
+use crate::state::AppState;
+
+/// The authenticated caller, extracted from a verified JWT
+/// (`crates/backend/src/auth.rs`). `organization_id` rides in the token
+/// itself, so every handler that uses this extractor gets it for free —
+/// scope every query to it, that's the primary tenant-isolation boundary
+/// (docs/10-database-and-security-design.md; RLS is defense in depth
+/// behind this, not a substitute for it).
+pub struct AuthUser {
+    pub user_id: Uuid,
+    pub organization_id: Uuid,
+}
+
+#[async_trait]
+impl FromRequestParts<AppState> for AuthUser {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let token = parts
+            .headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .ok_or(AppError::Unauthorized)?;
+
+        let claims =
+            verify_session_token(token, &state.jwt_secret).map_err(|_| AppError::Unauthorized)?;
+
+        Ok(AuthUser {
+            user_id: claims.sub,
+            organization_id: claims.organization_id,
+        })
+    }
+}

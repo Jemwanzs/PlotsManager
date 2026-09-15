@@ -45,13 +45,29 @@ psql "$DATABASE_URL" -f database/seeds/0001_subscription_plans.sql
 
 ## Local development
 
-Any Postgres 14+ works. Simplest local option — Docker:
+Any Postgres 14+ works — either a Docker container or a native install.
 
 ```bash
 docker run -d --name rem-postgres -p 5432:5432 \
     -e POSTGRES_PASSWORD=postgres \
     postgres:16
+createdb -h 127.0.0.1 -U postgres real_estate_manager   # dedicated db, not the default "postgres" one
 ```
 
-Then set `DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres`
-in `.env` (see `.env.example`).
+Then set `DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/real_estate_manager`
+in `.env` (see `.env.example`). Two things worth knowing before you hit
+either:
+
+- **Use a dedicated database name**, not the connection's default
+  `postgres` database — that one is easy to end up sharing with whatever
+  else runs locally on the same Postgres instance, and migrations don't
+  namespace themselves.
+- **Prefer `127.0.0.1` over `localhost`.** If a native Postgres service
+  is already running on the machine (common on Windows — a PostgreSQL
+  installer registers itself as a service bound to `0.0.0.0:5432`),
+  `localhost` can resolve to `::1` and land on *that* service instead of
+  your Docker container, even though the connection succeeds and looks
+  fine — you just end up migrating and querying the wrong server
+  entirely, silently. `127.0.0.1` forces IPv4 and avoids the ambiguity.
+  (Symptom if this happens to you: `sqlx::migrate!` logs no error and the
+  app starts, but the tables never appear where you're looking for them.)

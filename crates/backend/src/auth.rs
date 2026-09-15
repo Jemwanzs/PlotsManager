@@ -1,8 +1,10 @@
 //! Password hashing and session-token primitives the backend owns outright
 //! (see docs/10-database-and-security-design.md — no Auth-as-a-service
-//! dependency). Signup/login HTTP handlers aren't wired up yet — that's
-//! the "Rust APIs & Authentication" roadmap phase — but these primitives
-//! are complete and tested so that work is wiring, not building.
+//! dependency). `verify_password`/`issue_session_token` back the login
+//! handler (`routes/auth.rs`); `hash_password` isn't called yet since
+//! there's no signup/create-user endpoint (users only exist via
+//! `database/seeds/`), but it's the same tested primitive that endpoint
+//! will use once it exists.
 
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
@@ -22,6 +24,7 @@ pub enum AuthError {
     InvalidToken,
 }
 
+#[allow(dead_code)] // no signup/create-user endpoint yet — see the module docs above
 pub fn hash_password(plain: &str) -> Result<String, AuthError> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
@@ -83,6 +86,16 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore]
+    fn print_dev_seed_hash() {
+        // `cargo test -p backend print_dev_seed_hash -- --nocapture --ignored`
+        // to regenerate database/seeds/0002_dev_demo.sql's hash if the dev
+        // password ever changes. Ignored by default so it doesn't run (or
+        // spam output) during normal test runs.
+        println!("{}", hash_password("password123").unwrap());
+    }
+
+    #[test]
     fn password_hash_roundtrip() {
         let hash = hash_password("correct horse battery staple").unwrap();
         assert!(verify_password("correct horse battery staple", &hash).unwrap());
@@ -120,11 +133,15 @@ mod tests {
 
     #[test]
     fn session_token_rejects_expired() {
+        // jsonwebtoken's default `Validation` has a 60s leeway for clock
+        // skew, so an offset has to clear that window to actually exercise
+        // expiry rejection (a `-1s` offset here would pass validation and
+        // make this test meaningless).
         let token = issue_session_token(
             Uuid::new_v4(),
             Uuid::new_v4(),
             "test-secret",
-            Duration::seconds(-1),
+            Duration::seconds(-120),
         )
         .unwrap();
         assert!(verify_session_token(&token, "test-secret").is_err());

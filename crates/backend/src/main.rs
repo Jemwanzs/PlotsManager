@@ -5,13 +5,12 @@ use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
-// Complete and tested (see the module's own tests), but not yet wired to
-// any HTTP route — signup/login handlers are later roadmap work
-// (docs/14-development-roadmap.md). Silence dead_code until then rather
-// than leaving real warnings that would mask new ones.
-#[allow(dead_code)]
 mod auth;
+mod error;
+mod extractors;
 mod paystack;
+mod pg_enum;
+mod routes;
 mod state;
 
 use state::AppState;
@@ -23,11 +22,6 @@ use state::AppState;
 /// in the schema is defense-in-depth behind this, not a substitute for
 /// it). See docs/10-database-and-security-design.md and
 /// docs/12-api-and-integration-design.md.
-///
-/// Today this only exposes a health check and the Paystack webhook
-/// receiver — the frontend is being built against mock data first
-/// (docs/14-development-roadmap.md), so most of this crate's eventual job
-/// (CRUD endpoints, auth handlers using `auth.rs`) doesn't exist yet.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
@@ -41,6 +35,7 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("DATABASE_URL").expect("DATABASE_URL must be set (see .env.example)");
     let paystack_secret_key =
         std::env::var("PAYSTACK_SECRET_KEY").expect("PAYSTACK_SECRET_KEY must be set");
+    let jwt_secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set");
 
     let db = PgPoolOptions::new()
         .max_connections(5)
@@ -53,11 +48,13 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         db,
         paystack_secret_key,
+        jwt_secret,
     };
 
     let app = Router::new()
         .route("/health", get(health))
         .merge(paystack::router())
+        .merge(routes::router())
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state);

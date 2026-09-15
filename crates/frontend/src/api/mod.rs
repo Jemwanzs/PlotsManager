@@ -3,15 +3,15 @@
 //! docs/12-api-and-integration-design.md and the module docs on `mock`.
 
 mod http;
-mod loan_status;
 mod mock;
-mod plot_status;
-mod types;
 
 use uuid::Uuid;
 
-pub use plot_status::status_meta;
-pub use types::*;
+// The request/response types (ApiError, ProjectSummary, CreateSaleInput,
+// ...) and the plot/loan status-color mappings live in `domain` — see its
+// `api_types`/`status_meta` module docs — so `backend` shares the exact
+// same definitions instead of a hand-kept-in-sync copy.
+pub use domain::{plot_status_meta as status_meta, *};
 
 #[derive(Clone)]
 pub enum ApiClient {

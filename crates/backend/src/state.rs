@@ -11,4 +11,6 @@ pub struct AppState {
     /// request-scoped queries once those exist.
     pub db: PgPool,
     pub paystack_secret_key: String,
+    /// Signs and verifies session tokens (`crates/backend/src/auth.rs`).
+    pub jwt_secret: String,
 }

@@ -1,17 +1,25 @@
+//! The actual wire contract between `frontend` and `backend` — request
+//! inputs and response shapes for every endpoint. Living here (not
+//! duplicated in each crate) is the whole point of a shared `domain`
+//! crate: `frontend::api::mock`, `frontend::api::http`, and every
+//! `crates/backend` route handler are all describing the same operations,
+//! so they share the same types rather than three hand-kept-in-sync
+//! copies. See docs/12-api-and-integration-design.md.
+
 use chrono::NaiveDate;
-use domain::{AreaUnit, Customer, Payment, PaymentMode, Plot, PlotLoanAccount, User};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+use crate::{AreaUnit, Customer, Payment, PaymentMode, Plot, PlotLoanAccount, ProjectStatus, User};
+
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ApiError {
     #[error("{0}")]
     InvalidCredentials(String),
     #[error("not found")]
     NotFound,
     #[error("not signed in")]
-    #[allow(dead_code)] // returned by a real 401 once api::http is wired up; nothing constructs it yet
     Unauthenticated,
     #[error("network error: {0}")]
     Network(String),
@@ -23,6 +31,12 @@ pub struct AuthSession {
     pub user: User,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoginInput {
+    pub email: String,
+    pub password: String,
+}
+
 /// A project plus the counts a list screen needs, without shipping every
 /// plot over the wire just to show "12 available / 40 plots".
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,7 +45,7 @@ pub struct ProjectSummary {
     pub name: String,
     pub code: String,
     pub location: String,
-    pub status: domain::ProjectStatus,
+    pub status: ProjectStatus,
     pub total_plots: u32,
     pub available_plots: u32,
     pub sold_plots: u32,
@@ -64,8 +78,8 @@ pub struct CreatePlotInput {
 }
 
 /// One row in a project's plot inventory, with its status color resolved
-/// server-side eventually (org-configurable per docs/05) — hardcoded to
-/// the suggested defaults in `api::mock` for now.
+/// server-side (org-configurable per docs/05) — hardcoded to the
+/// suggested defaults for now (`domain::plot_status_meta`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlotWithColor {
     pub plot: Plot,
@@ -111,9 +125,9 @@ pub struct CustomerDetail {
 /// city, KRA PIN, join date, photos) before a customer could be saved at
 /// all, which is precisely why walk-in leads never made it into that
 /// system until someone had time to do full data entry. Keeping this
-/// deliberately minimal, matching the `domain::Customer` fields that
-/// actually exist today, so a customer can be captured the moment
-/// they're interested and enriched later.
+/// deliberately minimal, matching the `Customer` fields that actually
+/// exist today, so a customer can be captured the moment they're
+/// interested and enriched later.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateCustomerInput {
     pub full_name: String,
@@ -166,11 +180,11 @@ pub struct DashboardSummary {
     pub total_projects: u32,
     pub total_plots: u32,
     pub total_sales_count: u32,
-    pub total_sales_value: rust_decimal::Decimal,
+    pub total_sales_value: Decimal,
     pub active_loans_count: u32,
-    pub active_loan_book: rust_decimal::Decimal,
+    pub active_loan_book: Decimal,
     pub performing_count: u32,
-    pub performing_amount: rust_decimal::Decimal,
+    pub performing_amount: Decimal,
     pub non_performing_count: u32,
-    pub non_performing_amount: rust_decimal::Decimal,
+    pub non_performing_amount: Decimal,
 }

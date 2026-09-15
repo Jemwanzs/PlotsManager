@@ -9,19 +9,15 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{NaiveDate, Utc};
 use domain::{
-    AreaUnit, Customer, LoanAccountStatus, Organization, Payment, PaymentMode, PaymentStatus,
-    Plot, PlotLoanAccount, PlotSale, PlotStatus, Project, ProjectStatus, User,
+    loan_status_meta, plot_status_meta as status_meta, AreaUnit, ApiError, AuthSession,
+    CreateCustomerInput, CreatePlotInput, CreateProjectInput, CreateSaleInput, Customer,
+    CustomerDetail, CustomerSaleView, CustomerSummary, DashboardSummary, LoanAccountDetail,
+    LoanAccountStatus, Organization, Payment, PaymentMode, PaymentStatus, Plot, PlotLoanAccount,
+    PlotSale, PlotStatus, PlotWithColor, Project, ProjectStatus, ProjectSummary,
+    RecordPaymentInput, User,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
-
-use super::loan_status::loan_status_meta;
-use super::plot_status::status_meta;
-use super::types::{
-    ApiError, AuthSession, CreateCustomerInput, CreatePlotInput, CreateProjectInput,
-    CreateSaleInput, CustomerDetail, CustomerSaleView, CustomerSummary, DashboardSummary,
-    LoanAccountDetail, PlotWithColor, ProjectSummary, RecordPaymentInput,
-};
 
 const DEMO_EMAIL: &str = "admin@acaciagrove.example";
 const DEMO_PASSWORD: &str = "password123";

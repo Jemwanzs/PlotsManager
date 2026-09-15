@@ -7,7 +7,7 @@
 
 use uuid::Uuid;
 
-use super::types::{
+use domain::{
     ApiError, AuthSession, CreateCustomerInput, CreatePlotInput, CreateProjectInput,
     CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary, LoanAccountDetail,
     PlotWithColor, ProjectSummary, RecordPaymentInput,
