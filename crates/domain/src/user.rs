@@ -14,6 +14,12 @@ pub struct User {
     pub full_name: String,
     pub email: String,
     pub is_active: bool,
+    /// The platform operator's own account, not a tenant permission —
+    /// see `database/migrations/0004_platform_ownership.sql` and
+    /// `crates/backend/src/routes/platform.rs`. Governs access to the
+    /// cross-tenant `/api/v1/platform/*` endpoints; unrelated to the
+    /// per-organization `roles`/`role_assignments` RBAC below.
+    pub is_platform_owner: bool,
     pub created_at: DateTime<Utc>,
 }
 

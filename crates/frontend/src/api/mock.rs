@@ -558,6 +558,7 @@ fn seed() -> MockDb {
         full_name: "Amina Wanjiru".to_string(),
         email: DEMO_EMAIL.to_string(),
         is_active: true,
+        is_platform_owner: false,
         created_at: Utc::now(),
     };
 

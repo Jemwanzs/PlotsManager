@@ -49,18 +49,26 @@ pub fn verify_password(plain: &str, stored_hash: &str) -> Result<bool, AuthError
 pub struct Claims {
     pub sub: Uuid,
     pub organization_id: Uuid,
+    /// See `database/migrations/0004_platform_ownership.sql` — rides in
+    /// the token itself (like `organization_id`) so the platform-admin
+    /// routes don't need a database round trip to authorize every
+    /// request.
+    #[serde(default)]
+    pub is_platform_owner: bool,
     pub exp: i64,
 }
 
 pub fn issue_session_token(
     user_id: Uuid,
     organization_id: Uuid,
+    is_platform_owner: bool,
     secret: &str,
     ttl: Duration,
 ) -> Result<String, AuthError> {
     let claims = Claims {
         sub: user_id,
         organization_id,
+        is_platform_owner,
         exp: (Utc::now() + ttl).timestamp(),
     };
     encode(
@@ -116,18 +124,25 @@ mod tests {
         let user_id = Uuid::new_v4();
         let org_id = Uuid::new_v4();
         let token =
-            issue_session_token(user_id, org_id, "test-secret", Duration::hours(1)).unwrap();
+            issue_session_token(user_id, org_id, false, "test-secret", Duration::hours(1))
+                .unwrap();
 
         let claims = verify_session_token(&token, "test-secret").unwrap();
         assert_eq!(claims.sub, user_id);
         assert_eq!(claims.organization_id, org_id);
+        assert!(!claims.is_platform_owner);
     }
 
     #[test]
     fn session_token_rejects_wrong_secret() {
-        let token =
-            issue_session_token(Uuid::new_v4(), Uuid::new_v4(), "right-secret", Duration::hours(1))
-                .unwrap();
+        let token = issue_session_token(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            false,
+            "right-secret",
+            Duration::hours(1),
+        )
+        .unwrap();
         assert!(verify_session_token(&token, "wrong-secret").is_err());
     }
 
@@ -140,6 +155,7 @@ mod tests {
         let token = issue_session_token(
             Uuid::new_v4(),
             Uuid::new_v4(),
+            false,
             "test-secret",
             Duration::seconds(-120),
         )

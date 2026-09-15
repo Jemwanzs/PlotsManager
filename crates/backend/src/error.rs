@@ -16,6 +16,10 @@ use serde_json::json;
 pub enum AppError {
     BadRequest(String),
     Unauthorized,
+    /// Authenticated, but not allowed to do this — distinct from
+    /// `Unauthorized` (not signed in at all). Currently only used to gate
+    /// `/api/v1/platform/*` behind `AuthUser.is_platform_owner`.
+    Forbidden(String),
     NotFound,
     Conflict(String),
     Internal(anyhow::Error),
@@ -24,6 +28,10 @@ pub enum AppError {
 impl AppError {
     pub fn bad_request(msg: impl Into<String>) -> Self {
         Self::BadRequest(msg.into())
+    }
+
+    pub fn forbidden(msg: impl Into<String>) -> Self {
+        Self::Forbidden(msg.into())
     }
 
     pub fn conflict(msg: impl Into<String>) -> Self {
@@ -36,6 +44,7 @@ impl IntoResponse for AppError {
         let (status, message) = match &self {
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "not signed in".to_string()),
+            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::Internal(err) => {

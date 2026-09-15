@@ -16,6 +16,7 @@ use crate::state::AppState;
 pub struct AuthUser {
     pub user_id: Uuid,
     pub organization_id: Uuid,
+    pub is_platform_owner: bool,
 }
 
 #[async_trait]
@@ -39,6 +40,7 @@ impl FromRequestParts<AppState> for AuthUser {
         Ok(AuthUser {
             user_id: claims.sub,
             organization_id: claims.organization_id,
+            is_platform_owner: claims.is_platform_owner,
         })
     }
 }
