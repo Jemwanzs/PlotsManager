@@ -1,6 +1,6 @@
 use leptos::prelude::*;
 use leptos_router::components::A;
-use leptos_router::hooks::use_navigate;
+use leptos_router::hooks::{use_location, use_navigate};
 
 use crate::auth::use_auth;
 
@@ -10,17 +10,30 @@ struct NavItem {
     label: &'static str,
 }
 
+/// The phone's bottom tab bar only has room for a handful of tabs
+/// before it turns into what the screenshot the app's owner sent
+/// looked like: eight cramped icons, one label wrapping onto two
+/// lines, the last tab clipped at the screen edge. Four is what
+/// actually fits at a comfortable touch-target size — everything else
+/// moves into the "More" sheet (`AppShell`'s `.nav-sheet`, below). The
+/// sidebar (laptop/desktop) has room for all of them and stays flat —
+/// see `all_nav_items`.
+fn primary_nav_items() -> Vec<NavItem> {
+    vec![
+        NavItem { href: "/", icon: "\u{1F4CA}", label: "Home" },
+        NavItem { href: "/projects", icon: "\u{1F3D8}\u{FE0F}", label: "Projects" },
+        NavItem { href: "/customers", icon: "\u{1F464}", label: "Customers" },
+        NavItem { href: "/quotations", icon: "\u{1F4C4}", label: "Quotes" },
+    ]
+}
+
 /// "Platform" only appears for `is_platform_owner` accounts — everyone
 /// else can't see it, and the backend enforces the same boundary on the
 /// `/api/v1/platform/*` endpoints regardless (see
 /// `crates/backend/src/routes/platform.rs`), so this is a convenience,
 /// not the access control.
-fn nav_items(is_platform_owner: bool) -> Vec<NavItem> {
+fn secondary_nav_items(is_platform_owner: bool) -> Vec<NavItem> {
     let mut items = vec![
-        NavItem { href: "/", icon: "\u{1F4CA}", label: "Dashboard" },
-        NavItem { href: "/projects", icon: "\u{1F3D8}\u{FE0F}", label: "Projects" },
-        NavItem { href: "/customers", icon: "\u{1F464}", label: "Customers" },
-        NavItem { href: "/quotations", icon: "\u{1F4C4}", label: "Quotations" },
         NavItem { href: "/approvals", icon: "\u{2705}", label: "Approvals" },
         NavItem { href: "/reports", icon: "\u{1F4C8}", label: "Reports" },
         NavItem { href: "/sales/import", icon: "\u{1F4E5}", label: "Import sales" },
@@ -35,6 +48,12 @@ fn nav_items(is_platform_owner: bool) -> Vec<NavItem> {
     items
 }
 
+fn all_nav_items(is_platform_owner: bool) -> Vec<NavItem> {
+    let mut items = primary_nav_items();
+    items.extend(secondary_nav_items(is_platform_owner));
+    items
+}
+
 /// Authenticated app layout: sidebar on laptop/desktop, top bar + bottom
 /// tab bar on phone/tablet. Route protection lives here too — every
 /// protected page's route `view` wraps its content in `<AppShell>`
@@ -44,11 +63,25 @@ fn nav_items(is_platform_owner: bool) -> Vec<NavItem> {
 pub fn AppShell(children: Children) -> impl IntoView {
     let auth = use_auth();
     let navigate = use_navigate();
+    let location = use_location();
+    let show_more = RwSignal::new(false);
 
     Effect::new(move |_| {
         if auth.get().is_none() {
             navigate("/login", Default::default());
         }
+    });
+
+    // Closes the "More" sheet once the route has actually changed,
+    // rather than from the clicked link's own `on:click` — reacting
+    // to navigation having happened, instead of to the click that
+    // will (soon, asynchronously) cause it, sidesteps any risk of
+    // synchronously mutating the DOM while leptos_router's own
+    // window-level click listener (`handle_anchor_click`) is still in
+    // the middle of handling that same click.
+    Effect::new(move |_| {
+        location.pathname.track();
+        show_more.set(false);
     });
 
     let initials = move || {
@@ -84,7 +117,7 @@ pub fn AppShell(children: Children) -> impl IntoView {
                 </div>
                 <nav class="sidebar-nav">
                     {move || {
-                        nav_items(is_platform_owner())
+                        all_nav_items(is_platform_owner())
                             .into_iter()
                             .map(|item| {
                                 view! {
@@ -114,7 +147,7 @@ pub fn AppShell(children: Children) -> impl IntoView {
 
             <nav class="bottom-nav">
                 {move || {
-                    nav_items(is_platform_owner())
+                    primary_nav_items()
                         .into_iter()
                         .map(|item| {
                             view! {
@@ -126,7 +159,62 @@ pub fn AppShell(children: Children) -> impl IntoView {
                         })
                         .collect_view()
                 }}
+                <button
+                    type="button"
+                    class="bottom-nav-more"
+                    class:active=move || show_more.get()
+                    on:click=move |_| show_more.update(|v| *v = !*v)
+                >
+                    <span class="icon">"\u{22EF}"</span>
+                    <span>"More"</span>
+                </button>
             </nav>
+
+            <Show when=move || show_more.get()>
+                // Closes on a genuine backdrop click (target is the
+                // backdrop itself) without `stop_propagation()` on the
+                // sheet to protect that — `stop_propagation()` there
+                // would also stop every click inside the sheet
+                // (including on its nav links) from ever reaching
+                // leptos_router's own window-level click listener,
+                // which needs the *unstopped* event to recognise the
+                // click and turn it into a client-side route change.
+                // Blocked from seeing it, the browser fell through to
+                // a real full-page navigation on every link in this
+                // sheet — full reloads wipe the in-memory session
+                // (`auth.rs`), bouncing back to /login. This was a
+                // real, reproduced bug, not a hypothetical.
+                <div
+                    class="nav-sheet-backdrop"
+                    on:click=move |ev| {
+                        use leptos::wasm_bindgen::JsCast;
+                        let target_is_backdrop = ev
+                            .target()
+                            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                            .is_some_and(|t| t.class_list().contains("nav-sheet-backdrop"));
+                        if target_is_backdrop {
+                            show_more.set(false);
+                        }
+                    }
+                >
+                    <div class="nav-sheet">
+                        <div class="nav-sheet-handle"></div>
+                        {move || {
+                            secondary_nav_items(is_platform_owner())
+                                .into_iter()
+                                .map(|item| {
+                                    view! {
+                                        <A href=item.href>
+                                            <span class="icon">{item.icon}</span>
+                                            <span>{item.label}</span>
+                                        </A>
+                                    }
+                                })
+                                .collect_view()
+                        }}
+                    </div>
+                </div>
+            </Show>
         </div>
     }
 }

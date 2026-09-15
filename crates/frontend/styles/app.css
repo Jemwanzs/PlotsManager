@@ -31,7 +31,7 @@
   --space-6: 32px;
   --space-7: 48px;
 
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-sans: "Outfit", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 
   --sidebar-width: 248px;
   --topbar-height: 60px;
@@ -52,10 +52,21 @@ body {
   background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-sans);
-  font-size: 15px;
+  font-size: 14.5px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
+  /* Custom `:active` feedback stands in for the tap flash. */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Tabular figures so a money column's digits line up, and numerals
+   don't jiggle width as a value updates. */
+.stat-value,
+.data-table td,
+.plot-price {
+  font-variant-numeric: tabular-nums;
 }
 
 h1,
@@ -93,15 +104,20 @@ a {
   padding: 10px 18px;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
+  font-family: inherit;
   font-size: 0.92rem;
   font-weight: 600;
   cursor: pointer;
   min-height: 44px; /* touch target */
-  transition: background-color 0.12s ease, border-color 0.12s ease;
+  transition: background-color 0.12s ease, border-color 0.12s ease, transform 0.08s ease;
+  text-decoration: none;
 }
 .btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
 }
 .btn-primary {
   background: var(--color-primary);
@@ -229,16 +245,28 @@ a {
   margin: 0 auto;
   box-sizing: border-box;
   overflow: hidden;
+  text-align: center;
+}
+.auth-card .field {
+  text-align: left;
 }
 .auth-brand {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-2);
   margin-bottom: var(--space-5);
   font-weight: 700;
   font-size: 1.05rem;
+  text-align: center;
 }
-.auth-brand .logo-mark {
+/* Shared by the auth screen's brand mark and the app shell's
+   sidebar/topbar brand mark — previously scoped to `.auth-brand
+   .logo-mark` only, so the "R" badge in the topbar/sidebar rendered
+   as bare unstyled text (visible in a screenshot of the deployed
+   app: no colour, no circle, just a letter next to the title). */
+.logo-mark {
+  flex: none;
   width: 34px;
   height: 34px;
   border-radius: var(--radius-sm);
@@ -248,6 +276,7 @@ a {
   align-items: center;
   justify-content: center;
   font-weight: 800;
+  font-size: 0.95rem;
 }
 .auth-hint {
   font-size: 0.8rem;
@@ -261,18 +290,20 @@ a {
 
 .app-shell {
   min-height: 100vh;
-  padding-bottom: var(--bottom-nav-height);
+  padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom));
 }
 
 .topbar {
   position: sticky;
   top: 0;
   z-index: 20;
-  height: var(--topbar-height);
+  height: calc(var(--topbar-height) + env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 var(--space-4);
+  padding-left: max(var(--space-4), env(safe-area-inset-left));
+  padding-right: max(var(--space-4), env(safe-area-inset-right));
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
 }
@@ -319,7 +350,10 @@ a {
   margin: 0;
 }
 
-/* Bottom tab bar — phones/tablets */
+/* Bottom tab bar — phones/tablets. Capped at 4 primary destinations
+   plus "More" (`layout::primary_nav_items`'s doc comment): five tabs
+   is the most that stays comfortable at a real touch-target size —
+   past that, labels wrap and the last tab clips at the screen edge. */
 .bottom-nav {
   position: fixed;
   bottom: 0;
@@ -329,26 +363,107 @@ a {
   display: flex;
   background: var(--color-surface);
   border-top: 1px solid var(--color-border);
-  height: var(--bottom-nav-height);
+  height: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
-.bottom-nav a {
+.bottom-nav a,
+.bottom-nav-more {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 3px;
+  font-family: inherit;
   font-size: 0.68rem;
   font-weight: 600;
   color: var(--color-text-muted);
   text-decoration: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color 0.12s ease, transform 0.08s ease;
 }
-.bottom-nav a.active {
+.bottom-nav a:active,
+.bottom-nav-more:active {
+  transform: scale(0.94);
+}
+.bottom-nav a.active,
+.bottom-nav-more.active {
   color: var(--color-primary);
 }
-.bottom-nav .icon {
-  font-size: 1.15rem;
+.bottom-nav .icon,
+.bottom-nav-more .icon {
+  font-size: 1.2rem;
   line-height: 1;
+}
+
+/* "More" bottom sheet — the rest of `all_nav_items` that doesn't fit
+   in the tab bar. */
+.nav-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(15, 20, 15, 0.4);
+  display: flex;
+  align-items: flex-end;
+  animation: sheet-fade-in 0.15s ease;
+}
+.nav-sheet {
+  width: 100%;
+  background: var(--color-surface);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow: var(--shadow-md);
+  padding: var(--space-3) var(--space-3) calc(var(--space-4) + env(safe-area-inset-bottom));
+  animation: sheet-slide-up 0.18s ease;
+}
+.nav-sheet-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-border);
+  margin: var(--space-1) auto var(--space-3);
+}
+.nav-sheet a {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 13px var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+.nav-sheet a:active {
+  background: var(--color-bg);
+}
+.nav-sheet .icon {
+  font-size: 1.2rem;
+  line-height: 1;
+}
+@keyframes sheet-slide-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes sheet-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (min-width: 900px) {
+  .nav-sheet-backdrop {
+    display: none;
+  }
 }
 
 /* Sidebar — laptop/desktop only */
@@ -399,6 +514,7 @@ a {
     text-decoration: none;
     font-weight: 600;
     font-size: 0.9rem;
+    transition: background-color 0.12s ease, color 0.12s ease;
   }
   .sidebar-nav a:hover {
     background: var(--color-bg);
@@ -437,24 +553,41 @@ a {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  padding: var(--space-4);
+  padding: var(--space-4) var(--space-3);
+  text-align: center;
+}
+/* A trailing odd-one-out (5 stats in a 2-column grid, say) spans the
+   full row instead of sitting alone next to empty space — the "not
+   well organized" feeling in a screenshot of this screen. */
+.stat-grid > .stat-card:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
 }
 .stat-card .stat-label {
-  font-size: 0.76rem;
+  font-size: 0.72rem;
   color: var(--color-text-muted);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.03em;
   margin-bottom: var(--space-2);
 }
 .stat-card .stat-value {
-  font-size: 1.35rem;
-  font-weight: 750;
+  font-size: 1.2rem;
+  font-weight: 700;
+  white-space: nowrap;
 }
 .stat-card .stat-sub {
-  font-size: 0.78rem;
+  font-size: 0.76rem;
   color: var(--color-text-muted);
   margin-top: 2px;
+}
+@media (min-width: 900px) {
+  .stat-card {
+    text-align: left;
+    padding: var(--space-4);
+  }
+  .stat-card .stat-value {
+    font-size: 1.35rem;
+  }
 }
 
 /* ---------- Project / plot grids ---------- */
@@ -479,6 +612,10 @@ a {
   display: block;
   text-decoration: none;
   color: inherit;
+  transition: transform 0.08s ease, box-shadow 0.12s ease;
+}
+.project-card:active {
+  transform: scale(0.98);
 }
 .project-card h3 {
   color: var(--color-text);
@@ -550,6 +687,10 @@ a {
   flex-direction: column;
   justify-content: space-between;
   box-shadow: var(--shadow-sm);
+  transition: transform 0.08s ease;
+}
+.plot-tile:active {
+  transform: scale(0.95);
 }
 .plot-tile .plot-number {
   font-weight: 750;
@@ -633,10 +774,12 @@ a {
   border-radius: 999px;
   background: var(--color-surface);
   color: var(--color-text-muted);
+  font-family: inherit;
   font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 .filter-tab.active {
   background: var(--color-primary);
