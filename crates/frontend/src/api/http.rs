@@ -17,17 +17,19 @@
 
 use std::sync::{Arc, Mutex};
 
+use chrono::NaiveDate;
 use gloo_net::http::{Request, RequestBuilder, Response};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use uuid::Uuid;
 
 use domain::{
-    ApiError, ApprovalRequestSummary, AuthSession, CreateCustomerInput, CreatePlotInput,
-    CreateProjectInput, CreateQuotationInput, CreateSaleInput, CustomerDetail, CustomerSummary,
-    DashboardSummary, DecideApprovalInput, LoanAccountDetail, LoginInput,
-    PlatformOrganizationDetail, PlatformOrganizationSummary, PlotWithColor, ProjectSummary,
-    QuotationDetail, QuotationSummary, RecordPaymentInput, SignupInput, UpdateLeadInput,
+    AgentPerformanceReport, ApiError, ApprovalRequestSummary, AuthSession, CreateCustomerInput,
+    CreatePlotInput, CreateProjectInput, CreateQuotationInput, CreateSaleInput, CustomerDetail,
+    CustomerSummary, DashboardSummary, DecideApprovalInput, InventoryReport, LoanAccountDetail,
+    LoginInput, PlatformOrganizationDetail, PlatformOrganizationSummary, PlotWithColor,
+    ProjectSummary, QuotationDetail, QuotationSummary, RecordPaymentInput, SalesReport,
+    SignupInput, UpdateLeadInput,
 };
 
 #[derive(Clone)]
@@ -288,5 +290,47 @@ impl HttpApi {
     ) -> Result<ApprovalRequestSummary, ApiError> {
         self.post(&format!("/api/v1/approvals/{id}/reject"), &DecideApprovalInput { notes })
             .await
+    }
+
+    pub async fn sales_report(
+        &self,
+        project_id: Option<Uuid>,
+        agent_id: Option<Uuid>,
+        from: Option<NaiveDate>,
+        to: Option<NaiveDate>,
+    ) -> Result<SalesReport, ApiError> {
+        let mut params = Vec::new();
+        if let Some(id) = project_id {
+            params.push(format!("project_id={id}"));
+        }
+        if let Some(id) = agent_id {
+            params.push(format!("agent_id={id}"));
+        }
+        if let Some(from) = from {
+            params.push(format!("from={from}"));
+        }
+        if let Some(to) = to {
+            params.push(format!("to={to}"));
+        }
+        self.get(&format!("/api/v1/reports/sales?{}", params.join("&"))).await
+    }
+
+    pub async fn inventory_report(&self) -> Result<InventoryReport, ApiError> {
+        self.get("/api/v1/reports/inventory").await
+    }
+
+    pub async fn agent_performance_report(
+        &self,
+        from: Option<NaiveDate>,
+        to: Option<NaiveDate>,
+    ) -> Result<AgentPerformanceReport, ApiError> {
+        let mut params = Vec::new();
+        if let Some(from) = from {
+            params.push(format!("from={from}"));
+        }
+        if let Some(to) = to {
+            params.push(format!("to={to}"));
+        }
+        self.get(&format!("/api/v1/reports/agents?{}", params.join("&"))).await
     }
 }

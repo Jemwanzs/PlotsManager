@@ -10,14 +10,16 @@ use std::sync::{Arc, Mutex};
 use chrono::{NaiveDate, Utc};
 use domain::{
     approval_status_meta, loan_status_meta, plot_status_meta as status_meta,
-    quotation_status_meta, ApiError, ApprovalRequest, ApprovalRequestSummary, ApprovalStatus,
-    AreaUnit, AuthSession, CreateCustomerInput, CreatePlotInput, CreateProjectInput,
-    CreateQuotationInput, CreateSaleInput, Customer, CustomerDetail, CustomerSaleView,
-    CustomerSummary, DashboardSummary, LeadStage, LoanAccountDetail, LoanAccountStatus,
-    Organization, Payment, PaymentMode, PaymentStatus, PlatformOrganizationDetail,
-    PlatformOrganizationSummary, Plot, PlotLoanAccount, PlotSale, PlotStatus, PlotWithColor,
-    Project, ProjectStatus, ProjectSummary, Quotation, QuotationDetail, QuotationStatus,
-    QuotationSummary, RecordPaymentInput, SignupInput, UpdateLeadInput, User,
+    quotation_status_meta, AgentPerformanceReport, AgentPerformanceRow, ApiError, ApprovalRequest,
+    ApprovalRequestSummary, ApprovalStatus, AreaUnit, AuthSession, CreateCustomerInput,
+    CreatePlotInput, CreateProjectInput, CreateQuotationInput, CreateSaleInput, Customer,
+    CustomerDetail, CustomerSaleView, CustomerSummary, DashboardSummary, InventoryReport,
+    LeadStage, LoanAccountDetail, LoanAccountStatus, Organization, Payment, PaymentMode,
+    PaymentStatus, PlatformOrganizationDetail, PlatformOrganizationSummary, Plot,
+    PlotLoanAccount, PlotSale, PlotStatus, PlotStatusCount, PlotWithColor, Project,
+    ProjectInventoryRow, ProjectStatus, ProjectSummary, Quotation, QuotationDetail,
+    QuotationStatus, QuotationSummary, RecordPaymentInput, SalesReport, SalesReportRow,
+    SignupInput, UpdateLeadInput, User,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -779,6 +781,150 @@ impl MockApi {
 
         approval_summary(&db, db.approval_requests.iter().find(|r| r.id == id).unwrap())
             .ok_or(ApiError::NotFound)
+    }
+
+    pub async fn sales_report(
+        &self,
+        project_id: Option<Uuid>,
+        agent_id: Option<Uuid>,
+        from: Option<NaiveDate>,
+        to: Option<NaiveDate>,
+    ) -> Result<SalesReport, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+
+        let mut rows: Vec<SalesReportRow> = db
+            .sales
+            .iter()
+            .filter_map(|sale| {
+                let plot = db.plots.iter().find(|p| p.id == sale.plot_id)?;
+                let project = db.projects.iter().find(|p| p.id == plot.project_id)?;
+                let customer = db.customers.iter().find(|c| c.id == sale.customer_id)?;
+                let date = sale.created_at.date_naive();
+                if project_id.is_some_and(|id| id != project.id) {
+                    return None;
+                }
+                if agent_id.is_some_and(|id| Some(id) != sale.agent_id) {
+                    return None;
+                }
+                if from.is_some_and(|from| date < from) {
+                    return None;
+                }
+                if to.is_some_and(|to| date > to) {
+                    return None;
+                }
+                Some(SalesReportRow {
+                    sale_id: sale.id,
+                    created_at: sale.created_at,
+                    project_id: project.id,
+                    project_name: project.name.clone(),
+                    plot_number: plot.plot_number.clone(),
+                    customer_id: customer.id,
+                    customer_name: customer.full_name.clone(),
+                    agent_id: sale.agent_id,
+                    agent_name: sale.agent_id.map(|_| db.demo_user.full_name.clone()),
+                    payment_mode: sale.payment_mode,
+                    agreed_price: sale.agreed_price,
+                })
+            })
+            .collect();
+        rows.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+        let total_count = rows.len() as u32;
+        let total_value = rows.iter().map(|r| r.agreed_price).sum();
+        Ok(SalesReport { rows, total_count, total_value })
+    }
+
+    pub async fn inventory_report(&self) -> Result<InventoryReport, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+
+        let mut by_project: Vec<ProjectInventoryRow> = Vec::new();
+        for plot in &db.plots {
+            let Some(project) = db.projects.iter().find(|p| p.id == plot.project_id) else {
+                continue;
+            };
+            let (label, color) = status_meta(plot.status);
+            let idx = match by_project.iter().position(|p| p.project_id == project.id) {
+                Some(idx) => idx,
+                None => {
+                    by_project.push(ProjectInventoryRow {
+                        project_id: project.id,
+                        project_name: project.name.clone(),
+                        total_plots: 0,
+                        by_status: Vec::new(),
+                    });
+                    by_project.len() - 1
+                }
+            };
+            let row = &mut by_project[idx];
+            row.total_plots += 1;
+            match row.by_status.iter_mut().find(|s| s.status == plot.status) {
+                Some(entry) => {
+                    entry.count += 1;
+                    entry.value += plot.asking_price;
+                }
+                None => row.by_status.push(PlotStatusCount {
+                    status: plot.status,
+                    status_label: label.to_string(),
+                    status_color: color.to_string(),
+                    count: 1,
+                    value: plot.asking_price,
+                }),
+            }
+        }
+        by_project.sort_by(|a, b| a.project_name.cmp(&b.project_name));
+
+        Ok(InventoryReport { by_project })
+    }
+
+    pub async fn agent_performance_report(
+        &self,
+        from: Option<NaiveDate>,
+        to: Option<NaiveDate>,
+    ) -> Result<AgentPerformanceReport, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+
+        // The mock only ever has one user (`demo_user`) to attribute
+        // sales/quotations to — see the same note on `decide_request`.
+        let in_range = |date: NaiveDate| {
+            !from.is_some_and(|from| date < from) && !to.is_some_and(|to| date > to)
+        };
+        let sales_count = db.sales.iter().filter(|s| in_range(s.created_at.date_naive())).count() as u32;
+        let sales_value: Decimal = db
+            .sales
+            .iter()
+            .filter(|s| in_range(s.created_at.date_naive()))
+            .map(|s| s.agreed_price)
+            .sum();
+        let quotations_sent = db
+            .quotations
+            .iter()
+            .filter(|q| in_range(q.created_at.date_naive()))
+            .filter(|q| q.status != QuotationStatus::Draft)
+            .count() as u32;
+        let quotations_accepted = db
+            .quotations
+            .iter()
+            .filter(|q| in_range(q.created_at.date_naive()))
+            .filter(|q| q.status == QuotationStatus::Accepted)
+            .count() as u32;
+
+        let rows = if sales_count == 0 && quotations_sent == 0 {
+            Vec::new()
+        } else {
+            vec![AgentPerformanceRow {
+                agent_id: db.demo_user.id,
+                agent_name: db.demo_user.full_name.clone(),
+                sales_count,
+                sales_value,
+                quotations_sent,
+                quotations_accepted,
+            }]
+        };
+
+        Ok(AgentPerformanceReport { rows })
     }
 }
 

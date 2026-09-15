@@ -245,4 +245,35 @@ impl ApiClient {
             Self::Http(api) => api.reject_request(id, notes).await,
         }
     }
+
+    pub async fn sales_report(
+        &self,
+        project_id: Option<Uuid>,
+        agent_id: Option<Uuid>,
+        from: Option<chrono::NaiveDate>,
+        to: Option<chrono::NaiveDate>,
+    ) -> Result<SalesReport, ApiError> {
+        match self {
+            Self::Mock(api) => api.sales_report(project_id, agent_id, from, to).await,
+            Self::Http(api) => api.sales_report(project_id, agent_id, from, to).await,
+        }
+    }
+
+    pub async fn inventory_report(&self) -> Result<InventoryReport, ApiError> {
+        match self {
+            Self::Mock(api) => api.inventory_report().await,
+            Self::Http(api) => api.inventory_report().await,
+        }
+    }
+
+    pub async fn agent_performance_report(
+        &self,
+        from: Option<chrono::NaiveDate>,
+        to: Option<chrono::NaiveDate>,
+    ) -> Result<AgentPerformanceReport, ApiError> {
+        match self {
+            Self::Mock(api) => api.agent_performance_report(from, to).await,
+            Self::Http(api) => api.agent_performance_report(from, to).await,
+        }
+    }
 }

@@ -8,7 +8,7 @@ use crate::layout::AppShell;
 use crate::pages::{
     ApprovalsList, CustomerDetail, CustomersList, Dashboard, LoanAccountDetailPage, Login,
     NewCustomer, NewProject, NotFound, PlatformOrganizationDetailPage, PlatformOrganizations,
-    ProjectDetail, ProjectsList, QuotationDetailPage, QuotationsList, Signup,
+    ProjectDetail, ProjectsList, QuotationDetailPage, QuotationsList, Reports, Signup,
 };
 
 /// `API_BASE_URL` is read at compile time (Trunk shells out to `cargo
@@ -85,6 +85,10 @@ pub fn App() -> impl IntoView {
                 <Route
                     path=StaticSegment("approvals")
                     view=|| view! { <AppShell><ApprovalsList /></AppShell> }
+                />
+                <Route
+                    path=StaticSegment("reports")
+                    view=|| view! { <AppShell><Reports /></AppShell> }
                 />
             </Routes>
         </Router>
