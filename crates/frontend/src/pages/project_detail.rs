@@ -7,7 +7,10 @@ use rust_decimal::Decimal;
 use std::str::FromStr;
 use uuid::Uuid;
 
-use crate::api::{status_meta, CreatePlotInput, CreateQuotationInput, CreateSaleInput, PlotWithColor};
+use crate::api::{
+    status_meta, CreatePlotInput, CreateQuotationInput, CreateSaleInput, PlotWithColor,
+    UpdatePlotInput,
+};
 use crate::auth::{use_api, use_currency};
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
 use crate::csv_import::{self, ParsedRow};
@@ -52,6 +55,20 @@ fn feature_color(plots: &[PlotWithColor], plot_id: Uuid) -> String {
         .find(|p| p.plot.id == plot_id)
         .map(|p| p.status_color.clone())
         .unwrap_or_else(|| "#6b7280".to_string())
+}
+
+/// Blank means "not recorded" (`None`) — dimensions are optional, unlike
+/// size/price — so only a non-blank, non-numeric value is an error.
+fn parse_optional_dimension(raw: &str) -> Result<Option<Decimal>, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let value = Decimal::from_str(trimmed).map_err(|_| "Enter a valid dimension.".to_string())?;
+    if value <= Decimal::ZERO {
+        return Err("Dimensions must be greater than zero.".to_string());
+    }
+    Ok(Some(value))
 }
 
 #[component]
@@ -225,6 +242,11 @@ pub fn ProjectDetail() -> impl IntoView {
                                                     on:click=move |_| selected.set(Some(pwc_for_click.clone()))
                                                 >
                                                     <span class="plot-number">{pwc.plot.plot_number.clone()}</span>
+                                                    <span class="plot-dimensions">
+                                                        {pwc.plot.size.to_string()} " acres"
+                                                        {domain::format_dimensions(pwc.plot.side_1, pwc.plot.side_2, &pwc.plot.dimension_unit)
+                                                            .map(|d| format!(" · {d}"))}
+                                                    </span>
                                                     <span class="plot-price">{format_money(pwc.plot.asking_price, &currency.get())}</span>
                                                 </button>
                                             }
@@ -247,6 +269,14 @@ pub fn ProjectDetail() -> impl IntoView {
                     let asking_price = pwc.plot.asking_price;
                     let startable = can_start_sale(pwc.plot.status);
                     let show_quote_form = RwSignal::new(false);
+                    let show_edit_form = RwSignal::new(false);
+                    let dimensions_text = domain::format_dimensions(
+                        pwc.plot.side_1,
+                        pwc.plot.side_2,
+                        &pwc.plot.dimension_unit,
+                    )
+                        .unwrap_or_else(|| "Not specified".to_string());
+                    let pwc_for_edit = pwc.clone();
                     view! {
                         <div class="card" style="margin-top: var(--space-4)">
                             <div class="page-header" style="margin-bottom: var(--space-3)">
@@ -257,7 +287,28 @@ pub fn ProjectDetail() -> impl IntoView {
                                 "Size: " {pwc.plot.size.to_string()} " acres · Asking price: "
                                 {format_money(pwc.plot.asking_price, &currency.get())}
                             </p>
+                            <p>"Dimensions: " {dimensions_text}</p>
                             {pwc.plot.title_number.clone().map(|t| view! { <p>"Title: " {t}</p> })}
+
+                            <button
+                                type="button"
+                                class="btn btn-secondary"
+                                style="margin-bottom: var(--space-3);"
+                                on:click=move |_| show_edit_form.update(|v| *v = !*v)
+                            >
+                                {move || if show_edit_form.get() { "Cancel edit" } else { "Edit plot" }}
+                            </button>
+
+                            <Show when=move || show_edit_form.get()>
+                                <EditPlotForm
+                                    plot=pwc_for_edit.clone()
+                                    on_saved=move |updated: PlotWithColor| {
+                                        selected.set(Some(updated));
+                                        show_edit_form.set(false);
+                                        plots.refetch();
+                                    }
+                                />
+                            </Show>
 
                             <Show when=move || startable>
                                 <div class="filter-tabs">
@@ -326,6 +377,8 @@ fn AddPlotForm(
 
     let plot_number = RwSignal::new(String::new());
     let size = RwSignal::new(String::new());
+    let side_1 = RwSignal::new(String::new());
+    let side_2 = RwSignal::new(String::new());
     let asking_price = RwSignal::new(String::new());
     let minimum_price = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
@@ -363,6 +416,20 @@ fn AddPlotForm(
             error.set(Some("Enter a valid size.".to_string()));
             return;
         };
+        let parsed_side_1 = match parse_optional_dimension(&side_1.get()) {
+            Ok(v) => v,
+            Err(msg) => {
+                error.set(Some(msg));
+                return;
+            }
+        };
+        let parsed_side_2 = match parse_optional_dimension(&side_2.get()) {
+            Ok(v) => v,
+            Err(msg) => {
+                error.set(Some(msg));
+                return;
+            }
+        };
         let Ok(parsed_asking) = Decimal::from_str(asking_price.get().trim()) else {
             error.set(Some("Enter a valid asking price.".to_string()));
             return;
@@ -386,6 +453,8 @@ fn AddPlotForm(
             project_id,
             plot_number: plot_number.get(),
             size: parsed_size,
+            side_1: parsed_side_1,
+            side_2: parsed_side_2,
             asking_price: parsed_asking,
             minimum_price: parsed_minimum,
         };
@@ -439,6 +508,32 @@ fn AddPlotForm(
             </div>
 
             <div class="field">
+                <label>"Plot dimensions (feet)"</label>
+                <div class="dimension-row">
+                    <span class="dimension-label">"Side 1"</span>
+                    <input
+                        type="text"
+                        inputmode="decimal"
+                        placeholder="80"
+                        aria-label="Side 1"
+                        prop:value=side_1
+                        on:input=move |ev| side_1.set(event_target_value(&ev))
+                    />
+                    <span class="dimension-label">"by"</span>
+                    <span class="dimension-label">"Side 2"</span>
+                    <input
+                        type="text"
+                        inputmode="decimal"
+                        placeholder="100"
+                        aria-label="Side 2"
+                        prop:value=side_2
+                        on:input=move |ev| side_2.set(event_target_value(&ev))
+                    />
+                    <span class="dimension-label">"ft"</span>
+                </div>
+            </div>
+
+            <div class="field">
                 <label for="asking-price">"Asking price (" {move || currency.get()} ")"</label>
                 <input
                     id="asking-price"
@@ -463,6 +558,184 @@ fn AddPlotForm(
 
             <button type="submit" class="btn btn-primary" disabled=submitting>
                 {move || if submitting.get() { "Adding…" } else { "Add plot" }}
+            </button>
+        </form>
+    }
+}
+
+/// Edits an existing plot's own fields — number, size, dimensions,
+/// pricing. Deliberately doesn't touch status/ownership: those change
+/// through the sales workflow (`ReserveForm`, `QuoteForm`, `approvals.rs`),
+/// not here. Pre-fills from the plot currently selected in the grid/map,
+/// and reports the freshly-saved record back via `on_saved` so the caller
+/// can update `selected` without a second round trip.
+#[component]
+fn EditPlotForm(
+    plot: PlotWithColor,
+    on_saved: impl Fn(PlotWithColor) + Clone + 'static,
+) -> impl IntoView {
+    let api = use_api();
+    let currency = use_currency();
+
+    let project_id = plot.plot.project_id;
+    let plot_id = plot.plot.id;
+    let status_label = plot.status_label.clone();
+    let status_color = plot.status_color.clone();
+
+    let plot_number = RwSignal::new(plot.plot.plot_number.clone());
+    let size = RwSignal::new(plot.plot.size.to_string());
+    let side_1 = RwSignal::new(plot.plot.side_1.map(|v| v.to_string()).unwrap_or_default());
+    let side_2 = RwSignal::new(plot.plot.side_2.map(|v| v.to_string()).unwrap_or_default());
+    let asking_price = RwSignal::new(plot.plot.asking_price.to_string());
+    let minimum_price = RwSignal::new(plot.plot.minimum_price.to_string());
+    let error = RwSignal::new(None::<String>);
+    let submitting = RwSignal::new(false);
+
+    let on_submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        if submitting.get() {
+            return;
+        }
+        error.set(None);
+
+        let Ok(parsed_size) = Decimal::from_str(size.get().trim()) else {
+            error.set(Some("Enter a valid size.".to_string()));
+            return;
+        };
+        let parsed_side_1 = match parse_optional_dimension(&side_1.get()) {
+            Ok(v) => v,
+            Err(msg) => {
+                error.set(Some(msg));
+                return;
+            }
+        };
+        let parsed_side_2 = match parse_optional_dimension(&side_2.get()) {
+            Ok(v) => v,
+            Err(msg) => {
+                error.set(Some(msg));
+                return;
+            }
+        };
+        let Ok(parsed_asking) = Decimal::from_str(asking_price.get().trim()) else {
+            error.set(Some("Enter a valid asking price.".to_string()));
+            return;
+        };
+        let parsed_minimum = if minimum_price.get().trim().is_empty() {
+            parsed_asking
+        } else {
+            match Decimal::from_str(minimum_price.get().trim()) {
+                Ok(v) => v,
+                Err(_) => {
+                    error.set(Some("Enter a valid minimum price.".to_string()));
+                    return;
+                }
+            }
+        };
+
+        submitting.set(true);
+        let api = api.clone();
+        let on_saved = on_saved.clone();
+        let status_label = status_label.clone();
+        let status_color = status_color.clone();
+        let input = UpdatePlotInput {
+            plot_number: plot_number.get(),
+            size: parsed_size,
+            side_1: parsed_side_1,
+            side_2: parsed_side_2,
+            asking_price: parsed_asking,
+            minimum_price: parsed_minimum,
+        };
+        spawn_local(async move {
+            match api.update_plot(project_id, plot_id, input).await {
+                Ok(updated) => on_saved(PlotWithColor { plot: updated, status_label, status_color }),
+                Err(e) => error.set(Some(format!("{e}"))),
+            }
+            submitting.set(false);
+        });
+    };
+
+    view! {
+        <form
+            on:submit=on_submit
+            style="margin-bottom: var(--space-4); padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-sm);"
+        >
+            <h3 class="mt-0">"Edit plot"</h3>
+            {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+
+            <div class="field">
+                <label for="edit-plot-number">"Plot number"</label>
+                <input
+                    id="edit-plot-number"
+                    type="text"
+                    required
+                    prop:value=plot_number
+                    on:input=move |ev| plot_number.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label for="edit-plot-size">"Size (acres)"</label>
+                <input
+                    id="edit-plot-size"
+                    type="text"
+                    inputmode="decimal"
+                    required
+                    prop:value=size
+                    on:input=move |ev| size.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label>"Plot dimensions (feet)"</label>
+                <div class="dimension-row">
+                    <span class="dimension-label">"Side 1"</span>
+                    <input
+                        type="text"
+                        inputmode="decimal"
+                        placeholder="80"
+                        aria-label="Side 1"
+                        prop:value=side_1
+                        on:input=move |ev| side_1.set(event_target_value(&ev))
+                    />
+                    <span class="dimension-label">"by"</span>
+                    <span class="dimension-label">"Side 2"</span>
+                    <input
+                        type="text"
+                        inputmode="decimal"
+                        placeholder="100"
+                        aria-label="Side 2"
+                        prop:value=side_2
+                        on:input=move |ev| side_2.set(event_target_value(&ev))
+                    />
+                    <span class="dimension-label">"ft"</span>
+                </div>
+            </div>
+
+            <div class="field">
+                <label for="edit-asking-price">"Asking price (" {move || currency.get()} ")"</label>
+                <input
+                    id="edit-asking-price"
+                    type="text"
+                    inputmode="numeric"
+                    required
+                    prop:value=asking_price
+                    on:input=move |ev| asking_price.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label for="edit-minimum-price">"Minimum price (" {move || currency.get()} ", optional)"</label>
+                <input
+                    id="edit-minimum-price"
+                    type="text"
+                    inputmode="numeric"
+                    prop:value=minimum_price
+                    on:input=move |ev| minimum_price.set(event_target_value(&ev))
+                />
+            </div>
+
+            <button type="submit" class="btn btn-primary" disabled=submitting>
+                {move || if submitting.get() { "Saving…" } else { "Save changes" }}
             </button>
         </form>
     }
@@ -517,7 +790,7 @@ fn BulkPlotImport(project_id: Uuid, on_imported: impl Fn() + Clone + Send + 'sta
     view! {
         <div class="card" style="margin-bottom: var(--space-4)">
             <h3 class="mt-0">"Bulk import plots"</h3>
-            <p class="meta mt-0">"CSV columns, in order: plot_number, size, asking_price, minimum_price."</p>
+            <p class="meta mt-0">"CSV columns, in order: plot_number, size, side_1, side_2, asking_price, minimum_price. side_1/side_2 (feet) are optional — leave blank if not recorded."</p>
             <a
                 href=template_href
                 download="plots_template.csv"

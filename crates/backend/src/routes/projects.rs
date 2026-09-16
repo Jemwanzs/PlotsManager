@@ -1,9 +1,9 @@
 use axum::extract::Path;
-use axum::{extract::State, routing::get, routing::post, Json, Router};
+use axum::{extract::State, routing::get, routing::post, routing::put, Json, Router};
 use chrono::{DateTime, Utc};
 use domain::{
     BulkImportResult, BulkImportRowError, CreatePlotInput, CreateProjectInput, Plot,
-    PlotWithColor, Project, ProjectSummary,
+    PlotWithColor, Project, ProjectSummary, UpdatePlotInput,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -22,6 +22,10 @@ pub fn router() -> Router<AppState> {
             get(list_plots).post(create_plot),
         )
         .route("/api/v1/projects/:id/plots/bulk", post(bulk_create_plots))
+        .route(
+            "/api/v1/projects/:project_id/plots/:plot_id",
+            put(update_plot),
+        )
 }
 
 #[derive(sqlx::FromRow)]
@@ -187,6 +191,9 @@ struct PlotRow {
     plot_number: String,
     title_number: Option<String>,
     size: Decimal,
+    side_1: Option<Decimal>,
+    side_2: Option<Decimal>,
+    dimension_unit: String,
     asking_price: Decimal,
     minimum_price: Decimal,
     status: String,
@@ -194,6 +201,10 @@ struct PlotRow {
     assigned_customer_id: Option<Uuid>,
     created_at: DateTime<Utc>,
 }
+
+const PLOT_COLUMNS: &str = "id, project_id, plot_number, title_number, size, side_1, side_2, \
+    dimension_unit, asking_price, minimum_price, status, map_feature_id, assigned_customer_id, \
+    created_at";
 
 impl PlotRow {
     fn into_domain(self) -> Result<Plot, AppError> {
@@ -203,6 +214,9 @@ impl PlotRow {
             plot_number: self.plot_number,
             title_number: self.title_number,
             size: self.size,
+            side_1: self.side_1,
+            side_2: self.side_2,
+            dimension_unit: self.dimension_unit,
             asking_price: self.asking_price,
             minimum_price: self.minimum_price,
             status: from_pg("plots.status", &self.status)?,
@@ -224,14 +238,9 @@ async fn list_plots(
     // the access-denial it actually is.
     ensure_project_in_org(&state, project_id, auth.organization_id).await?;
 
-    let rows: Vec<PlotRow> = sqlx::query_as(
-        r#"
-        select id, project_id, plot_number, title_number, size, asking_price, minimum_price,
-            status, map_feature_id, assigned_customer_id, created_at
-        from plots where project_id = $1
-        order by plot_number
-        "#,
-    )
+    let rows: Vec<PlotRow> = sqlx::query_as(&format!(
+        "select {PLOT_COLUMNS} from plots where project_id = $1 order by plot_number"
+    ))
     .bind(project_id)
     .fetch_all(&state.db)
     .await?;
@@ -286,6 +295,7 @@ async fn insert_plot(
             "Minimum price can't be higher than the asking price.",
         ));
     }
+    validate_dimensions(input.side_1, input.side_2)?;
 
     let duplicate: bool = sqlx::query_scalar(
         "select exists(select 1 from plots where project_id = $1 and plot_number = $2)",
@@ -300,23 +310,99 @@ async fn insert_plot(
         )));
     }
 
-    let row: PlotRow = sqlx::query_as(
+    let row: PlotRow = sqlx::query_as(&format!(
         r#"
-        insert into plots (project_id, plot_number, size, asking_price, minimum_price, status)
-        values ($1, $2, $3, $4, $5, 'available')
-        returning id, project_id, plot_number, title_number, size, asking_price, minimum_price,
-            status, map_feature_id, assigned_customer_id, created_at
+        insert into plots (project_id, plot_number, size, side_1, side_2, asking_price, minimum_price, status)
+        values ($1, $2, $3, $4, $5, $6, $7, 'available')
+        returning {PLOT_COLUMNS}
         "#,
-    )
+    ))
     .bind(project_id)
     .bind(plot_number)
     .bind(input.size)
+    .bind(input.side_1)
+    .bind(input.side_2)
     .bind(input.asking_price)
     .bind(input.minimum_price)
     .fetch_one(&state.db)
     .await?;
 
     row.into_domain()
+}
+
+fn validate_dimensions(side_1: Option<Decimal>, side_2: Option<Decimal>) -> Result<(), AppError> {
+    if side_1.is_some_and(|v| v <= Decimal::ZERO) || side_2.is_some_and(|v| v <= Decimal::ZERO) {
+        return Err(AppError::bad_request(
+            "Plot dimensions must be greater than zero.",
+        ));
+    }
+    Ok(())
+}
+
+/// Edits a plot's own fields — `plot_number`, `size`, dimensions, and
+/// pricing. Does not touch `status`, `assigned_customer_id`, or anything
+/// the sales workflow owns; those change through their own endpoints
+/// (`sales.rs`, `approvals.rs`), not here.
+async fn update_plot(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((project_id, plot_id)): Path<(Uuid, Uuid)>,
+    Json(input): Json<UpdatePlotInput>,
+) -> Result<Json<Plot>, AppError> {
+    ensure_project_in_org(&state, project_id, auth.organization_id).await?;
+
+    let plot_number = input.plot_number.trim();
+    if plot_number.is_empty() {
+        return Err(AppError::bad_request("Enter a plot number."));
+    }
+    if input.asking_price <= Decimal::ZERO {
+        return Err(AppError::bad_request(
+            "Enter an asking price greater than zero.",
+        ));
+    }
+    if input.minimum_price > input.asking_price {
+        return Err(AppError::bad_request(
+            "Minimum price can't be higher than the asking price.",
+        ));
+    }
+    validate_dimensions(input.side_1, input.side_2)?;
+
+    let duplicate: bool = sqlx::query_scalar(
+        "select exists(select 1 from plots where project_id = $1 and plot_number = $2 and id <> $3)",
+    )
+    .bind(project_id)
+    .bind(plot_number)
+    .bind(plot_id)
+    .fetch_one(&state.db)
+    .await?;
+    if duplicate {
+        return Err(AppError::conflict(format!(
+            "Plot \"{plot_number}\" already exists in this project."
+        )));
+    }
+
+    let row: Option<PlotRow> = sqlx::query_as(&format!(
+        r#"
+        update plots
+        set plot_number = $1, size = $2, side_1 = $3, side_2 = $4,
+            asking_price = $5, minimum_price = $6
+        where id = $7 and project_id = $8
+        returning {PLOT_COLUMNS}
+        "#,
+    ))
+    .bind(plot_number)
+    .bind(input.size)
+    .bind(input.side_1)
+    .bind(input.side_2)
+    .bind(input.asking_price)
+    .bind(input.minimum_price)
+    .bind(plot_id)
+    .bind(project_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let row = row.ok_or(AppError::NotFound)?;
+    Ok(Json(row.into_domain()?))
 }
 
 /// Best-effort bulk import (see `domain::BulkImportResult`'s module

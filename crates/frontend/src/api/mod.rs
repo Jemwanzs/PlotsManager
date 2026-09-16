@@ -84,6 +84,18 @@ impl ApiClient {
         }
     }
 
+    pub async fn update_plot(
+        &self,
+        project_id: Uuid,
+        plot_id: Uuid,
+        input: domain::UpdatePlotInput,
+    ) -> Result<domain::Plot, ApiError> {
+        match self {
+            Self::Mock(api) => api.update_plot(project_id, plot_id, input).await,
+            Self::Http(api) => api.update_plot(project_id, plot_id, input).await,
+        }
+    }
+
     pub async fn list_customers(&self) -> Result<Vec<CustomerSummary>, ApiError> {
         match self {
             Self::Mock(api) => api.list_customers().await,

@@ -31,7 +31,7 @@ use domain::{
     OrganizationSettings, PlatformOrganizationDetail, PlatformOrganizationSummary, PlotWithColor,
     ProjectMapSummary, ProjectSummary, QuotationDetail, QuotationSummary, RecordPaymentInput,
     SalesReport, SignupInput, UpdateLeadInput, UpdateMapPolygonsInput,
-    UpdateOrganizationSettingsInput,
+    UpdateOrganizationSettingsInput, UpdatePlotInput,
 };
 
 #[derive(Clone)]
@@ -203,6 +203,16 @@ impl HttpApi {
     pub async fn create_plot(&self, input: CreatePlotInput) -> Result<domain::Plot, ApiError> {
         let path = format!("/api/v1/projects/{}/plots", input.project_id);
         self.post(&path, &input).await
+    }
+
+    pub async fn update_plot(
+        &self,
+        project_id: Uuid,
+        plot_id: Uuid,
+        input: UpdatePlotInput,
+    ) -> Result<domain::Plot, ApiError> {
+        let path = format!("/api/v1/projects/{project_id}/plots/{plot_id}");
+        self.put(&path, &input).await
     }
 
     pub async fn list_customers(&self) -> Result<Vec<CustomerSummary>, ApiError> {

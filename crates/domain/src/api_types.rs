@@ -84,12 +84,31 @@ pub struct CreateProjectInput {
 
 /// A new plot within a project. `plot_number` must be unique **within
 /// its project** (docs/05's fix for the legacy system's global-uniqueness
-/// bug — see docs/02 §3).
+/// bug — see docs/02 §3). `side_1`/`side_2` are the plot's side lengths
+/// in feet (e.g. "80 by 100") — optional, and never used to derive
+/// `size`: the two describe the same plot two different ways and are
+/// captured independently (see `domain::plot::format_dimensions`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreatePlotInput {
     pub project_id: Uuid,
     pub plot_number: String,
     pub size: Decimal,
+    pub side_1: Option<Decimal>,
+    pub side_2: Option<Decimal>,
+    pub asking_price: Decimal,
+    pub minimum_price: Decimal,
+}
+
+/// `PUT /api/v1/projects/:project_id/plots/:plot_id` — the same editable
+/// fields `CreatePlotInput` takes at creation, now editable afterward
+/// (docs' "Edit Plot" requirement). `project_id`/`plot_id` ride in the
+/// URL, not the body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdatePlotInput {
+    pub plot_number: String,
+    pub size: Decimal,
+    pub side_1: Option<Decimal>,
+    pub side_2: Option<Decimal>,
     pub asking_price: Decimal,
     pub minimum_price: Decimal,
 }

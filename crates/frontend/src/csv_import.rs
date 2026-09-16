@@ -26,7 +26,7 @@ pub struct ParsedRow<T> {
     pub result: Result<T, String>,
 }
 
-pub const PLOTS_TEMPLATE: &str = "plot_number,size,asking_price,minimum_price\nAG-P2-001,1.25,750000,700000\n";
+pub const PLOTS_TEMPLATE: &str = "plot_number,size,side_1,side_2,asking_price,minimum_price\nAG-P2-001,1.25,80,100,750000,700000\n";
 
 pub const CUSTOMERS_TEMPLATE: &str =
     "full_name,email,phone,id_number,source\nJane Wanjiku,jane@example.com,0722000000,12345678,Referral\n";
@@ -41,6 +41,19 @@ fn non_empty(s: &str) -> Option<String> {
         None
     } else {
         Some(s.to_string())
+    }
+}
+
+/// Plot side lengths are optional in a bulk import (an onboarding sheet
+/// often has acreage but not side measurements) — a blank cell means "not
+/// recorded", same as skipping the field in the "Add a plot" form; only
+/// a non-blank, non-numeric cell is a row error.
+fn parse_optional_dimension(cell: Option<&str>, field: &str) -> Result<Option<Decimal>, String> {
+    match cell.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(s) => Decimal::from_str(s)
+            .map(Some)
+            .map_err(|_| format!("{field} must be a number")),
     }
 }
 
@@ -59,14 +72,18 @@ pub fn parse_plots_csv(text: &str, project_id: Uuid) -> Vec<ParsedRow<CreatePlot
                 }
                 let size = Decimal::from_str(record.get(1).unwrap_or("").trim())
                     .map_err(|_| "size must be a number".to_string())?;
-                let asking_price = Decimal::from_str(record.get(2).unwrap_or("").trim())
+                let side_1 = parse_optional_dimension(record.get(2), "side_1")?;
+                let side_2 = parse_optional_dimension(record.get(3), "side_2")?;
+                let asking_price = Decimal::from_str(record.get(4).unwrap_or("").trim())
                     .map_err(|_| "asking_price must be a number".to_string())?;
-                let minimum_price = Decimal::from_str(record.get(3).unwrap_or("").trim())
+                let minimum_price = Decimal::from_str(record.get(5).unwrap_or("").trim())
                     .map_err(|_| "minimum_price must be a number".to_string())?;
                 Ok(CreatePlotInput {
                     project_id,
                     plot_number: plot_number.to_string(),
                     size,
+                    side_1,
+                    side_2,
                     asking_price,
                     minimum_price,
                 })

@@ -31,6 +31,16 @@ pub struct Plot {
     pub plot_number: String,
     pub title_number: Option<String>,
     pub size: Decimal,
+    /// Side lengths (`database/migrations/0011_plot_dimensions.sql`) —
+    /// a separate, user-facing attribute from `size`, never derived from
+    /// or overwriting it. `None` means not recorded yet, not zero.
+    pub side_1: Option<Decimal>,
+    pub side_2: Option<Decimal>,
+    /// Only meaningful when both sides are `Some`. Stored per plot
+    /// (rather than assumed app-wide) so a future org-level unit
+    /// preference can vary it without another migration — every plot
+    /// today is created with `"ft"`, the only unit the UI offers.
+    pub dimension_unit: String,
     pub asking_price: Decimal,
     pub minimum_price: Decimal,
     pub status: PlotStatus,
@@ -41,4 +51,16 @@ pub struct Plot {
     pub map_feature_id: Option<String>,
     pub assigned_customer_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+}
+
+/// "80 × 100 ft", or `None` when either side hasn't been recorded —
+/// callers show "Not specified" for that case rather than a misleading
+/// "0 × 0". Shared (not duplicated per call site) so the plot grid, the
+/// plot detail panel, the map's selected-plot view, and any future
+/// report all render dimensions identically.
+pub fn format_dimensions(side_1: Option<Decimal>, side_2: Option<Decimal>, unit: &str) -> Option<String> {
+    match (side_1, side_2) {
+        (Some(a), Some(b)) => Some(format!("{a} \u{d7} {b} {unit}")),
+        _ => None,
+    }
 }

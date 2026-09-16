@@ -296,6 +296,7 @@ impl MockApi {
                 "Minimum price can't be higher than the asking price.".to_string(),
             ));
         }
+        validate_dimensions_mock(input.side_1, input.side_2)?;
         let duplicate = db
             .plots
             .iter()
@@ -312,6 +313,9 @@ impl MockApi {
             plot_number,
             title_number: None,
             size: input.size,
+            side_1: input.side_1,
+            side_2: input.side_2,
+            dimension_unit: "ft".to_string(),
             asking_price: input.asking_price,
             minimum_price: input.minimum_price,
             status: PlotStatus::Available,
@@ -321,6 +325,55 @@ impl MockApi {
         };
         db.plots.push(plot.clone());
         Ok(plot)
+    }
+
+    pub async fn update_plot(
+        &self,
+        project_id: Uuid,
+        plot_id: Uuid,
+        input: domain::UpdatePlotInput,
+    ) -> Result<Plot, ApiError> {
+        settle(300).await;
+        let mut db = self.db.lock().unwrap();
+
+        let plot_number = input.plot_number.trim().to_string();
+        if plot_number.is_empty() {
+            return Err(ApiError::InvalidCredentials(
+                "Enter a plot number.".to_string(),
+            ));
+        }
+        if input.asking_price <= Decimal::ZERO {
+            return Err(ApiError::InvalidCredentials(
+                "Enter an asking price greater than zero.".to_string(),
+            ));
+        }
+        if input.minimum_price > input.asking_price {
+            return Err(ApiError::InvalidCredentials(
+                "Minimum price can't be higher than the asking price.".to_string(),
+            ));
+        }
+        validate_dimensions_mock(input.side_1, input.side_2)?;
+        let duplicate = db.plots.iter().any(|p| {
+            p.project_id == project_id && p.plot_number == plot_number && p.id != plot_id
+        });
+        if duplicate {
+            return Err(ApiError::InvalidCredentials(format!(
+                "Plot \"{plot_number}\" already exists in this project."
+            )));
+        }
+
+        let plot = db
+            .plots
+            .iter_mut()
+            .find(|p| p.id == plot_id && p.project_id == project_id)
+            .ok_or(ApiError::NotFound)?;
+        plot.plot_number = plot_number;
+        plot.size = input.size;
+        plot.side_1 = input.side_1;
+        plot.side_2 = input.side_2;
+        plot.asking_price = input.asking_price;
+        plot.minimum_price = input.minimum_price;
+        Ok(plot.clone())
     }
 
     pub async fn list_customers(&self) -> Result<Vec<CustomerSummary>, ApiError> {
@@ -1234,6 +1287,15 @@ fn build_settings(db: &MockDb) -> domain::OrganizationSettings {
     }
 }
 
+fn validate_dimensions_mock(side_1: Option<Decimal>, side_2: Option<Decimal>) -> Result<(), ApiError> {
+    if side_1.is_some_and(|v| v <= Decimal::ZERO) || side_2.is_some_and(|v| v <= Decimal::ZERO) {
+        return Err(ApiError::InvalidCredentials(
+            "Plot dimensions must be greater than zero.".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn to_pg_str(status: ApprovalStatus) -> &'static str {
     match status {
         ApprovalStatus::Pending => "pending",
@@ -1653,6 +1715,10 @@ fn seed() -> MockDb {
         for n in 1..=plot_count {
             let status = statuses[(n as usize - 1) % statuses.len()];
             let base_price = Decimal::from(650_000 + (n as i64 % 5) * 35_000);
+            // Half the demo plots carry recorded dimensions, half don't —
+            // exercises both the "80 × 100 ft" and "Not specified" display
+            // paths without a separate fixture.
+            let has_dimensions = n % 2 == 1;
             plots.push(Plot {
                 id: Uuid::new_v4(),
                 project_id,
@@ -1660,6 +1726,9 @@ fn seed() -> MockDb {
                 title_number: matches!(status, PlotStatus::Sold | PlotStatus::Transferred)
                     .then(|| format!("{code}/TITLE/{n:04}")),
                 size: Decimal::new(125, 2),
+                side_1: has_dimensions.then(|| Decimal::from(50)),
+                side_2: has_dimensions.then(|| Decimal::from(109)),
+                dimension_unit: "ft".to_string(),
                 asking_price: base_price,
                 minimum_price: base_price - Decimal::from(50_000),
                 status,
