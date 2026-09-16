@@ -31,6 +31,10 @@ const DEMO_PASSWORD: &str = "password123";
 
 struct MockDb {
     organization: Organization,
+    date_format: String,
+    timezone: String,
+    plot_numbering: MockNumbering,
+    project_numbering: MockNumbering,
     demo_user: User,
     projects: Vec<Project>,
     plots: Vec<Plot>,
@@ -41,6 +45,19 @@ struct MockDb {
     quotations: Vec<Quotation>,
     approval_requests: Vec<ApprovalRequest>,
     project_maps: HashMap<Uuid, MockProjectMap>,
+}
+
+/// Mirrors one row of the real `numbering_sequences` table
+/// (`database/migrations/0010_organization_settings.sql`) — see
+/// `crates/backend/src/routes/settings.rs` for the real implementation
+/// this stands in for.
+#[derive(Clone)]
+struct MockNumbering {
+    prefix: String,
+    include_year: bool,
+    include_entity_code: bool,
+    padding: u32,
+    next_number: u32,
 }
 
 /// Mirrors the real `project_maps` table (see
@@ -1102,6 +1119,119 @@ impl MockApi {
         }
         Ok(domain::BulkImportResult { created, errors })
     }
+
+    pub async fn get_settings(&self) -> Result<domain::OrganizationSettings, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+        Ok(build_settings(&db))
+    }
+
+    pub async fn update_settings(
+        &self,
+        input: domain::UpdateOrganizationSettingsInput,
+    ) -> Result<domain::OrganizationSettings, ApiError> {
+        settle(200).await;
+        let currency = input.currency.trim().to_uppercase();
+        if currency.len() < 2 || currency.len() > 5 || !currency.chars().all(|c| c.is_ascii_alphabetic()) {
+            return Err(ApiError::InvalidCredentials(
+                "Currency must be a 2-5 letter code, e.g. KES or USD.".to_string(),
+            ));
+        }
+        for cfg in [&input.plot_numbering, &input.project_numbering] {
+            if !(1..=10).contains(&cfg.padding) {
+                return Err(ApiError::InvalidCredentials(
+                    "Numbering digit padding must be between 1 and 10.".to_string(),
+                ));
+            }
+            if cfg.next_number == 0 {
+                return Err(ApiError::InvalidCredentials(
+                    "The next number to issue must be at least 1.".to_string(),
+                ));
+            }
+        }
+
+        let mut db = self.db.lock().unwrap();
+        db.organization.currency = currency;
+        db.date_format = input.date_format.trim().to_string();
+        db.timezone = input.timezone.trim().to_string();
+        db.plot_numbering = MockNumbering {
+            prefix: input.plot_numbering.prefix.trim().to_string(),
+            include_year: input.plot_numbering.include_year,
+            include_entity_code: input.plot_numbering.include_entity_code,
+            padding: input.plot_numbering.padding,
+            next_number: input.plot_numbering.next_number,
+        };
+        db.project_numbering = MockNumbering {
+            prefix: input.project_numbering.prefix.trim().to_string(),
+            include_year: input.project_numbering.include_year,
+            include_entity_code: input.project_numbering.include_entity_code,
+            padding: input.project_numbering.padding,
+            next_number: input.project_numbering.next_number,
+        };
+        Ok(build_settings(&db))
+    }
+
+    pub async fn next_number(
+        &self,
+        entity_type: &str,
+        project_code: Option<&str>,
+    ) -> Result<String, ApiError> {
+        settle(150).await;
+        let mut db = self.db.lock().unwrap();
+        let cfg = match entity_type {
+            "plot" => &mut db.plot_numbering,
+            "project" => &mut db.project_numbering,
+            _ => return Err(ApiError::NotFound),
+        };
+        let issued = cfg.next_number;
+        cfg.next_number += 1;
+        let entity_code = if entity_type == "plot" { project_code } else { None };
+        Ok(domain::format_sequence_number(
+            &cfg.prefix,
+            cfg.include_year,
+            entity_code,
+            cfg.padding,
+            issued,
+        ))
+    }
+}
+
+/// Shared by `get_settings`/`update_settings` — builds the wire payload,
+/// including each numbering config's live preview, from `MockDb`'s
+/// current state. The `db` lock must already be held by the caller.
+fn build_settings(db: &MockDb) -> domain::OrganizationSettings {
+    let numbering_config = |entity_type: domain::NumberingEntityType, cfg: &MockNumbering| {
+        let placeholder_code = (entity_type == domain::NumberingEntityType::Plot
+            && cfg.include_entity_code)
+            .then_some("ABC");
+        domain::NumberingConfig {
+            entity_type,
+            prefix: cfg.prefix.clone(),
+            include_year: cfg.include_year,
+            include_entity_code: cfg.include_entity_code,
+            padding: cfg.padding,
+            next_number: cfg.next_number,
+            preview: domain::format_sequence_number(
+                &cfg.prefix,
+                cfg.include_year,
+                placeholder_code,
+                cfg.padding,
+                cfg.next_number,
+            ),
+        }
+    };
+    domain::OrganizationSettings {
+        organization_id: db.organization.id,
+        name: db.organization.name.clone(),
+        currency: db.organization.currency.clone(),
+        date_format: db.date_format.clone(),
+        timezone: db.timezone.clone(),
+        plot_numbering: numbering_config(domain::NumberingEntityType::Plot, &db.plot_numbering),
+        project_numbering: numbering_config(
+            domain::NumberingEntityType::Project,
+            &db.project_numbering,
+        ),
+    }
 }
 
 fn to_pg_str(status: ApprovalStatus) -> &'static str {
@@ -1449,6 +1579,22 @@ fn seed() -> MockDb {
         currency: "KES".to_string(),
         created_at: Utc::now(),
     };
+    let date_format = "DD/MM/YYYY".to_string();
+    let timezone = "Africa/Nairobi".to_string();
+    let plot_numbering = MockNumbering {
+        prefix: "PLT".to_string(),
+        include_year: false,
+        include_entity_code: false,
+        padding: 4,
+        next_number: 1,
+    };
+    let project_numbering = MockNumbering {
+        prefix: "PRJ".to_string(),
+        include_year: false,
+        include_entity_code: false,
+        padding: 4,
+        next_number: 1,
+    };
 
     let demo_user = User {
         id: Uuid::new_v4(),
@@ -1650,6 +1796,10 @@ fn seed() -> MockDb {
 
     MockDb {
         organization,
+        date_format,
+        timezone,
+        plot_numbering,
+        project_numbering,
         demo_user,
         projects,
         plots,

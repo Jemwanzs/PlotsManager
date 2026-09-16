@@ -6,9 +6,9 @@ use leptos_router::hooks::use_params_map;
 use uuid::Uuid;
 
 use crate::api::{lead_stage_meta, ApiClient, ApiError, LeadStage, UpdateLeadInput};
-use crate::auth::use_api;
+use crate::auth::{use_api, use_currency};
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
-use crate::format::{format_kes, format_payment_mode};
+use crate::format::{format_money, format_payment_mode};
 
 fn stage_value(stage: LeadStage) -> &'static str {
     match stage {
@@ -69,6 +69,7 @@ fn save_lead_update(
 #[component]
 pub fn CustomerDetail() -> impl IntoView {
     let api = use_api();
+    let currency = use_currency();
     let params = use_params_map();
     let customer_id = move || -> Option<Uuid> { params.read().get("id").and_then(|id| Uuid::parse_str(&id).ok()) };
 
@@ -229,7 +230,7 @@ pub fn CustomerDetail() -> impl IntoView {
                                                         <div class="meta">{sale.project_name.clone()}</div>
                                                         <p class="mt-0">
                                                             {format_payment_mode(sale.payment_mode)} " · "
-                                                            {format_kes(sale.agreed_price)}
+                                                            {format_money(sale.agreed_price, &currency.get())}
                                                         </p>
                                                     </A>
                                                 }

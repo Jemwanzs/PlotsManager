@@ -37,6 +37,7 @@ fn secondary_nav_items(is_platform_owner: bool) -> Vec<NavItem> {
         NavItem { href: "/approvals", icon: "\u{2705}", label: "Approvals" },
         NavItem { href: "/reports", icon: "\u{1F4C8}", label: "Reports" },
         NavItem { href: "/sales/import", icon: "\u{1F4E5}", label: "Import sales" },
+        NavItem { href: "/settings", icon: "\u{2699}\u{FE0F}", label: "Settings" },
     ];
     if is_platform_owner {
         items.push(NavItem {

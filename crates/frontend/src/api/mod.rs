@@ -343,4 +343,36 @@ impl ApiClient {
             Self::Http(api) => api.bulk_create_sales(inputs).await,
         }
     }
+
+    pub async fn get_settings(&self) -> Result<domain::OrganizationSettings, ApiError> {
+        match self {
+            Self::Mock(api) => api.get_settings().await,
+            Self::Http(api) => api.get_settings().await,
+        }
+    }
+
+    pub async fn update_settings(
+        &self,
+        input: domain::UpdateOrganizationSettingsInput,
+    ) -> Result<domain::OrganizationSettings, ApiError> {
+        match self {
+            Self::Mock(api) => api.update_settings(input).await,
+            Self::Http(api) => api.update_settings(input).await,
+        }
+    }
+
+    /// Atomically issues and returns the next auto-generated number for
+    /// `entity_type` ("plot" or "project") — used by the "Auto-generate"
+    /// affordance on the create-plot/create-project forms.
+    /// `project_code` is only meaningful for `entity_type: "plot"`.
+    pub async fn next_number(
+        &self,
+        entity_type: &str,
+        project_code: Option<&str>,
+    ) -> Result<String, ApiError> {
+        match self {
+            Self::Mock(api) => api.next_number(entity_type, project_code).await,
+            Self::Http(api) => api.next_number(entity_type, project_code).await,
+        }
+    }
 }

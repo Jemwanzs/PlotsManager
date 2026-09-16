@@ -7,9 +7,9 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 use crate::api::{LoanAccountDetail, RecordPaymentInput};
-use crate::auth::use_api;
+use crate::auth::{use_api, use_currency};
 use crate::components::{ErrorAlert, LoadingState, StatCard, StatusBadge};
-use crate::format::{format_kes, format_payment_status};
+use crate::format::{format_money, format_payment_status};
 
 #[component]
 pub fn LoanAccountDetailPage() -> impl IntoView {
@@ -54,6 +54,7 @@ fn LoanAccountContent(
     detail: LoanAccountDetail,
     on_payment_recorded: impl Fn() + Clone + 'static,
 ) -> impl IntoView {
+    let currency = use_currency();
     let account = detail.account.clone();
     let project_href = format!("/projects/{}", detail.project_id);
     let customer_href = format!("/customers/{}", detail.customer_id);
@@ -73,21 +74,21 @@ fn LoanAccountContent(
         </div>
 
         <div class="stat-grid">
-            <StatCard label="Principal" value=format_kes(account.principal) />
+            <StatCard label="Principal" value=format_money(account.principal, &currency.get()) />
             <StatCard
                 label="Deposit"
-                value=format_kes(account.deposit_paid)
-                sub=format!("of {} required", format_kes(account.deposit_required))
+                value=format_money(account.deposit_paid, &currency.get())
+                sub=format!("of {} required", format_money(account.deposit_required, &currency.get()))
             />
             <StatCard
                 label="Instalment"
-                value=format_kes(account.instalment_amount)
+                value=format_money(account.instalment_amount, &currency.get())
                 sub=format!("every {} days", account.repayment_frequency_days)
             />
-            <StatCard label="Amount paid" value=format_kes(account.amount_paid) />
+            <StatCard label="Amount paid" value=format_money(account.amount_paid, &currency.get()) />
             <StatCard
                 label="Outstanding balance"
-                value=format_kes(account.outstanding_balance)
+                value=format_money(account.outstanding_balance, &currency.get())
                 sub=account.interest_rate.map(|r| format!("{r}% interest")).unwrap_or_else(|| "Interest-free".to_string())
             />
         </div>
@@ -116,7 +117,7 @@ fn LoanAccountContent(
                                 <tr style="border-bottom: 1px solid var(--color-border);">
                                     <td style="padding: var(--space-3)">{p.payment_date.to_string()}</td>
                                     <td style="padding: var(--space-3)">{p.method}</td>
-                                    <td style="padding: var(--space-3)">{format_kes(p.amount)}</td>
+                                    <td style="padding: var(--space-3)">{format_money(p.amount, &currency.get())}</td>
                                     <td style="padding: var(--space-3)">{format_payment_status(p.status)}</td>
                                 </tr>
                             }).collect_view()}
@@ -132,6 +133,7 @@ fn LoanAccountContent(
 #[component]
 fn RecordPaymentForm(loan_account_id: Uuid, on_recorded: impl Fn() + Clone + 'static) -> impl IntoView {
     let api = use_api();
+    let currency = use_currency();
 
     let amount = RwSignal::new(String::new());
     let method = RwSignal::new("M-Pesa".to_string());
@@ -193,7 +195,7 @@ fn RecordPaymentForm(loan_account_id: Uuid, on_recorded: impl Fn() + Clone + 'st
             {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
 
             <div class="field">
-                <label for="amount">"Amount (KES)"</label>
+                <label for="amount">"Amount (" {move || currency.get()} ")"</label>
                 <input
                     id="amount"
                     type="text"

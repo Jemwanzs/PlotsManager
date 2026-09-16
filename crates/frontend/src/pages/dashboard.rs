@@ -1,14 +1,15 @@
 use leptos::prelude::*;
 
 use crate::api::DashboardSummary;
-use crate::auth::{use_api, use_auth};
+use crate::auth::{use_api, use_auth, use_currency};
 use crate::components::{ErrorAlert, LoadingState, StatCard};
-use crate::format::format_kes;
+use crate::format::format_amount;
 
 #[component]
 pub fn Dashboard() -> impl IntoView {
     let api = use_api();
     let auth = use_auth();
+    let currency = use_currency();
 
     let summary = LocalResource::new(move || {
         let api = api.clone();
@@ -27,6 +28,12 @@ pub fn Dashboard() -> impl IntoView {
                 <h1>"Executive dashboard"</h1>
                 <p>"Welcome back, " {org_name} ". Here's how the portfolio looks right now."</p>
             </div>
+            // The figures below (Sales value, Active loan book, ...) show
+            // bare numbers with no per-card currency prefix — this is the
+            // one place the active currency is stated, reactively, from
+            // `use_currency()` (populated from Settings → General →
+            // Currency, not hardcoded).
+            <div class="dashboard-currency">"Currency: " {move || currency.get()}</div>
         </div>
 
         <Suspense fallback=|| view! { <LoadingState label="Loading dashboard…" /> }>
@@ -63,12 +70,12 @@ fn DashboardContent(summary: DashboardSummary) -> impl IntoView {
             <StatCard label="Customers" value=summary.total_customers.to_string() />
             <StatCard
                 label="Sales value"
-                value=format_kes(summary.total_sales_value)
+                value=format_amount(summary.total_sales_value)
                 sub=format!("{} sales", summary.total_sales_count)
             />
             <StatCard
                 label="Active loan book"
-                value=format_kes(summary.active_loan_book)
+                value=format_amount(summary.active_loan_book)
                 sub=format!("{} accounts", summary.active_loans_count)
             />
         </div>
@@ -80,12 +87,12 @@ fn DashboardContent(summary: DashboardSummary) -> impl IntoView {
                 <StatCard
                     label="Performing"
                     value=summary.performing_count.to_string()
-                    sub=format_kes(summary.performing_amount)
+                    sub=format_amount(summary.performing_amount)
                 />
                 <StatCard
                     label="Non-performing"
                     value=summary.non_performing_count.to_string()
-                    sub=format_kes(summary.non_performing_amount)
+                    sub=format_amount(summary.non_performing_amount)
                 />
             </div>
         </div>

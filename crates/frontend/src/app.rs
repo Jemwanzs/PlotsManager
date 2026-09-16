@@ -1,15 +1,16 @@
 use leptos::prelude::*;
+use leptos::task::spawn_local;
 use leptos_router::components::{Route, Router, Routes};
 use leptos_router::{ParamSegment, StaticSegment};
 
 use crate::api::ApiClient;
-use crate::auth::AuthSignal;
+use crate::auth::{AuthSignal, CurrencySignal};
 use crate::layout::AppShell;
 use crate::pages::{
     ApprovalsList, BulkSalesImport, CustomerDetail, CustomersList, Dashboard,
     LoanAccountDetailPage, Login, NewCustomer, NewProject, NotFound,
     PlatformOrganizationDetailPage, PlatformOrganizations, ProjectDetail, ProjectsList,
-    QuotationDetailPage, QuotationsList, Reports, Signup,
+    QuotationDetailPage, QuotationsList, Reports, Settings, Signup,
 };
 
 /// `API_BASE_URL` is read at compile time (Trunk shells out to `cargo
@@ -27,8 +28,32 @@ fn build_api_client() -> ApiClient {
 
 #[component]
 pub fn App() -> impl IntoView {
-    provide_context(build_api_client());
-    provide_context::<AuthSignal>(RwSignal::new(None));
+    let api = build_api_client();
+    provide_context(api.clone());
+    let auth: AuthSignal = RwSignal::new(None);
+    provide_context(auth);
+    let currency: CurrencySignal = RwSignal::new("KES".to_string());
+    provide_context(currency);
+
+    // Populated once per sign-in, not threaded through `AuthSession`
+    // itself — `GET /api/v1/settings` already exists for the Settings
+    // page, so reusing it here avoids growing the login/signup wire
+    // contract just to carry one string. Resets to the "KES" default on
+    // sign-out so a second, different-currency tenant signing in on the
+    // same tab doesn't briefly show the previous tenant's currency.
+    Effect::new(move |_| {
+        match auth.get() {
+            Some(_) => {
+                let api = api.clone();
+                spawn_local(async move {
+                    if let Ok(settings) = api.get_settings().await {
+                        currency.set(settings.currency);
+                    }
+                });
+            }
+            None => currency.set("KES".to_string()),
+        }
+    });
 
     view! {
         <Router>
@@ -94,6 +119,10 @@ pub fn App() -> impl IntoView {
                 <Route
                     path=(StaticSegment("sales"), StaticSegment("import"))
                     view=|| view! { <AppShell><BulkSalesImport /></AppShell> }
+                />
+                <Route
+                    path=StaticSegment("settings")
+                    view=|| view! { <AppShell><Settings /></AppShell> }
                 />
             </Routes>
         </Router>

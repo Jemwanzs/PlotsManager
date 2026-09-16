@@ -15,6 +15,7 @@ mod projects_list;
 mod quotation_detail;
 mod quotations_list;
 mod reports;
+mod settings;
 mod signup;
 
 pub use approvals_list::ApprovalsList;
@@ -34,4 +35,5 @@ pub use projects_list::ProjectsList;
 pub use quotation_detail::QuotationDetailPage;
 pub use quotations_list::QuotationsList;
 pub use reports::Reports;
+pub use settings::Settings;
 pub use signup::Signup;

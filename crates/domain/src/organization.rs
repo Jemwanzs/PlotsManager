@@ -21,3 +21,111 @@ pub struct Branch {
     pub code: String,
     pub region: Option<String>,
 }
+
+/// Which record types the auto-numbering engine currently issues numbers
+/// for. `numbering_sequences.entity_type` (database/migrations/0010) stores
+/// this as free text rather than a DB enum specifically so a later record
+/// type can opt in without a migration -- this is the application-level
+/// allowlist for what exists *today*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NumberingEntityType {
+    Plot,
+    Project,
+}
+
+impl NumberingEntityType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Plot => "plot",
+            Self::Project => "project",
+        }
+    }
+}
+
+/// An organization's auto-numbering configuration for one entity type,
+/// plus a live `preview` of the number `next_number` would format to --
+/// computed with `format_sequence_number` below so the admin sees exactly
+/// what the *next* generated number will look like without consuming it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NumberingConfig {
+    pub entity_type: NumberingEntityType,
+    pub prefix: String,
+    pub include_year: bool,
+    /// Plot numbering only: interpolate the owning project's `code`
+    /// between the prefix/year and the padded number (e.g.
+    /// `PLT-KILIMANI-0001`). Ignored for project numbering, which has no
+    /// parent record to draw a code from.
+    pub include_entity_code: bool,
+    pub padding: u32,
+    pub next_number: u32,
+    pub preview: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NumberingConfigInput {
+    pub prefix: String,
+    pub include_year: bool,
+    pub include_entity_code: bool,
+    pub padding: u32,
+    pub next_number: u32,
+}
+
+/// `GET /api/v1/settings` — the "Organization / System Configuration"
+/// screen's whole payload in one round trip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrganizationSettings {
+    pub organization_id: Uuid,
+    pub name: String,
+    pub currency: String,
+    pub date_format: String,
+    pub timezone: String,
+    pub plot_numbering: NumberingConfig,
+    pub project_numbering: NumberingConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateOrganizationSettingsInput {
+    pub currency: String,
+    pub date_format: String,
+    pub timezone: String,
+    pub plot_numbering: NumberingConfigInput,
+    pub project_numbering: NumberingConfigInput,
+}
+
+/// `POST /api/v1/settings/numbering/:entity_type/next` — the number that
+/// was just atomically issued (the counter is already incremented by the
+/// time this comes back), for pre-filling a plot/project creation form's
+/// number field.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeneratedNumber {
+    pub number: String,
+}
+
+/// Shared by the backend (computing `NumberingConfig.preview`, and the
+/// real generated number on `POST /settings/numbering/:entity_type/next`)
+/// and the frontend (a live preview while the admin edits an as-yet-
+/// unsaved config on the Settings page, with no round trip per
+/// keystroke) — one algorithm, one place, per this crate's whole reason
+/// for existing (see lib.rs module docs).
+pub fn format_sequence_number(
+    prefix: &str,
+    include_year: bool,
+    entity_code: Option<&str>,
+    padding: u32,
+    number: u32,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let prefix = prefix.trim();
+    if !prefix.is_empty() {
+        parts.push(prefix.to_string());
+    }
+    if include_year {
+        parts.push(Utc::now().format("%Y").to_string());
+    }
+    if let Some(code) = entity_code.map(str::trim).filter(|c| !c.is_empty()) {
+        parts.push(code.to_string());
+    }
+    parts.push(format!("{:0width$}", number, width = padding.max(1) as usize));
+    parts.join("-")
+}

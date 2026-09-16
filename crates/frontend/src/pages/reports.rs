@@ -2,9 +2,9 @@ use chrono::NaiveDate;
 use leptos::prelude::*;
 use uuid::Uuid;
 
-use crate::auth::use_api;
+use crate::auth::{use_api, use_currency};
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatCard, StatusBadge};
-use crate::format::{format_kes, format_payment_mode};
+use crate::format::{format_money, format_payment_mode};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -68,6 +68,7 @@ fn parse_date(s: String) -> Option<NaiveDate> {
 #[component]
 fn SalesReportTab() -> impl IntoView {
     let api = use_api();
+    let currency = use_currency();
     let project_filter = RwSignal::new(String::new());
     let from_filter = RwSignal::new(String::new());
     let to_filter = RwSignal::new(String::new());
@@ -157,7 +158,7 @@ fn SalesReportTab() -> impl IntoView {
                         Ok(r) => view! {
                             <div class="stat-grid">
                                 <StatCard label="Sales" value=r.total_count.to_string() />
-                                <StatCard label="Total value" value=format_kes(r.total_value) />
+                                <StatCard label="Total value" value=format_money(r.total_value, &currency.get()) />
                             </div>
                             <div class="card">
                                 <div class="table-scroll">
@@ -185,7 +186,7 @@ fn SalesReportTab() -> impl IntoView {
                                                             <td>{row.customer_name}</td>
                                                             <td>{row.agent_name.unwrap_or_else(|| "\u{2014}".to_string())}</td>
                                                             <td>{format_payment_mode(row.payment_mode)}</td>
-                                                            <td>{format_kes(row.agreed_price)}</td>
+                                                            <td>{format_money(row.agreed_price, &currency.get())}</td>
                                                         </tr>
                                                     }
                                                 })
@@ -207,6 +208,7 @@ fn SalesReportTab() -> impl IntoView {
 #[component]
 fn InventoryReportTab() -> impl IntoView {
     let api = use_api();
+    let currency = use_currency();
 
     let report = LocalResource::new({
         let api = api.clone();
@@ -259,7 +261,7 @@ fn InventoryReportTab() -> impl IntoView {
                                                                                 <StatusBadge label=s.status_label color=s.status_color />
                                                                             </td>
                                                                             <td>{s.count}</td>
-                                                                            <td>{format_kes(s.value)}</td>
+                                                                            <td>{format_money(s.value, &currency.get())}</td>
                                                                         </tr>
                                                                     }
                                                                 })
@@ -285,6 +287,7 @@ fn InventoryReportTab() -> impl IntoView {
 #[component]
 fn AgentReportTab() -> impl IntoView {
     let api = use_api();
+    let currency = use_currency();
     let from_filter = RwSignal::new(String::new());
     let to_filter = RwSignal::new(String::new());
 
@@ -366,7 +369,7 @@ fn AgentReportTab() -> impl IntoView {
                                                         <tr>
                                                             <td>{row.agent_name}</td>
                                                             <td>{row.sales_count}</td>
-                                                            <td>{format_kes(row.sales_value)}</td>
+                                                            <td>{format_money(row.sales_value, &currency.get())}</td>
                                                             <td>{row.quotations_sent}</td>
                                                             <td>{row.quotations_accepted}</td>
                                                             <td>{conversion}</td>

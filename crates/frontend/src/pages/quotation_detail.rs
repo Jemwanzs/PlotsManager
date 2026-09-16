@@ -5,9 +5,9 @@ use leptos_router::hooks::use_params_map;
 use uuid::Uuid;
 
 use crate::api::ApiError;
-use crate::auth::use_api;
+use crate::auth::{use_api, use_currency};
 use crate::components::{ErrorAlert, LoadingState, StatusBadge};
-use crate::format::{format_kes, format_payment_mode};
+use crate::format::{format_money, format_payment_mode};
 use domain::QuotationStatus;
 
 /// Free functions taking owned parameters, not closures captured from
@@ -40,6 +40,7 @@ fn run(
 #[component]
 pub fn QuotationDetailPage() -> impl IntoView {
     let api = use_api();
+    let currency = use_currency();
     let params = use_params_map();
     let quotation_id = move || -> Option<Uuid> { params.read().get("id").and_then(|id| Uuid::parse_str(&id).ok()) };
 
@@ -89,7 +90,7 @@ pub fn QuotationDetailPage() -> impl IntoView {
                                 {d.below_minimum_price.then(|| view! {
                                     <div class="alert alert-warning">
                                         "This quote is below the plot's minimum price ("
-                                        {format_kes(d.minimum_price)}
+                                        {format_money(d.minimum_price, &currency.get())}
                                         "). Accepting it will require sign-off — see "
                                         <A href="/approvals">"Approvals"</A>
                                         "."
@@ -99,8 +100,8 @@ pub fn QuotationDetailPage() -> impl IntoView {
                                 <div class="card" style="max-width: 480px">
                                     <p><strong>"Payment mode: "</strong>{format_payment_mode(d.quotation.payment_mode)}</p>
                                     <p>
-                                        <strong>"Quoted price: "</strong>{format_kes(d.quotation.quoted_price)}
-                                        " (asking " {format_kes(d.asking_price)} ")"
+                                        <strong>"Quoted price: "</strong>{format_money(d.quotation.quoted_price, &currency.get())}
+                                        " (asking " {format_money(d.asking_price, &currency.get())} ")"
                                     </p>
                                     <p><strong>"Valid until: "</strong>{d.quotation.valid_until.to_string()}</p>
                                     {d.quotation.notes.clone().map(|n| view! { <p><strong>"Notes: "</strong>{n}</p> })}

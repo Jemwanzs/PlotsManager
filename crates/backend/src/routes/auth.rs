@@ -228,6 +228,18 @@ async fn signup(
     .execute(&mut *tx)
     .await?;
 
+    // Every organization gets a plot/project numbering config from the
+    // moment it exists — matches the backfill migration 0010 runs for
+    // orgs that predate it, so `GET /api/v1/settings` never has to
+    // special-case "not configured yet".
+    sqlx::query(
+        r#"insert into numbering_sequences (organization_id, entity_type, prefix, padding)
+           values ($1, 'plot', 'PLT', 4), ($1, 'project', 'PRJ', 4)"#,
+    )
+    .bind(org_id)
+    .execute(&mut *tx)
+    .await?;
+
     tx.commit().await?;
 
     let token = issue_session_token(

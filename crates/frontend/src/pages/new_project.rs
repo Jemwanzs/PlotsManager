@@ -21,6 +21,25 @@ pub fn NewProject() -> impl IntoView {
     let area_unit = RwSignal::new("acres".to_string());
     let error = RwSignal::new(None::<String>);
     let submitting = RwSignal::new(false);
+    let generating = RwSignal::new(false);
+
+    let on_generate = {
+        let api = api.clone();
+        move |_| {
+            if generating.get() {
+                return;
+            }
+            generating.set(true);
+            let api = api.clone();
+            spawn_local(async move {
+                match api.next_number("project", None).await {
+                    Ok(number) => code.set(number),
+                    Err(e) => error.set(Some(format!("Couldn't generate a project code: {e}"))),
+                }
+                generating.set(false);
+            });
+        }
+    };
 
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
@@ -85,14 +104,24 @@ pub fn NewProject() -> impl IntoView {
 
                 <div class="field">
                     <label for="code">"Project code"</label>
-                    <input
-                        id="code"
-                        type="text"
-                        required
-                        placeholder="e.g. RM-P2"
-                        prop:value=code
-                        on:input=move |ev| code.set(event_target_value(&ev))
-                    />
+                    <div style="display:flex; gap: var(--space-2);">
+                        <input
+                            id="code"
+                            type="text"
+                            required
+                            placeholder="e.g. RM-P2"
+                            prop:value=code
+                            on:input=move |ev| code.set(event_target_value(&ev))
+                        />
+                        <button
+                            type="button"
+                            class="btn btn-secondary"
+                            disabled=generating
+                            on:click=on_generate
+                        >
+                            {move || if generating.get() { "…" } else { "Auto-generate" }}
+                        </button>
+                    </div>
                 </div>
 
                 <div class="field">

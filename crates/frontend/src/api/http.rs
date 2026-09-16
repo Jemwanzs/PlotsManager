@@ -27,10 +27,11 @@ use domain::{
     AgentPerformanceReport, ApiError, ApprovalRequestSummary, AuthSession, BulkImportResult,
     BulkSaleRow, CreateCustomerInput, CreatePlotInput, CreateProjectInput, CreateQuotationInput,
     CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary, DecideApprovalInput,
-    InventoryReport, LoanAccountDetail, LoginInput, MapPolygons, PlatformOrganizationDetail,
-    PlatformOrganizationSummary, PlotWithColor, ProjectMapSummary, ProjectSummary,
-    QuotationDetail, QuotationSummary, RecordPaymentInput, SalesReport, SignupInput,
-    UpdateLeadInput, UpdateMapPolygonsInput,
+    GeneratedNumber, InventoryReport, LoanAccountDetail, LoginInput, MapPolygons,
+    OrganizationSettings, PlatformOrganizationDetail, PlatformOrganizationSummary, PlotWithColor,
+    ProjectMapSummary, ProjectSummary, QuotationDetail, QuotationSummary, RecordPaymentInput,
+    SalesReport, SignupInput, UpdateLeadInput, UpdateMapPolygonsInput,
+    UpdateOrganizationSettingsInput,
 };
 
 #[derive(Clone)]
@@ -435,5 +436,35 @@ impl HttpApi {
         inputs: Vec<BulkSaleRow>,
     ) -> Result<BulkImportResult, ApiError> {
         self.post("/api/v1/sales/bulk", &inputs).await
+    }
+
+    pub async fn get_settings(&self) -> Result<OrganizationSettings, ApiError> {
+        self.get("/api/v1/settings").await
+    }
+
+    pub async fn update_settings(
+        &self,
+        input: UpdateOrganizationSettingsInput,
+    ) -> Result<OrganizationSettings, ApiError> {
+        self.put("/api/v1/settings", &input).await
+    }
+
+    pub async fn next_number(
+        &self,
+        entity_type: &str,
+        project_code: Option<&str>,
+    ) -> Result<String, ApiError> {
+        let path = match project_code.filter(|c| !c.is_empty()) {
+            Some(code) => {
+                let encoded = js_sys::encode_uri_component(code);
+                format!(
+                    "/api/v1/settings/numbering/{entity_type}/next?project_code={}",
+                    encoded.as_string().unwrap_or_default()
+                )
+            }
+            None => format!("/api/v1/settings/numbering/{entity_type}/next"),
+        };
+        let generated: GeneratedNumber = self.post(&path, &()).await?;
+        Ok(generated.number)
     }
 }

@@ -8,10 +8,10 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 use crate::api::{status_meta, CreatePlotInput, CreateQuotationInput, CreateSaleInput, PlotWithColor};
-use crate::auth::use_api;
+use crate::auth::{use_api, use_currency};
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
 use crate::csv_import::{self, ParsedRow};
-use crate::format::format_kes;
+use crate::format::format_money;
 use domain::{MapFeature, MapPolygons, PaymentMode, PlotStatus};
 
 const ALL_STATUSES: &[PlotStatus] = &[
@@ -57,6 +57,7 @@ fn feature_color(plots: &[PlotWithColor], plot_id: Uuid) -> String {
 #[component]
 pub fn ProjectDetail() -> impl IntoView {
     let api = use_api();
+    let currency = use_currency();
     let params = use_params_map();
 
     let project_id = move || -> Option<Uuid> { params.read().get("id").and_then(|id| Uuid::parse_str(&id).ok()) };
@@ -138,6 +139,7 @@ pub fn ProjectDetail() -> impl IntoView {
                                     <div class="card" style="margin-bottom: var(--space-4)">
                                         <AddPlotForm
                                             project_id=project_id_val
+                                            project_code=p.code.clone()
                                             on_added=move || {
                                                 plots.refetch();
                                                 show_add_plot.set(false);
@@ -223,7 +225,7 @@ pub fn ProjectDetail() -> impl IntoView {
                                                     on:click=move |_| selected.set(Some(pwc_for_click.clone()))
                                                 >
                                                     <span class="plot-number">{pwc.plot.plot_number.clone()}</span>
-                                                    <span class="plot-price">{format_kes(pwc.plot.asking_price)}</span>
+                                                    <span class="plot-price">{format_money(pwc.plot.asking_price, &currency.get())}</span>
                                                 </button>
                                             }
                                         })
@@ -253,7 +255,7 @@ pub fn ProjectDetail() -> impl IntoView {
                             </div>
                             <p>
                                 "Size: " {pwc.plot.size.to_string()} " acres · Asking price: "
-                                {format_kes(pwc.plot.asking_price)}
+                                {format_money(pwc.plot.asking_price, &currency.get())}
                             </p>
                             {pwc.plot.title_number.clone().map(|t| view! { <p>"Title: " {t}</p> })}
 
@@ -314,8 +316,13 @@ pub fn ProjectDetail() -> impl IntoView {
 /// project by `create_plot` (docs/05's fix for the legacy system's
 /// global-uniqueness bug — docs/02 §3), not globally.
 #[component]
-fn AddPlotForm(project_id: Uuid, on_added: impl Fn() + Clone + 'static) -> impl IntoView {
+fn AddPlotForm(
+    project_id: Uuid,
+    project_code: String,
+    on_added: impl Fn() + Clone + 'static,
+) -> impl IntoView {
     let api = use_api();
+    let currency = use_currency();
 
     let plot_number = RwSignal::new(String::new());
     let size = RwSignal::new(String::new());
@@ -323,6 +330,27 @@ fn AddPlotForm(project_id: Uuid, on_added: impl Fn() + Clone + 'static) -> impl 
     let minimum_price = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
     let submitting = RwSignal::new(false);
+    let generating = RwSignal::new(false);
+
+    let on_generate = {
+        let api = api.clone();
+        let project_code = project_code.clone();
+        move |_| {
+            if generating.get() {
+                return;
+            }
+            generating.set(true);
+            let api = api.clone();
+            let project_code = project_code.clone();
+            spawn_local(async move {
+                match api.next_number("plot", Some(&project_code)).await {
+                    Ok(number) => plot_number.set(number),
+                    Err(e) => error.set(Some(format!("Couldn't generate a plot number: {e}"))),
+                }
+                generating.set(false);
+            });
+        }
+    };
 
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
@@ -379,13 +407,23 @@ fn AddPlotForm(project_id: Uuid, on_added: impl Fn() + Clone + 'static) -> impl 
 
             <div class="field">
                 <label for="plot-number">"Plot number"</label>
-                <input
-                    id="plot-number"
-                    type="text"
-                    required
-                    prop:value=plot_number
-                    on:input=move |ev| plot_number.set(event_target_value(&ev))
-                />
+                <div style="display:flex; gap: var(--space-2);">
+                    <input
+                        id="plot-number"
+                        type="text"
+                        required
+                        prop:value=plot_number
+                        on:input=move |ev| plot_number.set(event_target_value(&ev))
+                    />
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        disabled=generating
+                        on:click=on_generate
+                    >
+                        {move || if generating.get() { "…" } else { "Auto-generate" }}
+                    </button>
+                </div>
             </div>
 
             <div class="field">
@@ -401,7 +439,7 @@ fn AddPlotForm(project_id: Uuid, on_added: impl Fn() + Clone + 'static) -> impl 
             </div>
 
             <div class="field">
-                <label for="asking-price">"Asking price (KES)"</label>
+                <label for="asking-price">"Asking price (" {move || currency.get()} ")"</label>
                 <input
                     id="asking-price"
                     type="text"
@@ -413,7 +451,7 @@ fn AddPlotForm(project_id: Uuid, on_added: impl Fn() + Clone + 'static) -> impl 
             </div>
 
             <div class="field">
-                <label for="minimum-price">"Minimum price (KES, optional)"</label>
+                <label for="minimum-price">"Minimum price (" {move || currency.get()} ", optional)"</label>
                 <input
                     id="minimum-price"
                     type="text"
@@ -608,6 +646,7 @@ fn ReserveForm(
     on_reserved: impl Fn() + Clone + 'static,
 ) -> impl IntoView {
     let api = use_api();
+    let currency = use_currency();
 
     let customers = LocalResource::new({
         let api = api.clone();
@@ -720,7 +759,7 @@ fn ReserveForm(
             </div>
 
             <div class="field">
-                <label for="price">"Agreed price (KES)"</label>
+                <label for="price">"Agreed price (" {move || currency.get()} ")"</label>
                 <input
                     id="price"
                     type="text"
@@ -746,6 +785,7 @@ fn ReserveForm(
 #[component]
 fn QuoteForm(plot_id: Uuid, asking_price: Decimal, on_quoted: impl Fn() + Clone + 'static) -> impl IntoView {
     let api = use_api();
+    let currency = use_currency();
 
     let customers = LocalResource::new({
         let api = api.clone();
@@ -864,7 +904,7 @@ fn QuoteForm(plot_id: Uuid, asking_price: Decimal, on_quoted: impl Fn() + Clone 
             </div>
 
             <div class="field">
-                <label for="quote-price">"Quoted price (KES)"</label>
+                <label for="quote-price">"Quoted price (" {move || currency.get()} ")"</label>
                 <input
                     id="quote-price"
                     type="text"

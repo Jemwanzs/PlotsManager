@@ -9,6 +9,7 @@ mod projects;
 mod quotations;
 mod reports;
 mod sales;
+mod settings;
 
 use axum::Router;
 
@@ -27,4 +28,5 @@ pub fn router() -> Router<AppState> {
         .merge(approvals::router())
         .merge(reports::router())
         .merge(project_map::router())
+        .merge(settings::router())
 }

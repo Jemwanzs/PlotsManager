@@ -1,13 +1,14 @@
 use leptos::prelude::*;
 use leptos_router::components::A;
 
-use crate::auth::use_api;
+use crate::auth::{use_api, use_currency};
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
-use crate::format::{format_kes, format_payment_mode};
+use crate::format::{format_money, format_payment_mode};
 
 #[component]
 pub fn QuotationsList() -> impl IntoView {
     let api = use_api();
+    let currency = use_currency();
 
     let quotations = LocalResource::new(move || {
         let api = api.clone();
@@ -51,7 +52,7 @@ pub fn QuotationsList() -> impl IntoView {
                                                 <div class="meta">{q.project_name.clone()} " · " {q.customer_name.clone()}</div>
                                                 <p class="mt-0">
                                                     {format_payment_mode(q.quotation.payment_mode)} " · "
-                                                    {format_kes(q.quotation.quoted_price)}
+                                                    {format_money(q.quotation.quoted_price, &currency.get())}
                                                 </p>
                                                 <p class="meta mt-0">"Valid until " {q.quotation.valid_until.to_string()}</p>
                                             </A>

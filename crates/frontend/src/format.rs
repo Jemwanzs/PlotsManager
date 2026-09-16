@@ -22,12 +22,23 @@ pub fn format_payment_status(status: PaymentStatus) -> &'static str {
 /// "KES 1,234,500" — `Decimal`'s own `Display` has no thousands
 /// separator, and every money value in this app needs one. The space
 /// is a non-breaking one: a narrow stat tile will otherwise wrap
-/// right after "KES", stranding it alone on its own line above the
-/// number.
-pub fn format_kes(amount: Decimal) -> String {
+/// right after the currency code, stranding it alone on its own line
+/// above the number. `currency` is the organization's configured
+/// currency (`use_currency()`, populated from `GET /api/v1/settings`
+/// after login) — never hardcoded, so a non-KES tenant sees their own
+/// currency everywhere this is called.
+pub fn format_money(amount: Decimal, currency: &str) -> String {
+    let sign = if amount.is_sign_negative() { "-" } else { "" };
+    format!("{sign}{currency}\u{a0}{}", format_amount(amount.abs()))
+}
+
+/// The bare number, no currency code — for places that show the
+/// currency once nearby instead of repeating it on every figure (the
+/// dashboard's stat cards; see `pages/dashboard.rs`).
+pub fn format_amount(amount: Decimal) -> String {
     let sign = if amount.is_sign_negative() { "-" } else { "" };
     let magnitude = amount.abs().round();
-    format!("{sign}KES\u{a0}{}", group_thousands(&magnitude.to_string()))
+    format!("{sign}{}", group_thousands(&magnitude.to_string()))
 }
 
 fn group_thousands(digits: &str) -> String {
@@ -48,9 +59,16 @@ mod tests {
 
     #[test]
     fn formats_with_thousands_separators() {
-        assert_eq!(format_kes(Decimal::from(1234500)), "KES\u{a0}1,234,500");
-        assert_eq!(format_kes(Decimal::from(500)), "KES\u{a0}500");
-        assert_eq!(format_kes(Decimal::from(-42000)), "-KES\u{a0}42,000");
-        assert_eq!(format_kes(Decimal::from(0)), "KES\u{a0}0");
+        assert_eq!(format_money(Decimal::from(1234500), "KES"), "KES\u{a0}1,234,500");
+        assert_eq!(format_money(Decimal::from(500), "KES"), "KES\u{a0}500");
+        assert_eq!(format_money(Decimal::from(-42000), "KES"), "-KES\u{a0}42,000");
+        assert_eq!(format_money(Decimal::from(0), "KES"), "KES\u{a0}0");
+        assert_eq!(format_money(Decimal::from(1234500), "USD"), "USD\u{a0}1,234,500");
+    }
+
+    #[test]
+    fn formats_bare_amounts() {
+        assert_eq!(format_amount(Decimal::from(1234500)), "1,234,500");
+        assert_eq!(format_amount(Decimal::from(-42000)), "-42,000");
     }
 }

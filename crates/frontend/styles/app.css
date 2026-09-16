@@ -203,6 +203,22 @@ a {
   color: #92400e;
   border: 1px solid #fde68a;
 }
+.alert-success {
+  background: #ecfdf5;
+  color: var(--color-primary-hover);
+  border: 1px solid #a7f3d0;
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.9rem;
+  margin-bottom: var(--space-3);
+}
+.checkbox-field input {
+  width: auto;
+}
 
 /* ---------- Cards, badges ---------- */
 
@@ -348,6 +364,17 @@ a {
 }
 .page-header p {
   margin: 0;
+}
+.dashboard-currency {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-primary);
+  background: var(--color-primary-contrast);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  white-space: nowrap;
+  align-self: flex-start;
 }
 
 /* Bottom tab bar — phones/tablets. Capped at 4 primary destinations

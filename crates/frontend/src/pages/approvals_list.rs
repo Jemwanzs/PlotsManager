@@ -2,9 +2,9 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::{ApiClient, ApiError};
-use crate::auth::use_api;
+use crate::auth::{use_api, use_currency};
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
-use crate::format::{format_kes, format_payment_mode};
+use crate::format::{format_money, format_payment_mode};
 use domain::ApprovalStatus;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -71,6 +71,7 @@ fn decide(
 #[component]
 pub fn ApprovalsList() -> impl IntoView {
     let api = use_api();
+    let currency = use_currency();
     let filter = RwSignal::new(Filter::Pending);
     let working = RwSignal::new(false);
     let action_error = RwSignal::new(None::<String>);
@@ -154,8 +155,8 @@ pub fn ApprovalsList() -> impl IntoView {
                                                         <div class="meta">{r.project_name.clone()} " · " {r.customer_name.clone()}</div>
                                                         <p class="mt-0">
                                                             {format_payment_mode(r.request.payment_mode)} " · "
-                                                            {format_kes(r.request.agreed_price)}
-                                                            " (minimum " {format_kes(r.request.minimum_price)} ")"
+                                                            {format_money(r.request.agreed_price, &currency.get())}
+                                                            " (minimum " {format_money(r.request.minimum_price, &currency.get())} ")"
                                                         </p>
                                                         <p class="meta mt-0">{r.request.reason.clone()}</p>
                                                         <p class="meta mt-0">"Requested by " {r.requested_by_name.clone()}</p>
