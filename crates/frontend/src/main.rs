@@ -4,6 +4,7 @@ mod auth;
 mod components;
 mod csv_import;
 mod format;
+mod icons;
 mod layout;
 mod pages;
 

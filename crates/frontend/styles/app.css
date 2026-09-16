@@ -187,6 +187,11 @@ a {
   font-size: 0.82rem;
 }
 
+.icon svg {
+  display: block;
+  flex-shrink: 0;
+}
+
 .dimension-row {
   display: flex;
   flex-wrap: wrap;
@@ -440,8 +445,12 @@ a {
 }
 .bottom-nav .icon,
 .bottom-nav-more .icon {
-  font-size: 1.2rem;
-  line-height: 1;
+  display: inline-flex;
+}
+.bottom-nav .icon svg,
+.bottom-nav-more .icon svg {
+  width: 21px;
+  height: 21px;
 }
 
 /* "More" bottom sheet — the rest of `all_nav_items` that doesn't fit
@@ -485,8 +494,12 @@ a {
   background: var(--color-bg);
 }
 .nav-sheet .icon {
-  font-size: 1.2rem;
-  line-height: 1;
+  display: inline-flex;
+  color: var(--color-text-muted);
+}
+.nav-sheet .icon svg {
+  width: 20px;
+  height: 20px;
 }
 @keyframes sheet-slide-up {
   from {
@@ -566,6 +579,9 @@ a {
   .sidebar-nav a.active {
     background: #e8f3ee;
     color: var(--color-primary);
+  }
+  .sidebar-nav .icon {
+    display: inline-flex;
   }
   .topbar {
     display: none;

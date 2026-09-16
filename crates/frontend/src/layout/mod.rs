@@ -3,10 +3,11 @@ use leptos_router::components::A;
 use leptos_router::hooks::{use_location, use_navigate};
 
 use crate::auth::use_auth;
+use crate::icons::{Icon, IconName};
 
 struct NavItem {
     href: &'static str,
-    icon: &'static str,
+    icon: IconName,
     label: &'static str,
 }
 
@@ -20,10 +21,10 @@ struct NavItem {
 /// see `all_nav_items`.
 fn primary_nav_items() -> Vec<NavItem> {
     vec![
-        NavItem { href: "/", icon: "\u{1F4CA}", label: "Home" },
-        NavItem { href: "/projects", icon: "\u{1F3D8}\u{FE0F}", label: "Projects" },
-        NavItem { href: "/customers", icon: "\u{1F464}", label: "Customers" },
-        NavItem { href: "/quotations", icon: "\u{1F4C4}", label: "Quotes" },
+        NavItem { href: "/", icon: IconName::Home, label: "Home" },
+        NavItem { href: "/projects", icon: IconName::Projects, label: "Projects" },
+        NavItem { href: "/customers", icon: IconName::Customers, label: "Customers" },
+        NavItem { href: "/quotations", icon: IconName::Quotes, label: "Quotes" },
     ]
 }
 
@@ -34,15 +35,15 @@ fn primary_nav_items() -> Vec<NavItem> {
 /// not the access control.
 fn secondary_nav_items(is_platform_owner: bool) -> Vec<NavItem> {
     let mut items = vec![
-        NavItem { href: "/approvals", icon: "\u{2705}", label: "Approvals" },
-        NavItem { href: "/reports", icon: "\u{1F4C8}", label: "Reports" },
-        NavItem { href: "/sales/import", icon: "\u{1F4E5}", label: "Import sales" },
-        NavItem { href: "/settings", icon: "\u{2699}\u{FE0F}", label: "Settings" },
+        NavItem { href: "/approvals", icon: IconName::Approvals, label: "Approvals" },
+        NavItem { href: "/reports", icon: IconName::Reports, label: "Reports" },
+        NavItem { href: "/sales/import", icon: IconName::Import, label: "Import sales" },
+        NavItem { href: "/settings", icon: IconName::Settings, label: "Settings" },
     ];
     if is_platform_owner {
         items.push(NavItem {
             href: "/platform",
-            icon: "\u{1F6E1}\u{FE0F}",
+            icon: IconName::Platform,
             label: "Platform",
         });
     }
@@ -123,7 +124,7 @@ pub fn AppShell(children: Children) -> impl IntoView {
                             .map(|item| {
                                 view! {
                                     <A href=item.href exact=item.href == "/">
-                                        <span>{item.icon}</span>
+                                        <span class="icon"><Icon name=item.icon /></span>
                                         <span>{item.label}</span>
                                     </A>
                                 }
@@ -153,7 +154,7 @@ pub fn AppShell(children: Children) -> impl IntoView {
                         .map(|item| {
                             view! {
                                 <A href=item.href exact=item.href == "/">
-                                    <span class="icon">{item.icon}</span>
+                                    <span class="icon"><Icon name=item.icon /></span>
                                     <span>{item.label}</span>
                                 </A>
                             }
@@ -166,7 +167,7 @@ pub fn AppShell(children: Children) -> impl IntoView {
                     class:active=move || show_more.get()
                     on:click=move |_| show_more.update(|v| *v = !*v)
                 >
-                    <span class="icon">"\u{22EF}"</span>
+                    <span class="icon"><Icon name=IconName::More /></span>
                     <span>"More"</span>
                 </button>
             </nav>
@@ -206,7 +207,7 @@ pub fn AppShell(children: Children) -> impl IntoView {
                                 .map(|item| {
                                     view! {
                                         <A href=item.href>
-                                            <span class="icon">{item.icon}</span>
+                                            <span class="icon"><Icon name=item.icon /></span>
                                             <span>{item.label}</span>
                                         </A>
                                     }
