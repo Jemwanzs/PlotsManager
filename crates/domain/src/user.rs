@@ -32,3 +32,29 @@ pub struct RoleAssignment {
     pub project_id: Option<Uuid>,
     pub branch_id: Option<Uuid>,
 }
+
+/// Mirrors the `roles` table — an organization-defined name plus the set
+/// of `domain::permissions` strings it grants (`["*"]` for the
+/// auto-provisioned signup "Admin" role). `assigned_user_count` is
+/// listing-only context (how many users currently hold this role), not
+/// a column on the row itself.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Role {
+    pub id: Uuid,
+    pub organization_id: Uuid,
+    pub name: String,
+    pub permissions: Vec<String>,
+    pub assigned_user_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateRoleInput {
+    pub name: String,
+    pub permissions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateRoleInput {
+    pub name: String,
+    pub permissions: Vec<String>,
+}

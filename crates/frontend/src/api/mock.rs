@@ -45,6 +45,7 @@ struct MockDb {
     quotations: Vec<Quotation>,
     approval_requests: Vec<ApprovalRequest>,
     project_maps: HashMap<Uuid, MockProjectMap>,
+    roles: Vec<domain::Role>,
 }
 
 /// Mirrors one row of the real `numbering_sequences` table
@@ -613,6 +614,79 @@ impl MockApi {
                 .cmp(&a.account.outstanding_balance)
         });
         Ok(summaries)
+    }
+
+    pub async fn list_roles(&self) -> Result<Vec<domain::Role>, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+        Ok(db.roles.clone())
+    }
+
+    pub async fn list_permissions(&self) -> Result<Vec<(String, String)>, ApiError> {
+        settle(100).await;
+        Ok(domain::ALL_PERMISSIONS
+            .iter()
+            .map(|(perm, label)| (perm.to_string(), label.to_string()))
+            .collect())
+    }
+
+    pub async fn create_role(&self, input: domain::CreateRoleInput) -> Result<domain::Role, ApiError> {
+        settle(250).await;
+        let mut db = self.db.lock().unwrap();
+        let name = input.name.trim().to_string();
+        if name.is_empty() {
+            return Err(ApiError::InvalidCredentials("Enter a role name.".to_string()));
+        }
+        if db.roles.iter().any(|r| r.name.eq_ignore_ascii_case(&name)) {
+            return Err(ApiError::InvalidCredentials(format!(
+                "A role named \"{name}\" already exists."
+            )));
+        }
+        let role = domain::Role {
+            id: Uuid::new_v4(),
+            organization_id: db.organization.id,
+            name,
+            permissions: input.permissions,
+            assigned_user_count: 0,
+        };
+        db.roles.push(role.clone());
+        Ok(role)
+    }
+
+    pub async fn update_role(
+        &self,
+        id: Uuid,
+        input: domain::UpdateRoleInput,
+    ) -> Result<domain::Role, ApiError> {
+        settle(250).await;
+        let mut db = self.db.lock().unwrap();
+        let name = input.name.trim().to_string();
+        if name.is_empty() {
+            return Err(ApiError::InvalidCredentials("Enter a role name.".to_string()));
+        }
+        if db.roles.iter().any(|r| r.id != id && r.name.eq_ignore_ascii_case(&name)) {
+            return Err(ApiError::InvalidCredentials(format!(
+                "A role named \"{name}\" already exists."
+            )));
+        }
+        let role = db.roles.iter_mut().find(|r| r.id == id).ok_or(ApiError::NotFound)?;
+        role.name = name;
+        role.permissions = input.permissions;
+        Ok(role.clone())
+    }
+
+    pub async fn delete_role(&self, id: Uuid) -> Result<(), ApiError> {
+        settle(200).await;
+        let mut db = self.db.lock().unwrap();
+        let role = db.roles.iter().find(|r| r.id == id).ok_or(ApiError::NotFound)?;
+        if role.assigned_user_count > 0 {
+            return Err(ApiError::InvalidCredentials(format!(
+                "This role is still assigned to {} user(s) — reassign them first.",
+                role.assigned_user_count
+            )));
+        }
+        db.roles.retain(|r| r.id != id);
+        Ok(())
     }
 
     /// Records a payment against a Plot Loan Account and updates its
@@ -1670,8 +1744,9 @@ async fn settle(millis: u32) {
 }
 
 fn seed() -> MockDb {
+    let org_id = Uuid::new_v4();
     let organization = Organization {
-        id: Uuid::new_v4(),
+        id: org_id,
         name: "Acacia Grove Properties".to_string(),
         code: "ACACIA".to_string(),
         currency: "KES".to_string(),
@@ -1915,5 +1990,12 @@ fn seed() -> MockDb {
         quotations: Vec::new(),
         approval_requests: Vec::new(),
         project_maps: HashMap::new(),
+        roles: vec![domain::Role {
+            id: Uuid::new_v4(),
+            organization_id: org_id,
+            name: "Admin".to_string(),
+            permissions: vec!["*".to_string()],
+            assigned_user_count: 1,
+        }],
     }
 }

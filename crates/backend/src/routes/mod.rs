@@ -9,6 +9,7 @@ mod project_map;
 mod projects;
 mod quotations;
 mod reports;
+mod roles;
 mod sales;
 mod settings;
 
@@ -31,4 +32,5 @@ pub fn router() -> Router<AppState> {
         .merge(reports::router())
         .merge(project_map::router())
         .merge(settings::router())
+        .merge(roles::router())
 }

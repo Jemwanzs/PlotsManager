@@ -394,4 +394,43 @@ impl ApiClient {
             Self::Http(api) => api.list_loan_accounts().await,
         }
     }
+
+    pub async fn list_roles(&self) -> Result<Vec<domain::Role>, ApiError> {
+        match self {
+            Self::Mock(api) => api.list_roles().await,
+            Self::Http(api) => api.list_roles().await,
+        }
+    }
+
+    pub async fn list_permissions(&self) -> Result<Vec<(String, String)>, ApiError> {
+        match self {
+            Self::Mock(api) => api.list_permissions().await,
+            Self::Http(api) => api.list_permissions().await,
+        }
+    }
+
+    pub async fn create_role(&self, input: domain::CreateRoleInput) -> Result<domain::Role, ApiError> {
+        match self {
+            Self::Mock(api) => api.create_role(input).await,
+            Self::Http(api) => api.create_role(input).await,
+        }
+    }
+
+    pub async fn update_role(
+        &self,
+        id: Uuid,
+        input: domain::UpdateRoleInput,
+    ) -> Result<domain::Role, ApiError> {
+        match self {
+            Self::Mock(api) => api.update_role(id, input).await,
+            Self::Http(api) => api.update_role(id, input).await,
+        }
+    }
+
+    pub async fn delete_role(&self, id: Uuid) -> Result<(), ApiError> {
+        match self {
+            Self::Mock(api) => api.delete_role(id).await,
+            Self::Http(api) => api.delete_role(id).await,
+        }
+    }
 }

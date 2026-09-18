@@ -26,12 +26,12 @@ use uuid::Uuid;
 use domain::{
     AgentPerformanceReport, ApiError, ApprovalRequestSummary, AuthSession, BulkImportResult,
     BulkSaleRow, CreateCustomerInput, CreatePlotInput, CreateProjectInput, CreateQuotationInput,
-    CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary, DecideApprovalInput,
-    GeneratedNumber, InventoryReport, LoanAccountDetail, LoanAccountSummary, LoginInput,
-    MapPolygons, OrganizationSettings, PlatformOrganizationDetail, PlatformOrganizationSummary,
-    PlotWithColor, ProjectMapSummary, ProjectSummary, QuotationDetail, QuotationSummary,
-    RecordPaymentInput, SalesReport, SignupInput, UpdateLeadInput, UpdateMapPolygonsInput,
-    UpdateOrganizationSettingsInput, UpdatePlotInput,
+    CreateRoleInput, CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary,
+    DecideApprovalInput, GeneratedNumber, InventoryReport, LoanAccountDetail, LoanAccountSummary,
+    LoginInput, MapPolygons, OrganizationSettings, PlatformOrganizationDetail,
+    PlatformOrganizationSummary, PlotWithColor, ProjectMapSummary, ProjectSummary, QuotationDetail,
+    QuotationSummary, RecordPaymentInput, Role, SalesReport, SignupInput, UpdateLeadInput,
+    UpdateMapPolygonsInput, UpdateOrganizationSettingsInput, UpdatePlotInput, UpdateRoleInput,
 };
 
 #[derive(Clone)]
@@ -94,6 +94,15 @@ impl HttpApi {
             .json(body)
             .map_err(|e| ApiError::Network(e.to_string()))?;
         let resp = req
+            .send()
+            .await
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+        Self::parse(resp).await
+    }
+
+    async fn delete<T: DeserializeOwned>(&self, path: &str) -> Result<T, ApiError> {
+        let resp = self
+            .authorize(Request::delete(&self.url(path)))
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
@@ -480,5 +489,25 @@ impl HttpApi {
 
     pub async fn list_loan_accounts(&self) -> Result<Vec<LoanAccountSummary>, ApiError> {
         self.get("/api/v1/finance/loan-accounts").await
+    }
+
+    pub async fn list_roles(&self) -> Result<Vec<Role>, ApiError> {
+        self.get("/api/v1/roles").await
+    }
+
+    pub async fn list_permissions(&self) -> Result<Vec<(String, String)>, ApiError> {
+        self.get("/api/v1/roles/permissions").await
+    }
+
+    pub async fn create_role(&self, input: CreateRoleInput) -> Result<Role, ApiError> {
+        self.post("/api/v1/roles", &input).await
+    }
+
+    pub async fn update_role(&self, id: Uuid, input: UpdateRoleInput) -> Result<Role, ApiError> {
+        self.put(&format!("/api/v1/roles/{id}"), &input).await
+    }
+
+    pub async fn delete_role(&self, id: Uuid) -> Result<(), ApiError> {
+        self.delete(&format!("/api/v1/roles/{id}")).await
     }
 }

@@ -18,6 +18,7 @@ mod quotation_detail;
 mod quotations_list;
 mod recent_activity;
 mod reports;
+mod roles;
 mod settings;
 mod signup;
 
@@ -41,5 +42,6 @@ pub use quotation_detail::QuotationDetailPage;
 pub use quotations_list::QuotationsList;
 pub use recent_activity::RecentActivity;
 pub use reports::Reports;
+pub use roles::Roles;
 pub use settings::Settings;
 pub use signup::Signup;

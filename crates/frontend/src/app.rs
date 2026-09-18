@@ -10,7 +10,7 @@ use crate::pages::{
     ApprovalsList, BulkSalesImport, CustomerDetail, CustomersList, Dashboard,
     FinanceLoanAccounts, FinanceOverview, LoanAccountDetailPage, Login, NewCustomer, NewProject,
     NotFound, PlatformOrganizationDetailPage, PlatformOrganizations, ProjectDetail, ProjectsList,
-    QuotationDetailPage, QuotationsList, RecentActivity, Reports, Settings, Signup,
+    QuotationDetailPage, QuotationsList, RecentActivity, Reports, Roles, Settings, Signup,
 };
 use crate::theme::{apply_theme, initial_theme, ThemeSignal};
 
@@ -134,6 +134,10 @@ pub fn App() -> impl IntoView {
                 <Route
                     path=StaticSegment("settings")
                     view=|| view! { <AppShell><Settings /></AppShell> }
+                />
+                <Route
+                    path=(StaticSegment("settings"), StaticSegment("roles"))
+                    view=|| view! { <AppShell><Roles /></AppShell> }
                 />
                 <Route
                     path=StaticSegment("activity")

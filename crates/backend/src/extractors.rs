@@ -1,7 +1,10 @@
+use std::collections::HashSet;
+
 use axum::async_trait;
 use axum::extract::FromRequestParts;
 use axum::http::{header, request::Parts};
 use chrono::{DateTime, Utc};
+use domain::PERM_WILDCARD;
 use uuid::Uuid;
 
 use crate::auth::verify_session_token;
@@ -18,6 +21,33 @@ pub struct AuthUser {
     pub user_id: Uuid,
     pub organization_id: Uuid,
     pub is_platform_owner: bool,
+    /// Union of every `roles.permissions` array across this user's
+    /// `role_assignments` (`database/migrations/0001_init.sql`) —
+    /// looked up fresh per request (one extra indexed query, same
+    /// tradeoff as the tenant-gate lookup below) rather than cached in
+    /// the JWT, so revoking a role takes effect on the very next
+    /// request instead of waiting out the token's TTL. `"*"` (the
+    /// signup-provisioned "Admin" role's only permission) grants
+    /// everything — see `has_permission`.
+    pub permissions: HashSet<String>,
+}
+
+impl AuthUser {
+    pub fn has_permission(&self, permission: &str) -> bool {
+        self.is_platform_owner
+            || self.permissions.contains(PERM_WILDCARD)
+            || self.permissions.contains(permission)
+    }
+
+    pub fn require_permission(&self, permission: &str) -> Result<(), AppError> {
+        if self.has_permission(permission) {
+            Ok(())
+        } else {
+            Err(AppError::forbidden(
+                "You don't have permission to do this.",
+            ))
+        }
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -73,10 +103,34 @@ impl FromRequestParts<AppState> for AuthUser {
             )?;
         }
 
+        let permission_rows: Vec<(serde_json::Value,)> = sqlx::query_as(
+            r#"select r.permissions
+               from role_assignments ra
+               join roles r on r.id = ra.role_id
+               where ra.user_id = $1"#,
+        )
+        .bind(claims.sub)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|_| AppError::Unauthorized)?;
+
+        let permissions: HashSet<String> = permission_rows
+            .into_iter()
+            .flat_map(|(perms,)| {
+                perms
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+            })
+            .collect();
+
         Ok(AuthUser {
             user_id: claims.sub,
             organization_id: claims.organization_id,
             is_platform_owner: claims.is_platform_owner,
+            permissions,
         })
     }
 }
