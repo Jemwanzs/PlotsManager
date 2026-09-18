@@ -4,6 +4,7 @@ use leptos_router::hooks::{use_location, use_navigate};
 
 use crate::auth::use_auth;
 use crate::icons::{Icon, IconName};
+use crate::theme::{use_theme, Theme};
 
 struct NavItem {
     href: &'static str,
@@ -262,6 +263,16 @@ pub fn AppShell(children: Children) -> impl IntoView {
             .unwrap_or_default()
     };
     let full_name = move || auth.get().map(|s| s.user.full_name).unwrap_or_default();
+    let theme = use_theme();
+    let theme_label = move || match theme.get() {
+        Theme::Light => "Dark mode",
+        Theme::Dark => "Light mode",
+    };
+    let theme_icon = move || match theme.get() {
+        Theme::Light => IconName::Moon,
+        Theme::Dark => IconName::Sun,
+    };
+    let toggle_theme = move |_| theme.update(|t| *t = t.toggled());
 
     // No <Show when=is_authenticated> around this: the Effect above already
     // redirects to /login the moment `auth` is None, and gating the whole
@@ -335,6 +346,10 @@ pub fn AppShell(children: Children) -> impl IntoView {
                             .collect_view()
                     }}
                 </nav>
+                <button type="button" class="theme-toggle" on:click=toggle_theme>
+                    <span class="icon">{move || view! { <Icon name=theme_icon() /> }}</span>
+                    <span>{theme_label}</span>
+                </button>
             </aside>
 
             <header class="topbar">
@@ -343,6 +358,14 @@ pub fn AppShell(children: Children) -> impl IntoView {
                     <span>"Real Estate Manager"</span>
                 </div>
                 <div class="topbar-user">
+                    <button
+                        type="button"
+                        class="theme-toggle-icon"
+                        aria-label="Toggle dark mode"
+                        on:click=toggle_theme
+                    >
+                        {move || view! { <Icon name=theme_icon() /> }}
+                    </button>
                     <span>{full_name}</span>
                     <span class="avatar">{initials}</span>
                 </div>

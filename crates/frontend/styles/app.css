@@ -5,17 +5,30 @@
    tablet/laptop/desktop behaviour. */
 
 :root {
-  --color-bg: #f6f7f5;
-  --color-surface: #ffffff;
-  --color-border: #e2e5e0;
-  --color-text: #1a1f1a;
-  --color-text-muted: #5b645b;
-  --color-primary: #15734f;
-  --color-primary-hover: #0f5c3e;
-  --color-primary-contrast: #ffffff;
-  --color-danger: #dc2626;
-  --color-danger-bg: #fef2f2;
-  --color-warning-bg: #fffbeb;
+  /* Warm cream + brown/orange, light (default). Every colour below is a
+     custom property, never a literal hex in a component rule, so the
+     dark-mode block and the `prefers-color-scheme` fallback further
+     down are the only other places a palette value is defined — see
+     `crates/frontend/src/theme.rs` for how `data-theme` gets set. */
+  --color-bg: #f6efe0;
+  --color-surface: #fffcf5;
+  --color-border: #e4d5bb;
+  --color-text: #2b2015;
+  --color-text-muted: #7d6b52;
+  --color-primary: #c1571a;
+  --color-primary-hover: #a1470f;
+  --color-primary-contrast: #fffaf3;
+  --color-brown: #6b4226;
+  --color-accent-bg: #f3e0c4;
+  --color-danger: #c0392b;
+  --color-danger-bg: #fbeae6;
+  --color-danger-border: #f0c4bb;
+  --color-warning-text: #92400e;
+  --color-warning-bg: #fdf1dc;
+  --color-warning-border: #f3d8a3;
+  --color-success: #4a7c2a;
+  --color-success-bg: #eef3e2;
+  --color-success-border: #cfe0b6;
 
   --radius-sm: 6px;
   --radius-md: 10px;
@@ -36,6 +49,58 @@
   --sidebar-width: 248px;
   --topbar-height: 60px;
   --bottom-nav-height: 60px;
+}
+
+/* Dark mode, same warm brown/orange family darkened rather than swapped
+   for a generic slate/black — declared twice on purpose: once behind
+   `prefers-color-scheme` for a visitor who's never touched the toggle
+   (`:not([data-theme="light"])` lets the OS preference apply without
+   fighting an explicit light choice), and once behind the explicit
+   `data-theme="dark"` attribute `theme.rs` sets on a toggle click,
+   which wins regardless of OS preference either way. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg: #1b140d;
+    --color-surface: #241b12;
+    --color-border: #3d2f1f;
+    --color-text: #f2e6d3;
+    --color-text-muted: #b7a488;
+    --color-primary: #e2792e;
+    --color-primary-hover: #ef8d47;
+    --color-primary-contrast: #201509;
+    --color-brown: #c89468;
+    --color-accent-bg: #3a2313;
+    --color-danger: #e0674f;
+    --color-danger-bg: #3a2016;
+    --color-danger-border: #5a3226;
+    --color-warning-text: #e2a542;
+    --color-warning-bg: #3a2c12;
+    --color-warning-border: #5c4620;
+    --color-success: #8fbf5a;
+    --color-success-bg: #22301a;
+    --color-success-border: #3a4e28;
+  }
+}
+:root[data-theme="dark"] {
+  --color-bg: #1b140d;
+  --color-surface: #241b12;
+  --color-border: #3d2f1f;
+  --color-text: #f2e6d3;
+  --color-text-muted: #b7a488;
+  --color-primary: #e2792e;
+  --color-primary-hover: #ef8d47;
+  --color-primary-contrast: #201509;
+  --color-brown: #c89468;
+  --color-accent-bg: #3a2313;
+  --color-danger: #e0674f;
+  --color-danger-bg: #3a2016;
+  --color-danger-border: #5a3226;
+  --color-warning-text: #e2a542;
+  --color-warning-bg: #3a2c12;
+  --color-warning-border: #5c4620;
+  --color-success: #8fbf5a;
+  --color-success-bg: #22301a;
+  --color-success-border: #3a4e28;
 }
 
 * {
@@ -59,6 +124,7 @@ body {
   overflow-x: hidden;
   /* Custom `:active` feedback stands in for the tap flash. */
   -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 /* Tabular figures so a money column's digits line up, and numerals
@@ -126,13 +192,18 @@ a {
 .btn-primary:hover:not(:disabled) {
   background: var(--color-primary-hover);
 }
+/* Two-tone button system: primary actions in orange, secondary/lesser
+   actions in the palette's brown rather than a neutral grey, so the
+   pairing reads as one warm family instead of "orange, plus whatever
+   the browser defaults to". */
 .btn-secondary {
   background: var(--color-surface);
-  color: var(--color-text);
+  color: var(--color-brown);
   border-color: var(--color-border);
 }
 .btn-secondary:hover:not(:disabled) {
-  border-color: var(--color-primary);
+  border-color: var(--color-brown);
+  background: var(--color-accent-bg);
 }
 .btn-danger {
   background: var(--color-danger-bg);
@@ -182,6 +253,35 @@ a {
   outline: 2px solid var(--color-primary);
   outline-offset: 1px;
 }
+
+/* The browser's own "Choose File" button ignores every rule above —
+   it's a distinct sub-element the OS renders, not part of the input
+   box — which is exactly the unstyled grey button the app's owner
+   flagged (CSV upload on the bulk-import panels). `::file-selector-
+   button` is the standard pseudo-element for it; `-webkit-file-upload-
+   button` covers older WebKit that predates the standard one. */
+.field input[type="file"] {
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+}
+.field input[type="file"]::file-selector-button,
+.field input[type="file"]::-webkit-file-upload-button {
+  margin-right: var(--space-3);
+  padding: 9px 16px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+  font-family: inherit;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+.field input[type="file"]:hover::file-selector-button,
+.field input[type="file"]:hover::-webkit-file-upload-button {
+  background: var(--color-primary-hover);
+}
 .field-error {
   color: var(--color-danger);
   font-size: 0.82rem;
@@ -218,17 +318,17 @@ a {
 .alert-danger {
   background: var(--color-danger-bg);
   color: var(--color-danger);
-  border: 1px solid #fecaca;
+  border: 1px solid var(--color-danger-border);
 }
 .alert-warning {
   background: var(--color-warning-bg);
-  color: #92400e;
-  border: 1px solid #fde68a;
+  color: var(--color-warning-text);
+  border: 1px solid var(--color-warning-border);
 }
 .alert-success {
-  background: #ecfdf5;
-  color: var(--color-primary-hover);
-  border: 1px solid #a7f3d0;
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border: 1px solid var(--color-success-border);
 }
 
 .checkbox-field {
@@ -309,7 +409,7 @@ a {
   height: 34px;
   border-radius: var(--radius-sm);
   background: var(--color-primary);
-  color: #fff;
+  color: var(--color-primary-contrast);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -357,12 +457,33 @@ a {
   gap: var(--space-3);
   font-size: 0.85rem;
 }
+.theme-toggle-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.theme-toggle-icon:hover {
+  background: var(--color-bg);
+  color: var(--color-primary);
+}
+.theme-toggle-icon svg {
+  width: 18px;
+  height: 18px;
+}
 .avatar {
   width: 32px;
   height: 32px;
   border-radius: 50%;
   background: var(--color-primary);
-  color: #fff;
+  color: var(--color-primary-contrast);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -586,7 +707,7 @@ a {
   }
   .nav-group-toggle.active,
   .nav-group-toggle.open {
-    background: #e8f3ee;
+    background: var(--color-accent-bg);
     color: var(--color-primary);
   }
   .nav-group-toggle .chevron {
@@ -624,12 +745,41 @@ a {
     background: var(--color-bg);
   }
   .nav-group-children a.active {
-    background: #e8f3ee;
+    background: var(--color-accent-bg);
     color: var(--color-primary);
     font-weight: 600;
   }
   .sidebar-nav .icon {
     display: inline-flex;
+  }
+  /* Pinned to the bottom of the sidebar's flex column via
+     `margin-top: auto` — the one `.sidebar` child that isn't part of
+     the module list, so it stays put while the nav above it grows or
+     shrinks with however many modules are expanded. */
+  .theme-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    margin-top: auto;
+    padding: 10px var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
+    color: var(--color-text-muted);
+    font-family: inherit;
+    font-weight: 600;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background-color 0.12s ease, color 0.12s ease;
+  }
+  .theme-toggle:hover {
+    background: var(--color-bg);
+    color: var(--color-primary);
+  }
+  .theme-toggle .icon svg {
+    width: 18px;
+    height: 18px;
   }
   .topbar {
     display: none;

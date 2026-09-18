@@ -7,6 +7,7 @@ mod format;
 mod icons;
 mod layout;
 mod pages;
+mod theme;
 
 use app::App;
 

@@ -12,6 +12,7 @@ use crate::pages::{
     NotFound, PlatformOrganizationDetailPage, PlatformOrganizations, ProjectDetail, ProjectsList,
     QuotationDetailPage, QuotationsList, RecentActivity, Reports, Settings, Signup,
 };
+use crate::theme::{apply_theme, initial_theme, ThemeSignal};
 
 /// `API_BASE_URL` is read at compile time (Trunk shells out to `cargo
 /// build`, so whatever's in the environment when you run `trunk serve`/
@@ -34,6 +35,16 @@ pub fn App() -> impl IntoView {
     provide_context(auth);
     let currency: CurrencySignal = RwSignal::new("KES".to_string());
     provide_context(currency);
+    let theme: ThemeSignal = RwSignal::new(initial_theme());
+    provide_context(theme);
+
+    // Keeps `<html data-theme>` and `localStorage` in sync with the
+    // signal — runs once on mount (so the resolved initial theme, saved
+    // preference or OS default, is applied explicitly rather than left
+    // to the CSS-only fallback) and again on every toggle click.
+    Effect::new(move |_| {
+        apply_theme(theme.get());
+    });
 
     // Populated once per sign-in, not threaded through `AuthSession`
     // itself — `GET /api/v1/settings` already exists for the Settings

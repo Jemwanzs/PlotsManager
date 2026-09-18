@@ -24,6 +24,8 @@ pub enum IconName {
     Finance,
     Chevron,
     More,
+    Sun,
+    Moon,
 }
 
 /// A 20x20 outline icon. Every path below is hand-drawn at the same
@@ -79,6 +81,13 @@ pub fn Icon(name: IconName) -> impl IntoView {
         }.into_any(),
         IconName::Chevron => view! {
             <polyline points="9,6 15,12 9,18" />
+        }.into_any(),
+        IconName::Sun => view! {
+            <circle cx="12" cy="12" r="4.2" />
+            <path d="M12 2.5v2.6M12 18.9v2.6M4.6 4.6l1.8 1.8M17.6 17.6l1.8 1.8M2.5 12h2.6M18.9 12h2.6M4.6 19.4l1.8-1.8M17.6 6.4l1.8-1.8" />
+        }.into_any(),
+        IconName::Moon => view! {
+            <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.8 6.8 0 0 0 10.5 10.5Z" />
         }.into_any(),
         IconName::More => view! {
             <circle cx="5" cy="12" r="1.4" />

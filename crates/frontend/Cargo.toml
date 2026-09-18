@@ -34,7 +34,7 @@ gloo-timers = { version = "0.3", features = ["futures"] }
 # through leptos, but there's no leptos wrapper for these.
 web-sys = { version = "0.3", features = [
     "Blob", "DomRect", "Element", "File", "FileList", "FormData",
-    "HtmlImageElement", "HtmlInputElement", "Url",
+    "HtmlImageElement", "HtmlInputElement", "MediaQueryList", "Storage", "Url",
 ] }
 # Awaiting `Blob::text()`'s JS Promise to read an uploaded CSV file's
 # contents, and percent-encoding the downloadable CSV template into a
