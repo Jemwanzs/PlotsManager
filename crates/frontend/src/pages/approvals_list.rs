@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use leptos_router::hooks::use_query_map;
 
 use crate::api::{ApiClient, ApiError};
 use crate::auth::{use_api, use_currency};
@@ -72,7 +73,17 @@ fn decide(
 pub fn ApprovalsList() -> impl IntoView {
     let api = use_api();
     let currency = use_currency();
-    let filter = RwSignal::new(Filter::Pending);
+
+    // `/approvals?tab=history` (the sidebar's "Approval history" nav
+    // sub-item) pre-selects the Decided tab; still switchable afterward
+    // like any other in-page filter.
+    let query = use_query_map();
+    let initial_filter = if query.get_untracked().get("tab").as_deref() == Some("history") {
+        Filter::Decided
+    } else {
+        Filter::Pending
+    };
+    let filter = RwSignal::new(initial_filter);
     let working = RwSignal::new(false);
     let action_error = RwSignal::new(None::<String>);
     let refresh = RwSignal::new(0u32);

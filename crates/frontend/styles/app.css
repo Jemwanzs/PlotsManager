@@ -561,24 +561,72 @@ a {
     flex-direction: column;
     gap: 2px;
   }
-  .sidebar-nav a {
+  /* A module's own row — always a toggle (or, for a single-destination
+     module like "Platform", a direct link styled the same way), never
+     both at once. See `layout::NavGroup`'s doc comment for why. */
+  .nav-group-toggle {
     display: flex;
     align-items: center;
+    width: 100%;
     gap: var(--space-3);
     padding: 10px var(--space-3);
     border-radius: var(--radius-sm);
+    border: none;
+    background: none;
     color: var(--color-text-muted);
     text-decoration: none;
+    font-family: inherit;
     font-weight: 600;
     font-size: 0.9rem;
+    cursor: pointer;
     transition: background-color 0.12s ease, color 0.12s ease;
   }
-  .sidebar-nav a:hover {
+  .nav-group-toggle:hover {
     background: var(--color-bg);
   }
-  .sidebar-nav a.active {
+  .nav-group-toggle.active,
+  .nav-group-toggle.open {
     background: #e8f3ee;
     color: var(--color-primary);
+  }
+  .nav-group-toggle .chevron {
+    display: inline-flex;
+    margin-left: auto;
+    transition: transform 0.15s ease;
+  }
+  .nav-group-toggle .chevron svg {
+    width: 16px;
+    height: 16px;
+  }
+  .nav-group-toggle .chevron.open {
+    transform: rotate(90deg);
+  }
+  .nav-group-children {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 2px 0 6px;
+  }
+  .nav-group-children.hidden {
+    display: none;
+  }
+  .nav-group-children a {
+    display: block;
+    padding: 8px var(--space-3) 8px calc(var(--space-3) + 20px + var(--space-3));
+    border-radius: var(--radius-sm);
+    color: var(--color-text-muted);
+    text-decoration: none;
+    font-weight: 500;
+    font-size: 0.85rem;
+    transition: background-color 0.12s ease, color 0.12s ease;
+  }
+  .nav-group-children a:hover {
+    background: var(--color-bg);
+  }
+  .nav-group-children a.active {
+    background: #e8f3ee;
+    color: var(--color-primary);
+    font-weight: 600;
   }
   .sidebar-nav .icon {
     display: inline-flex;

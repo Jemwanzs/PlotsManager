@@ -27,10 +27,10 @@ use domain::{
     AgentPerformanceReport, ApiError, ApprovalRequestSummary, AuthSession, BulkImportResult,
     BulkSaleRow, CreateCustomerInput, CreatePlotInput, CreateProjectInput, CreateQuotationInput,
     CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary, DecideApprovalInput,
-    GeneratedNumber, InventoryReport, LoanAccountDetail, LoginInput, MapPolygons,
-    OrganizationSettings, PlatformOrganizationDetail, PlatformOrganizationSummary, PlotWithColor,
-    ProjectMapSummary, ProjectSummary, QuotationDetail, QuotationSummary, RecordPaymentInput,
-    SalesReport, SignupInput, UpdateLeadInput, UpdateMapPolygonsInput,
+    GeneratedNumber, InventoryReport, LoanAccountDetail, LoanAccountSummary, LoginInput,
+    MapPolygons, OrganizationSettings, PlatformOrganizationDetail, PlatformOrganizationSummary,
+    PlotWithColor, ProjectMapSummary, ProjectSummary, QuotationDetail, QuotationSummary,
+    RecordPaymentInput, SalesReport, SignupInput, UpdateLeadInput, UpdateMapPolygonsInput,
     UpdateOrganizationSettingsInput, UpdatePlotInput,
 };
 
@@ -476,5 +476,9 @@ impl HttpApi {
         };
         let generated: GeneratedNumber = self.post(&path, &()).await?;
         Ok(generated.number)
+    }
+
+    pub async fn list_loan_accounts(&self) -> Result<Vec<LoanAccountSummary>, ApiError> {
+        self.get("/api/v1/finance/loan-accounts").await
     }
 }

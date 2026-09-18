@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos::wasm_bindgen::JsCast;
 use leptos_router::components::A;
+use leptos_router::hooks::use_query_map;
 
 use crate::api::{lead_stage_meta, CreateCustomerInput, CustomerSummary, LeadStage};
 use crate::auth::use_api;
@@ -45,7 +46,12 @@ pub fn CustomersList() -> impl IntoView {
     let api = use_api();
     let search = RwSignal::new(String::new());
     let filter = RwSignal::new(PipelineFilter::All);
-    let show_bulk_import = RwSignal::new(false);
+
+    // `/customers?import=1` (the sidebar's "Import customers" nav
+    // sub-item) opens straight into the bulk-import panel instead of
+    // making that click land on the list and require a second click.
+    let query = use_query_map();
+    let show_bulk_import = RwSignal::new(query.get_untracked().get("import").as_deref() == Some("1"));
 
     let customers = LocalResource::new(move || {
         let api = api.clone();

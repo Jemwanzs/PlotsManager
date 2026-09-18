@@ -16,6 +16,25 @@ use crate::{
     PlotLoanAccount, ProjectStatus, Quotation, User,
 };
 
+/// One row of the organization-wide Finance → Loan Accounts list
+/// (`GET /api/v1/finance/loan-accounts`) — every Lipa Pole Pole
+/// receivable across every project, which nothing surfaced as a single
+/// list before this (a loan account was only reachable by drilling into
+/// the customer that holds it). Same shape as `LoanAccountDetail` minus
+/// `payments`, which this list view has no use for.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoanAccountSummary {
+    pub account: PlotLoanAccount,
+    pub plot_id: Uuid,
+    pub plot_number: String,
+    pub project_id: Uuid,
+    pub project_name: String,
+    pub customer_id: Uuid,
+    pub customer_name: String,
+    pub status_label: String,
+    pub status_color: String,
+}
+
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ApiError {
     #[error("{0}")]

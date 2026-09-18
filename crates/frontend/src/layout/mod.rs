@@ -11,14 +11,38 @@ struct NavItem {
     label: &'static str,
 }
 
+/// One destination inside an expanded sidebar module — plain text, no
+/// icon of its own (the module's icon already identifies the section;
+/// repeating a smaller icon per child just adds noise, see the reference
+/// screenshot this nav's accordion shape was modelled on). `Copy`: both
+/// fields are `&'static str`, so cloning a `Vec<NavChild>` into a
+/// reactive closure below is free and sidesteps borrowing a `NavGroup`
+/// that doesn't outlive the `.map()` iteration building it.
+#[derive(Clone, Copy)]
+struct NavChild {
+    href: &'static str,
+    label: &'static str,
+}
+
+/// A collapsible sidebar module: click the row to expand/collapse its
+/// children (see `AppShell`'s `expanded_group` signal), rather than the
+/// row itself navigating anywhere — matches the reference sidebar this
+/// was modelled on, where a module header is purely a toggle and every
+/// real destination lives one level down.
+struct NavGroup {
+    icon: IconName,
+    label: &'static str,
+    children: Vec<NavChild>,
+}
+
 /// The phone's bottom tab bar only has room for a handful of tabs
 /// before it turns into what the screenshot the app's owner sent
 /// looked like: eight cramped icons, one label wrapping onto two
 /// lines, the last tab clipped at the screen edge. Four is what
 /// actually fits at a comfortable touch-target size — everything else
-/// moves into the "More" sheet (`AppShell`'s `.nav-sheet`, below). The
-/// sidebar (laptop/desktop) has room for all of them and stays flat —
-/// see `all_nav_items`.
+/// moves into the "More" sheet, below. The desktop sidebar has room for
+/// all of them and gets its own richer, expandable structure — see
+/// `sidebar_nav_groups`.
 fn primary_nav_items() -> Vec<NavItem> {
     vec![
         NavItem { href: "/", icon: IconName::Home, label: "Home" },
@@ -32,10 +56,16 @@ fn primary_nav_items() -> Vec<NavItem> {
 /// else can't see it, and the backend enforces the same boundary on the
 /// `/api/v1/platform/*` endpoints regardless (see
 /// `crates/backend/src/routes/platform.rs`), so this is a convenience,
-/// not the access control.
+/// not the access control. The mobile "More" sheet stays flat (one tap
+/// to a module's main page) rather than growing its own accordion —
+/// each module's in-page tabs (Approvals, Reports, Quotations, ...
+/// already have them; Finance's overview page links out to its loan
+/// accounts list) are how a phone reaches the same sub-destinations the
+/// desktop sidebar exposes directly.
 fn secondary_nav_items(is_platform_owner: bool) -> Vec<NavItem> {
     let mut items = vec![
         NavItem { href: "/approvals", icon: IconName::Approvals, label: "Approvals" },
+        NavItem { href: "/finance", icon: IconName::Finance, label: "Finance" },
         NavItem { href: "/reports", icon: IconName::Reports, label: "Reports" },
         NavItem { href: "/sales/import", icon: IconName::Import, label: "Import sales" },
         NavItem { href: "/settings", icon: IconName::Settings, label: "Settings" },
@@ -50,10 +80,118 @@ fn secondary_nav_items(is_platform_owner: bool) -> Vec<NavItem> {
     items
 }
 
-fn all_nav_items(is_platform_owner: bool) -> Vec<NavItem> {
-    let mut items = primary_nav_items();
-    items.extend(secondary_nav_items(is_platform_owner));
-    items
+/// The desktop sidebar's module list — each one expands to at least two
+/// real destinations instead of a single flat link, so a module reads
+/// as a section of the product rather than one page. Wherever a second
+/// destination didn't already exist as its own route, a lightweight one
+/// was added rather than inventing a placeholder: `/activity` (recent
+/// sales), the Finance module's two pages, and small query-param-driven
+/// pre-filters on pages that already had the underlying filter UI
+/// (Approvals, Reports, Quotations) or nearly did (Customers' bulk
+/// import). "Platform" is deliberately exempt — it's a single-purpose,
+/// owner-only cross-tenant admin utility, not a business module with
+/// natural sub-areas, so it's a direct link with no chevron.
+fn sidebar_nav_groups(is_platform_owner: bool) -> Vec<NavGroup> {
+    let mut groups = vec![
+        NavGroup {
+            icon: IconName::Home,
+            label: "Home",
+            children: vec![
+                NavChild { href: "/", label: "Overview" },
+                NavChild { href: "/activity", label: "Recent activity" },
+            ],
+        },
+        NavGroup {
+            icon: IconName::Projects,
+            label: "Projects",
+            children: vec![
+                NavChild { href: "/projects", label: "All projects" },
+                NavChild { href: "/projects/new", label: "Add project" },
+            ],
+        },
+        NavGroup {
+            icon: IconName::Customers,
+            label: "Customers",
+            children: vec![
+                NavChild { href: "/customers", label: "All customers" },
+                NavChild { href: "/customers/new", label: "Add customer" },
+                NavChild { href: "/customers?import=1", label: "Import customers" },
+            ],
+        },
+        NavGroup {
+            icon: IconName::Quotes,
+            label: "Quotes",
+            children: vec![
+                NavChild { href: "/quotations", label: "All quotations" },
+                NavChild { href: "/quotations?filter=active", label: "Active quotations" },
+            ],
+        },
+        NavGroup {
+            icon: IconName::Approvals,
+            label: "Approvals",
+            children: vec![
+                NavChild { href: "/approvals", label: "Pending approvals" },
+                NavChild { href: "/approvals?tab=history", label: "Approval history" },
+            ],
+        },
+        NavGroup {
+            icon: IconName::Finance,
+            label: "Finance",
+            children: vec![
+                NavChild { href: "/finance", label: "Overview" },
+                NavChild { href: "/finance/loan-accounts", label: "Loan accounts" },
+            ],
+        },
+        NavGroup {
+            icon: IconName::Reports,
+            label: "Reports",
+            children: vec![
+                NavChild { href: "/reports", label: "Sales report" },
+                NavChild { href: "/reports?tab=inventory", label: "Inventory report" },
+                NavChild { href: "/reports?tab=agents", label: "Agent performance" },
+            ],
+        },
+        NavGroup {
+            icon: IconName::Import,
+            label: "Data import",
+            children: vec![
+                NavChild { href: "/sales/import", label: "Import sales" },
+                NavChild { href: "/customers?import=1", label: "Import customers" },
+            ],
+        },
+        NavGroup {
+            icon: IconName::Settings,
+            label: "Settings",
+            children: vec![
+                NavChild { href: "/settings", label: "General settings" },
+                NavChild { href: "/settings#numbering", label: "Numbering configuration" },
+            ],
+        },
+    ];
+    if is_platform_owner {
+        groups.push(NavGroup {
+            icon: IconName::Platform,
+            label: "Platform",
+            children: vec![NavChild { href: "/platform", label: "Organizations" }],
+        });
+    }
+    groups
+}
+
+/// The path portion of an `href` that may carry a query string or hash
+/// (`"/customers?import=1"`, `"/settings#numbering"`) — matched against
+/// the current route to decide which module should auto-expand.
+fn path_only(href: &str) -> &str {
+    href.split(['?', '#']).next().unwrap_or(href)
+}
+
+fn child_matches_path(current_path: &str, child_href: &str) -> bool {
+    let child_path = path_only(child_href);
+    if child_path == "/" {
+        current_path == "/"
+    } else {
+        current_path == child_path || current_path.starts_with(&format!("{child_path}/"))
+    }
 }
 
 /// Authenticated app layout: sidebar on laptop/desktop, top bar + bottom
@@ -67,6 +205,13 @@ pub fn AppShell(children: Children) -> impl IntoView {
     let navigate = use_navigate();
     let location = use_location();
     let show_more = RwSignal::new(false);
+
+    // Single-open accordion: which sidebar module (by its `label`, a
+    // stable `&'static str`) is currently expanded. Re-derived from the
+    // current route on every navigation, so landing on `/projects/new`
+    // via a bookmark or a link from elsewhere still opens "Projects"
+    // instead of leaving every module collapsed.
+    let expanded_group: RwSignal<Option<&'static str>> = RwSignal::new(None);
 
     Effect::new(move |_| {
         if auth.get().is_none() {
@@ -86,6 +231,23 @@ pub fn AppShell(children: Children) -> impl IntoView {
         show_more.set(false);
     });
 
+    let is_platform_owner =
+        move || auth.get().map(|s| s.user.is_platform_owner).unwrap_or(false);
+
+    // Auto-expands whichever module owns the current route. Depends on
+    // `is_platform_owner` too (not just the path) so the derived groups
+    // list — and therefore which one matches — stays correct across
+    // sign-in/out on the same tab.
+    Effect::new(move |_| {
+        let path = location.pathname.get();
+        let owner = is_platform_owner();
+        let matched = sidebar_nav_groups(owner)
+            .into_iter()
+            .find(|g| g.children.iter().any(|c| child_matches_path(&path, c.href)))
+            .map(|g| g.label);
+        expanded_group.set(matched);
+    });
+
     let initials = move || {
         auth.get()
             .map(|s| {
@@ -100,8 +262,6 @@ pub fn AppShell(children: Children) -> impl IntoView {
             .unwrap_or_default()
     };
     let full_name = move || auth.get().map(|s| s.user.full_name).unwrap_or_default();
-    let is_platform_owner =
-        move || auth.get().map(|s| s.user.is_platform_owner).unwrap_or(false);
 
     // No <Show when=is_authenticated> around this: the Effect above already
     // redirects to /login the moment `auth` is None, and gating the whole
@@ -119,15 +279,58 @@ pub fn AppShell(children: Children) -> impl IntoView {
                 </div>
                 <nav class="sidebar-nav">
                     {move || {
-                        all_nav_items(is_platform_owner())
+                        sidebar_nav_groups(is_platform_owner())
                             .into_iter()
-                            .map(|item| {
-                                view! {
-                                    <A href=item.href exact=item.href == "/">
-                                        <span class="icon"><Icon name=item.icon /></span>
-                                        <span>{item.label}</span>
-                                    </A>
+                            .map(|group| {
+                                let icon = group.icon;
+                                let label = group.label;
+                                let children = group.children;
+                                let is_open = move || expanded_group.get() == Some(label);
+                                if children.len() == 1 {
+                                    let href = children[0].href;
+                                    return view! {
+                                        <A href=href attr:class="nav-group-toggle">
+                                            <span class="icon"><Icon name=icon /></span>
+                                            <span>{label}</span>
+                                        </A>
+                                    }
+                                        .into_any();
                                 }
+                                view! {
+                                    <div class="nav-group">
+                                        <button
+                                            type="button"
+                                            class="nav-group-toggle"
+                                            class:open=is_open
+                                            on:click=move |_| {
+                                                expanded_group
+                                                    .update(|e| {
+                                                        *e = if *e == Some(label) { None } else { Some(label) };
+                                                    })
+                                            }
+                                        >
+                                            <span class="icon"><Icon name=icon /></span>
+                                            <span>{label}</span>
+                                            <span class="chevron" class:open=is_open>
+                                                <Icon name=IconName::Chevron />
+                                            </span>
+                                        </button>
+                                        // Rendered once, visibility toggled reactively via a
+                                        // CSS class rather than mounted/unmounted through
+                                        // `<Show>` — the children never change, only whether
+                                        // they're visible, so there's no need for a `Fn`
+                                        // closure that re-clones `children` on every toggle.
+                                        <div class="nav-group-children" class:hidden=move || !is_open()>
+                                            {children
+                                                .into_iter()
+                                                .map(|child| {
+                                                    view! { <A href=child.href>{child.label}</A> }
+                                                })
+                                                .collect_view()}
+                                        </div>
+                                    </div>
+                                }
+                                    .into_any()
                             })
                             .collect_view()
                     }}

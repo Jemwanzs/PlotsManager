@@ -579,6 +579,42 @@ impl MockApi {
         })
     }
 
+    /// Finance → Loan Accounts: every receivable across every project,
+    /// org-wide — the list `get_loan_account` above has no equivalent
+    /// for, since until the Finance module nothing needed one.
+    pub async fn list_loan_accounts(&self) -> Result<Vec<domain::LoanAccountSummary>, ApiError> {
+        settle(200).await;
+        let db = self.db.lock().unwrap();
+        let mut summaries: Vec<domain::LoanAccountSummary> = db
+            .loan_accounts
+            .iter()
+            .filter_map(|account| {
+                let sale = db.sales.iter().find(|s| s.id == account.sale_id)?;
+                let plot = db.plots.iter().find(|p| p.id == sale.plot_id)?;
+                let project = db.projects.iter().find(|p| p.id == plot.project_id)?;
+                let customer = db.customers.iter().find(|c| c.id == sale.customer_id)?;
+                let (label, color) = loan_status_meta(account.status);
+                Some(domain::LoanAccountSummary {
+                    account: account.clone(),
+                    plot_id: plot.id,
+                    plot_number: plot.plot_number.clone(),
+                    project_id: project.id,
+                    project_name: project.name.clone(),
+                    customer_id: customer.id,
+                    customer_name: customer.full_name.clone(),
+                    status_label: label.to_string(),
+                    status_color: color.to_string(),
+                })
+            })
+            .collect();
+        summaries.sort_by(|a, b| {
+            b.account
+                .outstanding_balance
+                .cmp(&a.account.outstanding_balance)
+        });
+        Ok(summaries)
+    }
+
     /// Records a payment against a Plot Loan Account and updates its
     /// running balance/status. Posted immediately — the
     /// Captured/Verified/Posted lifecycle and approval gating from

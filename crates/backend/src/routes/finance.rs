@@ -1,0 +1,105 @@
+//! Finance module — the organization-wide view across every Lipa Pole
+//! Pole receivable, which previously only existed per-customer (drilling
+//! into a sale's own loan account). Read-only for now: creating/editing
+//! loan accounts still happens through the sales workflow
+//! (`routes/sales.rs`, `routes/loan_accounts.rs`), not here.
+
+use axum::{extract::State, routing::get, Json, Router};
+use chrono::NaiveDate;
+use domain::{LoanAccountStatus, LoanAccountSummary, PlotLoanAccount};
+use rust_decimal::Decimal;
+use uuid::Uuid;
+
+use crate::error::AppError;
+use crate::extractors::AuthUser;
+use crate::pg_enum::from_pg;
+use crate::state::AppState;
+
+pub fn router() -> Router<AppState> {
+    Router::new().route("/api/v1/finance/loan-accounts", get(list_loan_accounts))
+}
+
+#[derive(sqlx::FromRow)]
+struct LoanAccountSummaryRow {
+    id: Uuid,
+    account_number: String,
+    sale_id: Uuid,
+    principal: Decimal,
+    interest_rate: Option<Decimal>,
+    deposit_required: Decimal,
+    deposit_paid: Decimal,
+    instalment_amount: Decimal,
+    repayment_frequency_days: i32,
+    start_date: NaiveDate,
+    status: String,
+    amount_paid: Decimal,
+    outstanding_balance: Decimal,
+    days_in_arrears: i32,
+    plot_id: Uuid,
+    plot_number: String,
+    project_id: Uuid,
+    project_name: String,
+    customer_id: Uuid,
+    customer_name: String,
+}
+
+async fn list_loan_accounts(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<LoanAccountSummary>>, AppError> {
+    let rows: Vec<LoanAccountSummaryRow> = sqlx::query_as(
+        r#"
+        select pla.id, pla.account_number, pla.sale_id, pla.principal, pla.interest_rate,
+            pla.deposit_required, pla.deposit_paid, pla.instalment_amount, pla.repayment_frequency_days,
+            pla.start_date, pla.status, pla.amount_paid, pla.outstanding_balance, pla.days_in_arrears,
+            pl.id as plot_id, pl.plot_number, pr.id as project_id, pr.name as project_name,
+            c.id as customer_id, c.full_name as customer_name
+        from plot_loan_accounts pla
+        join plot_sales ps on ps.id = pla.sale_id
+        join plots pl on pl.id = ps.plot_id
+        join projects pr on pr.id = pl.project_id
+        join customers c on c.id = ps.customer_id
+        where ps.organization_id = $1
+        order by pla.outstanding_balance desc, pla.start_date desc
+        "#,
+    )
+    .bind(auth.organization_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let summaries = rows
+        .into_iter()
+        .map(|r| {
+            let status: LoanAccountStatus = from_pg("plot_loan_accounts.status", &r.status)?;
+            let (label, color) = domain::loan_status_meta(status);
+            Ok(LoanAccountSummary {
+                account: PlotLoanAccount {
+                    id: r.id,
+                    account_number: r.account_number,
+                    sale_id: r.sale_id,
+                    principal: r.principal,
+                    interest_rate: r.interest_rate,
+                    deposit_required: r.deposit_required,
+                    deposit_paid: r.deposit_paid,
+                    instalment_amount: r.instalment_amount,
+                    repayment_frequency_days: r.repayment_frequency_days,
+                    start_date: r.start_date,
+                    status,
+                    amount_paid: r.amount_paid,
+                    outstanding_balance: r.outstanding_balance,
+                    days_in_arrears: r.days_in_arrears,
+                },
+                plot_id: r.plot_id,
+                plot_number: r.plot_number,
+                project_id: r.project_id,
+                project_name: r.project_name,
+                customer_id: r.customer_id,
+                customer_name: r.customer_name,
+                status_label: label.to_string(),
+                status_color: color.to_string(),
+            })
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
+
+    Ok(Json(summaries))
+}

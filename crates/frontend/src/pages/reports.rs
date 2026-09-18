@@ -1,5 +1,6 @@
 use chrono::NaiveDate;
 use leptos::prelude::*;
+use leptos_router::hooks::use_query_map;
 use uuid::Uuid;
 
 use crate::auth::{use_api, use_currency};
@@ -25,7 +26,16 @@ impl Tab {
 
 #[component]
 pub fn Reports() -> impl IntoView {
-    let tab = RwSignal::new(Tab::Sales);
+    // `/reports?tab=inventory` / `?tab=agents` (the sidebar's Reports
+    // sub-items) pre-select a tab; still switchable afterward like any
+    // other in-page filter.
+    let query = use_query_map();
+    let initial_tab = match query.get_untracked().get("tab").as_deref() {
+        Some("inventory") => Tab::Inventory,
+        Some("agents") => Tab::Agents,
+        _ => Tab::Sales,
+    };
+    let tab = RwSignal::new(initial_tab);
 
     view! {
         <div class="page-header">

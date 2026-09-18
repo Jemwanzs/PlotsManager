@@ -21,6 +21,8 @@ pub enum IconName {
     Import,
     Settings,
     Platform,
+    Finance,
+    Chevron,
     More,
 }
 
@@ -69,6 +71,14 @@ pub fn Icon(name: IconName) -> impl IntoView {
         }.into_any(),
         IconName::Platform => view! {
             <path d="M12 2.5 19.5 6v6c0 5-3.2 7.8-7.5 9.5-4.3-1.7-7.5-4.5-7.5-9.5V6Z" />
+        }.into_any(),
+        IconName::Finance => view! {
+            <rect x="3" y="6" width="18" height="13" rx="2" />
+            <path d="M3 10.5h18" />
+            <circle cx="16.5" cy="14.5" r="1.1" fill="currentColor" stroke="none" />
+        }.into_any(),
+        IconName::Chevron => view! {
+            <polyline points="9,6 15,12 9,18" />
         }.into_any(),
         IconName::More => view! {
             <circle cx="5" cy="12" r="1.4" />

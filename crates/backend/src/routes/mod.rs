@@ -2,6 +2,7 @@ mod approvals;
 mod auth;
 mod customers;
 mod dashboard;
+mod finance;
 mod loan_accounts;
 mod platform;
 mod project_map;
@@ -19,6 +20,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .merge(auth::router())
         .merge(dashboard::router())
+        .merge(finance::router())
         .merge(projects::router())
         .merge(customers::router())
         .merge(sales::router())

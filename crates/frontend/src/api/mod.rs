@@ -387,4 +387,11 @@ impl ApiClient {
             Self::Http(api) => api.next_number(entity_type, project_code).await,
         }
     }
+
+    pub async fn list_loan_accounts(&self) -> Result<Vec<domain::LoanAccountSummary>, ApiError> {
+        match self {
+            Self::Mock(api) => api.list_loan_accounts().await,
+            Self::Http(api) => api.list_loan_accounts().await,
+        }
+    }
 }

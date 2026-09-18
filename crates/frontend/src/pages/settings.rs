@@ -7,6 +7,7 @@
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use leptos_router::hooks::use_location;
 
 use crate::auth::{use_api, use_currency};
 use crate::components::{ErrorAlert, LoadingState};
@@ -58,6 +59,20 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
     // pushes the new value into it so the rest of the app picks it up
     // immediately, without requiring a re-login.
     let global_currency = use_currency();
+
+    // `/settings#numbering` (the sidebar's "Numbering configuration" nav
+    // sub-item) scrolls straight to that section instead of dropping the
+    // visitor at the top of a long page they then have to hunt through.
+    let location = use_location();
+    Effect::new(move |_| {
+        let hash = location.hash.get();
+        let id = hash.trim_start_matches('#');
+        if !id.is_empty() {
+            if let Some(el) = document().get_element_by_id(id) {
+                el.scroll_into_view();
+            }
+        }
+    });
 
     let currency = RwSignal::new(initial.currency.clone());
     let date_format = RwSignal::new(initial.date_format.clone());
@@ -172,7 +187,7 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
                 success.get().then(|| view! { <div class="alert alert-success">"Settings saved."</div> })
             }}
 
-            <div class="card" style="max-width: 640px; margin-bottom: var(--space-4)">
+            <div id="general" class="card" style="max-width: 640px; margin-bottom: var(--space-4)">
                 <h2 class="mt-0">"General"</h2>
                 <div class="field">
                     <label for="currency">"Currency code"</label>
@@ -211,7 +226,7 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
                 </div>
             </div>
 
-            <div class="card" style="max-width: 640px; margin-bottom: var(--space-4)">
+            <div id="numbering" class="card" style="max-width: 640px; margin-bottom: var(--space-4)">
                 <h2 class="mt-0">"Plot numbering"</h2>
                 <p class="meta">"Preview: " <strong>{plot_preview}</strong></p>
                 <div class="field">
