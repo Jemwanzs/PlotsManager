@@ -27,8 +27,8 @@ use domain::{
     AgentPerformanceReport, ApiError, ApprovalRequestSummary, AuthSession, BulkImportResult,
     BulkSaleRow, CreateCustomerInput, CreatePlotInput, CreateProjectInput, CreateQuotationInput,
     CreateRoleInput, CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary,
-    DecideApprovalInput, GeneratedNumber, InventoryReport, LoanAccountDetail, LoanAccountSummary,
-    LoginInput, MapPolygons, OrganizationSettings, PlatformOrganizationDetail,
+    DecideApprovalInput, GeneratedNumber, InventoryReport, LinkPlotInput, LoanAccountDetail,
+    LoanAccountSummary, LoginInput, MapPolygons, OrganizationSettings, PlatformOrganizationDetail,
     PlatformOrganizationSummary, PlotWithColor, ProjectMapSummary, ProjectSummary, QuotationDetail,
     QuotationSummary, RecordPaymentInput, Role, SalesReport, SignupInput, UpdateLeadInput,
     UpdateMapPolygonsInput, UpdateOrganizationSettingsInput, UpdatePlotInput, UpdateRoleInput,
@@ -422,6 +422,44 @@ impl HttpApi {
         self.put(
             &format!("/api/v1/projects/{project_id}/map/polygons"),
             &UpdateMapPolygonsInput { polygons },
+        )
+        .await
+    }
+
+    pub async fn create_plot_for_map_feature(
+        &self,
+        project_id: Uuid,
+        feature_id: &str,
+        input: CreatePlotInput,
+    ) -> Result<ProjectMapSummary, ApiError> {
+        self.put(
+            &format!("/api/v1/projects/{project_id}/map/features/{feature_id}/create-plot"),
+            &input,
+        )
+        .await
+    }
+
+    pub async fn link_plot_to_map_feature(
+        &self,
+        project_id: Uuid,
+        feature_id: &str,
+        plot_id: Uuid,
+    ) -> Result<ProjectMapSummary, ApiError> {
+        self.put(
+            &format!("/api/v1/projects/{project_id}/map/features/{feature_id}/link-plot"),
+            &LinkPlotInput { plot_id },
+        )
+        .await
+    }
+
+    pub async fn unlink_map_feature(
+        &self,
+        project_id: Uuid,
+        feature_id: &str,
+    ) -> Result<ProjectMapSummary, ApiError> {
+        self.put(
+            &format!("/api/v1/projects/{project_id}/map/features/{feature_id}/unlink"),
+            &(),
         )
         .await
     }

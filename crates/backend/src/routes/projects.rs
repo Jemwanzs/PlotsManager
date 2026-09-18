@@ -276,7 +276,7 @@ async fn create_plot(
 /// drift from what adding one plot by hand enforces. Does **not**
 /// check the caller's org owns `project_id` — callers must do that
 /// once up front (`ensure_project_in_org`), not per row.
-async fn insert_plot(
+pub(crate) async fn insert_plot(
     state: &AppState,
     project_id: Uuid,
     input: &CreatePlotInput,
@@ -434,7 +434,7 @@ async fn bulk_create_plots(
 /// Shared by every plot route: 404s (not a bare permission error) if the
 /// project doesn't belong to the caller's org, so a probing request can't
 /// distinguish "doesn't exist" from "exists but isn't yours".
-async fn ensure_project_in_org(
+pub(crate) async fn ensure_project_in_org(
     state: &AppState,
     project_id: Uuid,
     organization_id: Uuid,

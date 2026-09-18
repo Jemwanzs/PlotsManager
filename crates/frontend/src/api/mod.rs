@@ -325,6 +325,41 @@ impl ApiClient {
         }
     }
 
+    pub async fn create_plot_for_map_feature(
+        &self,
+        project_id: Uuid,
+        feature_id: &str,
+        input: CreatePlotInput,
+    ) -> Result<domain::ProjectMapSummary, ApiError> {
+        match self {
+            Self::Mock(api) => api.create_plot_for_map_feature(project_id, feature_id, input).await,
+            Self::Http(api) => api.create_plot_for_map_feature(project_id, feature_id, input).await,
+        }
+    }
+
+    pub async fn link_plot_to_map_feature(
+        &self,
+        project_id: Uuid,
+        feature_id: &str,
+        plot_id: Uuid,
+    ) -> Result<domain::ProjectMapSummary, ApiError> {
+        match self {
+            Self::Mock(api) => api.link_plot_to_map_feature(project_id, feature_id, plot_id).await,
+            Self::Http(api) => api.link_plot_to_map_feature(project_id, feature_id, plot_id).await,
+        }
+    }
+
+    pub async fn unlink_map_feature(
+        &self,
+        project_id: Uuid,
+        feature_id: &str,
+    ) -> Result<domain::ProjectMapSummary, ApiError> {
+        match self {
+            Self::Mock(api) => api.unlink_map_feature(project_id, feature_id).await,
+            Self::Http(api) => api.unlink_map_feature(project_id, feature_id).await,
+        }
+    }
+
     pub async fn bulk_create_plots(
         &self,
         project_id: Uuid,

@@ -49,12 +49,25 @@ fn can_start_sale(status: PlotStatus) -> bool {
 /// way to look up a plot's colour without capturing (and exhausting)
 /// an owned `Vec<PlotWithColor>`; taking `&[PlotWithColor]` by
 /// reference each call sidesteps that entirely.
-fn feature_color(plots: &[PlotWithColor], plot_id: Uuid) -> String {
-    plots
-        .iter()
-        .find(|p| p.plot.id == plot_id)
+fn feature_color(plots: &[PlotWithColor], plot_id: Option<Uuid>) -> String {
+    plot_id
+        .and_then(|id| plots.iter().find(|p| p.plot.id == id))
         .map(|p| p.status_color.clone())
-        .unwrap_or_else(|| "#6b7280".to_string())
+        .unwrap_or_else(|| "#9ca3af".to_string())
+}
+
+/// Where a shape's map label renders — the plain average of its
+/// boundary points. Not a true polygon centroid (that needs an
+/// area-weighted formula for a very irregular shape to look centred),
+/// but plot boundaries are close enough to convex in practice that the
+/// simpler average reads fine, and it's the same approach the "click a
+/// point in the middle" mental model already assumes.
+fn polygon_centroid(points: &[[f64; 2]]) -> (f64, f64) {
+    if points.is_empty() {
+        return (0.0, 0.0);
+    }
+    let (sum_x, sum_y) = points.iter().fold((0.0, 0.0), |(sx, sy), [x, y]| (sx + x, sy + y));
+    (sum_x / points.len() as f64, sum_y / points.len() as f64)
 }
 
 /// Blank means "not recorded" (`None`) — dimensions are optional, unlike
@@ -213,6 +226,17 @@ pub fn ProjectDetail() -> impl IntoView {
                     .map(|wrapped| wrapped.take())
                     .flatten()
                     .map(|result| match result {
+                        // The map has to stay reachable even with zero
+                        // plots yet — drawing a shape and clicking
+                        // "Create Plot" on it (this phase's whole point)
+                        // is now a legitimate way to get the *first*
+                        // plot, so gating map access behind "at least
+                        // one plot already exists" would be circular.
+                        Ok(list) if show_map.get() => {
+                            let Some(id) = project_id() else { return ().into_any() };
+                            view! { <ProjectMapSection project_id=id plots=list selected=selected /> }
+                                .into_any()
+                        }
                         Ok(list) if list.is_empty() => {
                             view! {
                                 <EmptyState
@@ -221,11 +245,6 @@ pub fn ProjectDetail() -> impl IntoView {
                                     detail="Plots added to this project will appear here."
                                 />
                             }
-                                .into_any()
-                        }
-                        Ok(list) if show_map.get() => {
-                            let Some(id) = project_id() else { return ().into_any() };
-                            view! { <ProjectMapSection project_id=id plots=list selected=selected /> }
                                 .into_any()
                         }
                         Ok(list) => {
@@ -1319,10 +1338,15 @@ fn MapUploadForm(project_id: Uuid, on_uploaded: impl Fn() + Clone + 'static) -> 
 /// A single project's map: the uploaded image with an SVG polygon
 /// overlay. Coordinates are pixels against the image's natural size,
 /// not geographic — see `domain::MapPolygons`'s module docs. Outside
-/// edit mode, clicking a polygon selects that plot (reusing the same
-/// `selected` signal — and so the same Reserve/Quote card — as
-/// clicking a tile in the grid view); in edit mode, clicking the image
-/// places a boundary point and clicking an existing polygon removes it.
+/// edit mode, clicking a *linked* polygon selects that plot (reusing
+/// the same `selected` signal — and so the same Reserve/Quote card —
+/// as clicking a tile in the grid view); clicking an *unlinked* (draft)
+/// polygon instead opens `selected_draft`'s "Create Plot"/"Link
+/// Existing Plot" panel below the map, this component's core addition
+/// — a shape no longer needs a plot picked before it can be drawn (see
+/// `domain::MapFeature`'s module docs for why). In edit mode, clicking
+/// the image places a boundary point and clicking an existing polygon
+/// (draft or linked) removes it.
 #[component]
 fn MapCanvas(
     project_id: Uuid,
@@ -1341,7 +1365,9 @@ fn MapCanvas(
     let features: RwSignal<Vec<MapFeature>> = RwSignal::new(summary.polygons.features.clone());
     let edit_mode = RwSignal::new(false);
     let draft_points: RwSignal<Vec<(f64, f64)>> = RwSignal::new(Vec::new());
-    let draft_plot_id = RwSignal::new(String::new());
+    let draft_label = RwSignal::new(String::new());
+    let selected_draft: RwSignal<Option<MapFeature>> = RwSignal::new(None);
+    let plots_for_draft_panel = plots.clone();
     let error = RwSignal::new(None::<String>);
     let saving = RwSignal::new(false);
     let replacing = RwSignal::new(false);
@@ -1400,17 +1426,15 @@ fn MapCanvas(
         });
     };
 
-    let plots_for_dropdown = plots.clone();
-
     view! {
         {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
 
         <div style="display:flex; justify-content: space-between; align-items:center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-2);">
             <p class="meta mt-0">
                 {move || if edit_mode.get() {
-                    "Click the image to place boundary points; click a shaded plot to remove it."
+                    "Click the image to place boundary points; click an existing shape to remove it."
                 } else {
-                    "Click a shaded plot to view it."
+                    "Click a shape to view its plot — or, if it isn't linked to one yet, to create or link one."
                 }}
             </p>
             <div style="display:flex; gap: var(--space-2); align-items:center;">
@@ -1447,21 +1471,14 @@ fn MapCanvas(
                 view! {
             <div class="card" style="margin-bottom: var(--space-3); display:flex; gap: var(--space-3); align-items:flex-end; flex-wrap:wrap;">
                 <div class="field" style="margin-bottom:0;">
-                    <label for="draft-plot">"Plot for next shape"</label>
-                    <select
-                        id="draft-plot"
-                        prop:value=draft_plot_id
-                        on:change=move |ev| draft_plot_id.set(event_target_value(&ev))
-                    >
-                        <option value="">"Select a plot…"</option>
-                        {plots_for_dropdown
-                            .iter()
-                            .map(|p| {
-                                let id = p.plot.id.to_string();
-                                view! { <option value=id>{p.plot.plot_number.clone()}</option> }
-                            })
-                            .collect_view()}
-                    </select>
+                    <label for="draft-label">"Label (optional)"</label>
+                    <input
+                        id="draft-label"
+                        type="text"
+                        placeholder="e.g. Lot 1"
+                        prop:value=draft_label
+                        on:input=move |ev| draft_label.set(event_target_value(&ev))
+                    />
                 </div>
                 <span class="meta">{move || format!("{} point(s) placed", draft_points.get().len())}</span>
                 <button
@@ -1473,21 +1490,19 @@ fn MapCanvas(
                             error.set(Some("Click at least 3 points to outline a plot.".to_string()));
                             return;
                         }
-                        let Ok(plot_id) = Uuid::parse_str(draft_plot_id.get().trim()) else {
-                            error.set(Some("Choose which plot this shape is for.".to_string()));
-                            return;
-                        };
                         error.set(None);
+                        let label = draft_label.get();
+                        let label = (!label.trim().is_empty()).then(|| label.trim().to_string());
                         features.update(|list| {
-                            list.retain(|f| f.plot_id != plot_id);
                             list.push(MapFeature {
                                 id: format!("f-{}", Uuid::new_v4()),
-                                plot_id,
+                                plot_id: None,
+                                label,
                                 points: pts.iter().map(|&(x, y)| [x, y]).collect(),
                             });
                         });
                         draft_points.set(Vec::new());
-                        draft_plot_id.set(String::new());
+                        draft_label.set(String::new());
                     }
                 >
                     "Finish shape"
@@ -1557,13 +1572,23 @@ fn MapCanvas(
                                 .join(" ");
                             let color = feature_color(&plots, f.plot_id);
                             let fid = f.id.clone();
-                            let plot_for_select = plots.iter().find(|p| p.plot.id == f.plot_id).cloned();
+                            let plot_for_select = f.plot_id.and_then(|id| plots.iter().find(|p| p.plot.id == id)).cloned();
+                            let feature_for_draft = f.clone();
+                            let (cx, cy) = polygon_centroid(&f.points);
+                            let label = f.label.clone();
+                            // Draft shapes get a dashed outline — visually
+                            // distinct from a real, coloured-by-status plot
+                            // (`domain::plot_status_meta`'s palette never
+                            // produces this neutral grey) so nobody mistakes
+                            // an unconfigured shape for an available one.
+                            let dash = if f.plot_id.is_none() { "6,4" } else { "" };
                             view! {
                                 <polygon
                                     points=points_attr
                                     fill=format!("{color}99")
                                     stroke=color.clone()
                                     stroke-width="2"
+                                    stroke-dasharray=dash
                                     style="cursor:pointer;"
                                     on:click=move |ev: leptos::ev::MouseEvent| {
                                         ev.stop_propagation();
@@ -1572,9 +1597,28 @@ fn MapCanvas(
                                             features.update(|list| list.retain(|x| x.id != fid));
                                         } else if let Some(p) = plot_for_select.clone() {
                                             selected.set(Some(p));
+                                        } else {
+                                            selected_draft.set(Some(feature_for_draft.clone()));
                                         }
                                     }
                                 ></polygon>
+                                {label.map(|text| view! {
+                                    <text
+                                        x=cx.to_string()
+                                        y=cy.to_string()
+                                        fill="#fff"
+                                        stroke="#00000099"
+                                        stroke-width="3"
+                                        attr:paint-order="stroke"
+                                        font-size="13"
+                                        font-weight="700"
+                                        text-anchor="middle"
+                                        dominant-baseline="middle"
+                                        style="pointer-events:none;"
+                                    >
+                                        {text}
+                                    </text>
+                                })}
                             }
                         })
                         .collect_view()
@@ -1599,5 +1643,333 @@ fn MapCanvas(
                 }}
             </svg>
         </div>
+
+        {move || {
+            selected_draft.get().map(|feature| {
+                let unlinked_plots: Vec<PlotWithColor> = {
+                    let linked_ids: std::collections::HashSet<Uuid> =
+                        features.get().iter().filter_map(|f| f.plot_id).collect();
+                    plots_for_draft_panel.iter().filter(|p| !linked_ids.contains(&p.plot.id)).cloned().collect()
+                };
+                let show_link = RwSignal::new(false);
+                let feature_id = feature.id.clone();
+                let label_text = feature.label
+                    .clone()
+                    .filter(|l| !l.trim().is_empty())
+                    .unwrap_or_else(|| "Unnamed shape".to_string());
+                view! {
+                    <div class="card" style="margin-top: var(--space-4)">
+                        <div class="page-header" style="margin-bottom: var(--space-3)">
+                            <h2 class="mt-0">{label_text}</h2>
+                            <span class="meta">"Not yet linked to a plot"</span>
+                        </div>
+                        <div class="filter-tabs">
+                            <button
+                                type="button"
+                                class="filter-tab"
+                                class:active=move || !show_link.get()
+                                on:click=move |_| show_link.set(false)
+                            >
+                                "Create plot"
+                            </button>
+                            <button
+                                type="button"
+                                class="filter-tab"
+                                class:active=move || show_link.get()
+                                on:click=move |_| show_link.set(true)
+                            >
+                                "Link existing plot"
+                            </button>
+                        </div>
+                        {move || {
+                            let feature_id = feature_id.clone();
+                            let unlinked_plots = unlinked_plots.clone();
+                            if show_link.get() {
+                                view! {
+                                    <LinkExistingPlotForm
+                                        project_id=project_id
+                                        feature_id=feature_id
+                                        unlinked_plots=unlinked_plots
+                                        on_linked=move || {
+                                            selected_draft.set(None);
+                                            refresh.update(|n| *n += 1);
+                                        }
+                                    />
+                                }
+                                    .into_any()
+                            } else {
+                                view! {
+                                    <CreatePlotFromMapForm
+                                        project_id=project_id
+                                        feature_id=feature_id
+                                        on_created=move || {
+                                            selected_draft.set(None);
+                                            refresh.update(|n| *n += 1);
+                                        }
+                                    />
+                                }
+                                    .into_any()
+                            }
+                        }}
+                        <button
+                            class="btn btn-secondary"
+                            style="margin-top: var(--space-3);"
+                            on:click=move |_| selected_draft.set(None)
+                        >
+                            "Close"
+                        </button>
+                    </div>
+                }
+            })
+        }}
+    }
+}
+
+#[component]
+fn CreatePlotFromMapForm(
+    project_id: Uuid,
+    feature_id: String,
+    on_created: impl Fn() + Clone + 'static,
+) -> impl IntoView {
+    let api = use_api();
+    let currency = use_currency();
+
+    let plot_number = RwSignal::new(String::new());
+    let size = RwSignal::new(String::new());
+    let side_1 = RwSignal::new(String::new());
+    let side_2 = RwSignal::new(String::new());
+    let asking_price = RwSignal::new(String::new());
+    let minimum_price = RwSignal::new(String::new());
+    let error = RwSignal::new(None::<String>);
+    let submitting = RwSignal::new(false);
+
+    let on_submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        if submitting.get() {
+            return;
+        }
+        error.set(None);
+
+        let Ok(parsed_size) = Decimal::from_str(size.get().trim()) else {
+            error.set(Some("Enter a valid size.".to_string()));
+            return;
+        };
+        let parsed_side_1 = match parse_optional_dimension(&side_1.get()) {
+            Ok(v) => v,
+            Err(msg) => {
+                error.set(Some(msg));
+                return;
+            }
+        };
+        let parsed_side_2 = match parse_optional_dimension(&side_2.get()) {
+            Ok(v) => v,
+            Err(msg) => {
+                error.set(Some(msg));
+                return;
+            }
+        };
+        let Ok(parsed_asking) = Decimal::from_str(asking_price.get().trim()) else {
+            error.set(Some("Enter a valid asking price.".to_string()));
+            return;
+        };
+        let parsed_minimum = if minimum_price.get().trim().is_empty() {
+            parsed_asking
+        } else {
+            match Decimal::from_str(minimum_price.get().trim()) {
+                Ok(v) => v,
+                Err(_) => {
+                    error.set(Some("Enter a valid minimum price.".to_string()));
+                    return;
+                }
+            }
+        };
+
+        submitting.set(true);
+        let api = api.clone();
+        let on_created = on_created.clone();
+        let feature_id = feature_id.clone();
+        let input = CreatePlotInput {
+            project_id,
+            plot_number: plot_number.get(),
+            size: parsed_size,
+            side_1: parsed_side_1,
+            side_2: parsed_side_2,
+            asking_price: parsed_asking,
+            minimum_price: parsed_minimum,
+        };
+        spawn_local(async move {
+            match api.create_plot_for_map_feature(project_id, &feature_id, input).await {
+                Ok(_) => {
+                    // `on_created` unmounts this component (it clears the
+                    // selected draft), which disposes `submitting`/`error` —
+                    // so touch them first, before disposal, never after.
+                    submitting.set(false);
+                    on_created();
+                }
+                Err(e) => {
+                    error.set(Some(format!("{e}")));
+                    submitting.set(false);
+                }
+            }
+        });
+    };
+
+    view! {
+        <form on:submit=on_submit>
+            {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+
+            <div class="field">
+                <label for="map-plot-number">"Plot number"</label>
+                <input
+                    id="map-plot-number"
+                    type="text"
+                    required
+                    prop:value=plot_number
+                    on:input=move |ev| plot_number.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label for="map-plot-size">"Size (acres)"</label>
+                <input
+                    id="map-plot-size"
+                    type="text"
+                    inputmode="decimal"
+                    required
+                    prop:value=size
+                    on:input=move |ev| size.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label>"Plot dimensions (feet)"</label>
+                <div class="dimension-row">
+                    <span class="dimension-label">"Side 1"</span>
+                    <input
+                        type="text"
+                        inputmode="decimal"
+                        placeholder="80"
+                        aria-label="Side 1"
+                        prop:value=side_1
+                        on:input=move |ev| side_1.set(event_target_value(&ev))
+                    />
+                    <span class="dimension-label">"by"</span>
+                    <span class="dimension-label">"Side 2"</span>
+                    <input
+                        type="text"
+                        inputmode="decimal"
+                        placeholder="100"
+                        aria-label="Side 2"
+                        prop:value=side_2
+                        on:input=move |ev| side_2.set(event_target_value(&ev))
+                    />
+                    <span class="dimension-label">"ft"</span>
+                </div>
+            </div>
+
+            <div class="field">
+                <label for="map-asking-price">"Asking price (" {move || currency.get()} ")"</label>
+                <input
+                    id="map-asking-price"
+                    type="text"
+                    inputmode="numeric"
+                    required
+                    prop:value=asking_price
+                    on:input=move |ev| asking_price.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label for="map-minimum-price">"Minimum price (" {move || currency.get()} ", optional)"</label>
+                <input
+                    id="map-minimum-price"
+                    type="text"
+                    inputmode="numeric"
+                    prop:value=minimum_price
+                    on:input=move |ev| minimum_price.set(event_target_value(&ev))
+                />
+            </div>
+
+            <button type="submit" class="btn btn-primary" disabled=submitting>
+                {move || if submitting.get() { "Creating…" } else { "Create plot" }}
+            </button>
+        </form>
+    }
+}
+
+#[component]
+fn LinkExistingPlotForm(
+    project_id: Uuid,
+    feature_id: String,
+    unlinked_plots: Vec<PlotWithColor>,
+    on_linked: impl Fn() + Clone + 'static,
+) -> impl IntoView {
+    let api = use_api();
+    let chosen = RwSignal::new(String::new());
+    let error = RwSignal::new(None::<String>);
+    let submitting = RwSignal::new(false);
+
+    let on_submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        if submitting.get() {
+            return;
+        }
+        error.set(None);
+        let Ok(plot_id) = Uuid::parse_str(chosen.get().trim()) else {
+            error.set(Some("Choose a plot.".to_string()));
+            return;
+        };
+        submitting.set(true);
+        let api = api.clone();
+        let on_linked = on_linked.clone();
+        let feature_id = feature_id.clone();
+        spawn_local(async move {
+            match api.link_plot_to_map_feature(project_id, &feature_id, plot_id).await {
+                Ok(_) => {
+                    // Same disposal-order hazard as CreatePlotFromMapForm:
+                    // `on_linked` unmounts this component, so update
+                    // `submitting` before it, never after.
+                    submitting.set(false);
+                    on_linked();
+                }
+                Err(e) => {
+                    error.set(Some(format!("{e}")));
+                    submitting.set(false);
+                }
+            }
+        });
+    };
+
+    view! {
+        <form on:submit=on_submit>
+            {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+
+            {if unlinked_plots.is_empty() {
+                view! { <p class="meta">"No unlinked plots in this project to link."</p> }.into_any()
+            } else {
+                view! {
+                    <div class="field">
+                        <label for="link-plot-select">"Plot"</label>
+                        <select
+                            id="link-plot-select"
+                            required
+                            prop:value=chosen
+                            on:change=move |ev| chosen.set(event_target_value(&ev))
+                        >
+                            <option value="">"Select a plot…"</option>
+                            {unlinked_plots.iter().map(|p| {
+                                let id = p.plot.id.to_string();
+                                view! { <option value=id>{p.plot.plot_number.clone()}</option> }
+                            }).collect_view()}
+                        </select>
+                    </div>
+                }
+                    .into_any()
+            }}
+
+            <button type="submit" class="btn btn-primary" disabled=submitting>
+                {move || if submitting.get() { "Linking…" } else { "Link plot" }}
+            </button>
+        </form>
     }
 }

@@ -10,6 +10,16 @@
 //! `<img>` tags can't send an `Authorization` header, so that route
 //! authenticates via a `?token=` query param instead of the ordinary
 //! `AuthUser` extractor.
+//!
+//! A drawn shape (`domain::MapFeature`) no longer requires a plot
+//! picked up front — `update_polygons` (whole-set replace, used for
+//! drawing/deleting shapes) now accepts an unlinked, `plot_id: None`
+//! *draft* feature. `create_plot_for_feature`/`link_plot_to_feature`/
+//! `unlink_feature` below are the single-feature actions that resolve
+//! a draft (or undo that): fetch-modify-write against the same
+//! `project_maps.polygons` JSONB column `update_polygons` writes to,
+//! rather than a full array replace, so linking one shape can't race
+//! with (or accidentally clobber) someone else mid-redraw.
 
 use axum::body::Bytes;
 use axum::extract::{Multipart, Path, Query, State};
@@ -18,12 +28,13 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
-use domain::{MapPolygons, ProjectMapSummary, UpdateMapPolygonsInput};
+use domain::{CreatePlotInput, LinkPlotInput, MapPolygons, ProjectMapSummary, UpdateMapPolygonsInput};
 use uuid::Uuid;
 
 use crate::auth::verify_session_token;
 use crate::error::AppError;
 use crate::extractors::AuthUser;
+use crate::routes::projects::{ensure_project_in_org, insert_plot};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -34,6 +45,18 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/v1/projects/:id/map/image", get(get_map_image))
         .route("/api/v1/projects/:id/map/polygons", put(update_polygons))
+        .route(
+            "/api/v1/projects/:id/map/features/:feature_id/create-plot",
+            put(create_plot_for_feature),
+        )
+        .route(
+            "/api/v1/projects/:id/map/features/:feature_id/link-plot",
+            put(link_plot_to_feature),
+        )
+        .route(
+            "/api/v1/projects/:id/map/features/:feature_id/unlink",
+            put(unlink_feature),
+        )
 }
 
 async fn project_organization_id(
@@ -198,18 +221,31 @@ async fn update_polygons(
         return Err(AppError::NotFound);
     }
 
+    // A feature's `plot_id` is optional now (a freshly-drawn shape is a
+    // draft until "Create Plot"/"Link Existing Plot" resolves it via
+    // the single-feature endpoints below) — only a *linked* feature
+    // needs its plot validated here, and at most one feature may claim
+    // a given plot.
+    let mut seen_plot_ids = std::collections::HashSet::new();
     for feature in &input.polygons.features {
+        let Some(plot_id) = feature.plot_id else {
+            continue;
+        };
+        if !seen_plot_ids.insert(plot_id) {
+            return Err(AppError::bad_request(
+                "Each plot can only be linked to one shape on the map.",
+            ));
+        }
         let plot_ok: bool = sqlx::query_scalar(
             "select exists(select 1 from plots where id = $1 and project_id = $2)",
         )
-        .bind(feature.plot_id)
+        .bind(plot_id)
         .bind(project_id)
         .fetch_one(&state.db)
         .await?;
         if !plot_ok {
             return Err(AppError::bad_request(format!(
-                "Plot {} doesn't belong to this project.",
-                feature.plot_id
+                "Plot {plot_id} doesn't belong to this project."
             )));
         }
     }
@@ -230,6 +266,134 @@ async fn update_polygons(
             "Upload a site plan image before saving plot boundaries.",
         ));
     }
+
+    get_map_summary(State(state), auth, Path(project_id)).await
+}
+
+async fn load_polygons(state: &AppState, project_id: Uuid) -> Result<MapPolygons, AppError> {
+    let raw: Option<serde_json::Value> =
+        sqlx::query_scalar("select polygons from project_maps where project_id = $1")
+            .bind(project_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let raw = raw.ok_or_else(|| AppError::bad_request("Upload a site plan image first."))?;
+    Ok(serde_json::from_value(raw).unwrap_or_default())
+}
+
+async fn save_polygons(
+    state: &AppState,
+    project_id: Uuid,
+    polygons: &MapPolygons,
+) -> Result<(), AppError> {
+    let json = serde_json::to_value(polygons).map_err(|e| AppError::Internal(e.into()))?;
+    sqlx::query("update project_maps set polygons = $1, updated_at = now() where project_id = $2")
+        .bind(json)
+        .bind(project_id)
+        .execute(&state.db)
+        .await?;
+    Ok(())
+}
+
+/// "Create Plot" from a drawn-but-unlinked shape — reuses
+/// `routes::projects::insert_plot` (the same validation/insert every
+/// other plot-creation path goes through, including bulk import) so
+/// this isn't a second plot-registration system, just a different
+/// place to reach the first one from. Rejects a shape that's already
+/// linked rather than silently creating an orphaned second plot.
+async fn create_plot_for_feature(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((project_id, feature_id)): Path<(Uuid, String)>,
+    Json(input): Json<CreatePlotInput>,
+) -> Result<Json<ProjectMapSummary>, AppError> {
+    ensure_project_in_org(&state, project_id, auth.organization_id).await?;
+
+    let mut polygons = load_polygons(&state, project_id).await?;
+    let feature = polygons
+        .features
+        .iter_mut()
+        .find(|f| f.id == feature_id)
+        .ok_or(AppError::NotFound)?;
+    if feature.plot_id.is_some() {
+        return Err(AppError::conflict(
+            "This shape is already linked to a plot.",
+        ));
+    }
+
+    let plot = insert_plot(&state, project_id, &input).await?;
+    feature.plot_id = Some(plot.id);
+    save_polygons(&state, project_id, &polygons).await?;
+
+    get_map_summary(State(state), auth, Path(project_id)).await
+}
+
+/// "Link Existing Plot" — attaches an already-registered, not-yet-
+/// mapped plot to a drawn shape.
+async fn link_plot_to_feature(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((project_id, feature_id)): Path<(Uuid, String)>,
+    Json(input): Json<LinkPlotInput>,
+) -> Result<Json<ProjectMapSummary>, AppError> {
+    ensure_project_in_org(&state, project_id, auth.organization_id).await?;
+
+    let plot_ok: bool = sqlx::query_scalar(
+        "select exists(select 1 from plots where id = $1 and project_id = $2)",
+    )
+    .bind(input.plot_id)
+    .bind(project_id)
+    .fetch_one(&state.db)
+    .await?;
+    if !plot_ok {
+        return Err(AppError::bad_request(
+            "That plot doesn't belong to this project.",
+        ));
+    }
+
+    let mut polygons = load_polygons(&state, project_id).await?;
+    if polygons
+        .features
+        .iter()
+        .any(|f| f.plot_id == Some(input.plot_id))
+    {
+        return Err(AppError::conflict(
+            "That plot is already linked to a shape on this map.",
+        ));
+    }
+    let feature = polygons
+        .features
+        .iter_mut()
+        .find(|f| f.id == feature_id)
+        .ok_or(AppError::NotFound)?;
+    if feature.plot_id.is_some() {
+        return Err(AppError::conflict(
+            "This shape is already linked to a plot.",
+        ));
+    }
+    feature.plot_id = Some(input.plot_id);
+    save_polygons(&state, project_id, &polygons).await?;
+
+    get_map_summary(State(state), auth, Path(project_id)).await
+}
+
+/// Detaches a shape from its plot without deleting either — the plot
+/// record stays exactly as it was, just no longer mapped. (Undoing a
+/// mis-click, not a plot deletion path.)
+async fn unlink_feature(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((project_id, feature_id)): Path<(Uuid, String)>,
+) -> Result<Json<ProjectMapSummary>, AppError> {
+    ensure_project_in_org(&state, project_id, auth.organization_id).await?;
+
+    let mut polygons = load_polygons(&state, project_id).await?;
+    let feature = polygons
+        .features
+        .iter_mut()
+        .find(|f| f.id == feature_id)
+        .ok_or(AppError::NotFound)?;
+    feature.plot_id = None;
+    save_polygons(&state, project_id, &polygons).await?;
 
     get_map_summary(State(state), auth, Path(project_id)).await
 }

@@ -1171,17 +1171,27 @@ impl MockApi {
         polygons: MapPolygons,
     ) -> Result<ProjectMapSummary, ApiError> {
         settle(200).await;
-        for feature in &polygons.features {
+        {
             let db = self.db.lock().unwrap();
-            let belongs = db
-                .plots
-                .iter()
-                .any(|p| p.id == feature.plot_id && p.project_id == project_id);
-            if !belongs {
-                return Err(ApiError::InvalidCredentials(format!(
-                    "Plot {} doesn't belong to this project.",
-                    feature.plot_id
-                )));
+            let mut seen_plot_ids = std::collections::HashSet::new();
+            for feature in &polygons.features {
+                let Some(plot_id) = feature.plot_id else {
+                    continue;
+                };
+                if !seen_plot_ids.insert(plot_id) {
+                    return Err(ApiError::InvalidCredentials(
+                        "Each plot can only be linked to one shape on the map.".to_string(),
+                    ));
+                }
+                let belongs = db
+                    .plots
+                    .iter()
+                    .any(|p| p.id == plot_id && p.project_id == project_id);
+                if !belongs {
+                    return Err(ApiError::InvalidCredentials(format!(
+                        "Plot {plot_id} doesn't belong to this project."
+                    )));
+                }
             }
         }
 
@@ -1192,6 +1202,87 @@ impl MockApi {
             ));
         };
         map.polygons = polygons;
+        map.updated_at = Utc::now();
+        drop(db);
+        self.get_map_summary(project_id).await
+    }
+
+    pub async fn create_plot_for_map_feature(
+        &self,
+        project_id: Uuid,
+        feature_id: &str,
+        input: CreatePlotInput,
+    ) -> Result<ProjectMapSummary, ApiError> {
+        settle(300).await;
+        let plot = self.create_plot(input).await?;
+        let mut db = self.db.lock().unwrap();
+        let Some(map) = db.project_maps.get_mut(&project_id) else {
+            return Err(ApiError::NotFound);
+        };
+        let Some(feature) = map.polygons.features.iter_mut().find(|f| f.id == feature_id) else {
+            return Err(ApiError::NotFound);
+        };
+        if feature.plot_id.is_some() {
+            return Err(ApiError::InvalidCredentials(
+                "This shape is already linked to a plot.".to_string(),
+            ));
+        }
+        feature.plot_id = Some(plot.id);
+        map.updated_at = Utc::now();
+        drop(db);
+        self.get_map_summary(project_id).await
+    }
+
+    pub async fn link_plot_to_map_feature(
+        &self,
+        project_id: Uuid,
+        feature_id: &str,
+        plot_id: Uuid,
+    ) -> Result<ProjectMapSummary, ApiError> {
+        settle(200).await;
+        let mut db = self.db.lock().unwrap();
+        let plot_ok = db.plots.iter().any(|p| p.id == plot_id && p.project_id == project_id);
+        if !plot_ok {
+            return Err(ApiError::InvalidCredentials(
+                "That plot doesn't belong to this project.".to_string(),
+            ));
+        }
+        let Some(map) = db.project_maps.get_mut(&project_id) else {
+            return Err(ApiError::NotFound);
+        };
+        if map.polygons.features.iter().any(|f| f.plot_id == Some(plot_id)) {
+            return Err(ApiError::InvalidCredentials(
+                "That plot is already linked to a shape on this map.".to_string(),
+            ));
+        }
+        let Some(feature) = map.polygons.features.iter_mut().find(|f| f.id == feature_id) else {
+            return Err(ApiError::NotFound);
+        };
+        if feature.plot_id.is_some() {
+            return Err(ApiError::InvalidCredentials(
+                "This shape is already linked to a plot.".to_string(),
+            ));
+        }
+        feature.plot_id = Some(plot_id);
+        map.updated_at = Utc::now();
+        drop(db);
+        self.get_map_summary(project_id).await
+    }
+
+    pub async fn unlink_map_feature(
+        &self,
+        project_id: Uuid,
+        feature_id: &str,
+    ) -> Result<ProjectMapSummary, ApiError> {
+        settle(200).await;
+        let mut db = self.db.lock().unwrap();
+        let Some(map) = db.project_maps.get_mut(&project_id) else {
+            return Err(ApiError::NotFound);
+        };
+        let Some(feature) = map.polygons.features.iter_mut().find(|f| f.id == feature_id) else {
+            return Err(ApiError::NotFound);
+        };
+        feature.plot_id = None;
         map.updated_at = Utc::now();
         drop(db);
         self.get_map_summary(project_id).await

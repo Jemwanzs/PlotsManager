@@ -62,9 +62,31 @@ pub struct MapPolygons {
     pub features: Vec<MapFeature>,
 }
 
+/// A drawn shape on the map — the visual representation of a plot, not
+/// the plot record itself (`crate::Plot` remains the source of truth
+/// for size/price/status/etc; a feature only carries what's needed to
+/// render and locate it). `plot_id` starts `None`: a freshly-drawn
+/// shape is a *draft*, unlinked to any inventory record, until
+/// "Create Plot" or "Link Existing Plot" resolves it
+/// (`crates/backend/src/routes/project_map.rs`). `label` is the
+/// original source-plan label ("Lot 1", "Plot A", "Block B/12") —
+/// deliberately separate from `Plot::plot_number` (the platform's own
+/// configurable numbering, `domain::organization::format_sequence_number`)
+/// since neither should overwrite the other.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MapFeature {
     pub id: String,
-    pub plot_id: Uuid,
+    pub plot_id: Option<Uuid>,
+    pub label: Option<String>,
     pub points: Vec<[f64; 2]>,
+}
+
+/// `POST /api/v1/projects/:id/map/features/:feature_id/link-plot` —
+/// attaches an already-existing, not-yet-mapped plot to a drawn shape.
+/// The sibling "Create Plot" action instead takes a full
+/// `CreatePlotInput`, reusing plot creation itself rather than
+/// introducing a second plot-registration path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkPlotInput {
+    pub plot_id: Uuid,
 }
