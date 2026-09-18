@@ -97,6 +97,15 @@ pub fn PlatformOrganizationDetailPage() -> impl IntoView {
 
                             let tenant_id = d.summary.id;
                             let api_for_click = api.clone();
+                            // The platform owner belongs to exactly one
+                            // organization, so a user in this list flagged
+                            // `is_platform_owner` means this page *is* that
+                            // account's own tenant — deactivating it would
+                            // (were the backend not also guarding this
+                            // server-side, see `routes/platform.rs::
+                            // deactivate_organization`) suspend the one
+                            // account that can undo the suspension.
+                            let is_own_org = d.users.iter().any(|u| u.is_platform_owner);
 
                             view! {
                                 <div class="page-header">
@@ -106,7 +115,14 @@ pub fn PlatformOrganizationDetailPage() -> impl IntoView {
                                     </div>
                                     <div style="display:flex; gap: var(--space-2); align-items:center">
                                         <StatusBadge label=status_label color=status_color />
-                                        {if is_deactivated {
+                                        {if is_own_org {
+                                            view! {
+                                                <span class="meta" title="The platform owner's own organization can't be deactivated.">
+                                                    "Platform owner's organization"
+                                                </span>
+                                            }
+                                                .into_any()
+                                        } else if is_deactivated {
                                             let api = api_for_click.clone();
                                             view! {
                                                 <button

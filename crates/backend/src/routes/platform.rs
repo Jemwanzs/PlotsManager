@@ -191,6 +191,18 @@ async fn deactivate_organization(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_platform_owner(&auth)?;
+    // The platform owner's own organization is exempt from the
+    // deactivated-status check itself (`tenant_gate::check`), but never
+    // reaching that state in the first place is the clearer fix: a
+    // deactivated status on this org would read as "this tenant is
+    // suspended" everywhere else in the product (the org list, the org
+    // detail page's own badge) even though it can never actually lock
+    // this account out.
+    if id == auth.organization_id {
+        return Err(AppError::bad_request(
+            "You can't deactivate the platform owner's own organization.",
+        ));
+    }
     set_organization_status(&state, id, "deactivated").await
 }
 
