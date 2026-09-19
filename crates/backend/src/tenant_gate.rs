@@ -28,10 +28,33 @@ pub fn check(
         return Ok(());
     }
 
-    if org_status == "deactivated" {
-        return Err(AppError::forbidden(
-            "This organization's account has been deactivated. Contact your platform administrator.",
-        ));
+    match org_status {
+        "deactivated" => {
+            return Err(AppError::forbidden(
+                "This organization's account has been deactivated. Contact your platform administrator.",
+            ));
+        }
+        "pending_approval" => {
+            return Err(AppError::forbidden(
+                "Your account is awaiting activation. You will be notified once your workspace has been approved.",
+            ));
+        }
+        "rejected" => {
+            return Err(AppError::forbidden(
+                "This registration was not approved. Contact us if you believe this is a mistake.",
+            ));
+        }
+        "suspended" => {
+            return Err(AppError::forbidden(
+                "This organization's account is suspended. Contact your platform administrator.",
+            ));
+        }
+        "terminated" => {
+            return Err(AppError::forbidden(
+                "This organization's account has been terminated.",
+            ));
+        }
+        _ => {}
     }
 
     // A tenant with no organization_subscriptions row at all (true of

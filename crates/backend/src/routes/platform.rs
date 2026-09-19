@@ -7,16 +7,22 @@
 
 use axum::extract::Path;
 use axum::{extract::State, routing::get, routing::post, Json, Router};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use domain::{
     PlatformAccessLogEntry, PlatformOrganizationDetail, PlatformOrganizationSummary,
-    PlatformOrganizationUser,
+    PlatformOrganizationUser, RejectOrganizationInput,
 };
 use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extractors::AuthUser;
 use crate::state::AppState;
+
+/// Phase-1 fixed trial length for a newly approved tenant — the
+/// tenant-onboarding spec calls for this to be Platform-Owner-
+/// configurable, which is a later phase of the same spec; this is the
+/// default that phase will make adjustable, not a final answer.
+const DEFAULT_TRIAL_DAYS: i64 = 14;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -32,6 +38,14 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/platform/organizations/:id/reactivate",
             post(reactivate_organization),
+        )
+        .route(
+            "/api/v1/platform/organizations/:id/approve",
+            post(approve_organization),
+        )
+        .route(
+            "/api/v1/platform/organizations/:id/reject",
+            post(reject_organization),
         )
 }
 
@@ -56,6 +70,17 @@ struct TenantSummaryRow {
     subscription_status: Option<String>,
     trial_ends_at: Option<DateTime<Utc>>,
     plan_name: Option<String>,
+    business_registration_number: Option<String>,
+    sector: Option<String>,
+    business_location: Option<String>,
+    contact_person_name: Option<String>,
+    expected_users: Option<i32>,
+    number_of_branches: Option<i32>,
+    preferred_package_code: Option<String>,
+    approved_at: Option<DateTime<Utc>>,
+    approved_by_name: Option<String>,
+    rejected_at: Option<DateTime<Utc>>,
+    rejected_reason: Option<String>,
 }
 
 impl From<TenantSummaryRow> for PlatformOrganizationSummary {
@@ -70,6 +95,17 @@ impl From<TenantSummaryRow> for PlatformOrganizationSummary {
             subscription_status: r.subscription_status,
             trial_ends_at: r.trial_ends_at,
             plan_name: r.plan_name,
+            business_registration_number: r.business_registration_number,
+            sector: r.sector,
+            business_location: r.business_location,
+            contact_person_name: r.contact_person_name,
+            expected_users: r.expected_users,
+            number_of_branches: r.number_of_branches,
+            preferred_package_code: r.preferred_package_code,
+            approved_at: r.approved_at,
+            approved_by_name: r.approved_by_name,
+            rejected_at: r.rejected_at,
+            rejected_reason: r.rejected_reason,
         }
     }
 }
@@ -79,10 +115,15 @@ const TENANT_SUMMARY_QUERY: &str = r#"
         (select count(*) from users u where u.organization_id = o.id) as user_count,
         os.status as subscription_status,
         os.current_period_end as trial_ends_at,
-        sp.name as plan_name
+        sp.name as plan_name,
+        o.business_registration_number, o.sector, o.business_location,
+        o.contact_person_name, o.expected_users, o.number_of_branches,
+        o.preferred_package_code, o.approved_at, approver.full_name as approved_by_name,
+        o.rejected_at, o.rejected_reason
     from organizations o
     left join organization_subscriptions os on os.organization_id = o.id
     left join subscription_plans sp on sp.id = os.plan_id
+    left join users approver on approver.id = o.approved_by
 "#;
 
 async fn list_organizations(
@@ -229,4 +270,124 @@ async fn set_organization_status(
         return Err(AppError::NotFound);
     }
     Ok(Json(serde_json::json!({ "id": id, "status": status })))
+}
+
+/// "Approve & Start Trial" — the trial clock starts now, not at the
+/// original sign-up time, so an applicant waiting on review never
+/// loses trial days to that wait (the whole point of gating access at
+/// sign-up in the first place).
+async fn approve_organization(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<PlatformOrganizationSummary>, AppError> {
+    require_platform_owner(&auth)?;
+
+    let current_status: Option<String> =
+        sqlx::query_scalar("select status from organizations where id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?;
+    let current_status = current_status.ok_or(AppError::NotFound)?;
+    if current_status != "pending_approval" {
+        return Err(AppError::conflict(format!(
+            "This tenant is \"{current_status}\", not awaiting approval."
+        )));
+    }
+
+    let mut tx = state.db.begin().await?;
+
+    sqlx::query(
+        "update organizations set status = 'trial_active', approved_at = now(), approved_by = $1 where id = $2",
+    )
+    .bind(auth.user_id)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    let trial_plan_id: Uuid =
+        sqlx::query_scalar("select id from subscription_plans where code = 'TRIAL'")
+            .fetch_one(&mut *tx)
+            .await?;
+    let trial_end = Utc::now() + Duration::days(DEFAULT_TRIAL_DAYS);
+    sqlx::query(
+        r#"insert into organization_subscriptions (organization_id, plan_id, status, current_period_start, current_period_end)
+           values ($1, $2, 'trialing', now(), $3)
+           on conflict (organization_id) do update set
+               plan_id = excluded.plan_id, status = excluded.status,
+               current_period_start = excluded.current_period_start,
+               current_period_end = excluded.current_period_end, updated_at = now()"#,
+    )
+    .bind(id)
+    .bind(trial_plan_id)
+    .bind(trial_end)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"insert into audit_log (organization_id, actor_id, entity_type, entity_id, action)
+           values ($1, $2, 'organization', $1, 'tenant_approved')"#,
+    )
+    .bind(id)
+    .bind(auth.user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    let row: TenantSummaryRow = sqlx::query_as(&format!("{TENANT_SUMMARY_QUERY} where o.id = $1"))
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
+    Ok(Json(row.into()))
+}
+
+async fn reject_organization(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(input): Json<RejectOrganizationInput>,
+) -> Result<Json<PlatformOrganizationSummary>, AppError> {
+    require_platform_owner(&auth)?;
+
+    let reason = input.reason.trim();
+    if reason.is_empty() {
+        return Err(AppError::bad_request("Enter a reason for rejecting this application."));
+    }
+
+    let current_status: Option<String> =
+        sqlx::query_scalar("select status from organizations where id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?;
+    let current_status = current_status.ok_or(AppError::NotFound)?;
+    if current_status != "pending_approval" {
+        return Err(AppError::conflict(format!(
+            "This tenant is \"{current_status}\", not awaiting approval."
+        )));
+    }
+
+    sqlx::query(
+        "update organizations set status = 'rejected', rejected_at = now(), rejected_reason = $1 where id = $2",
+    )
+    .bind(reason)
+    .bind(id)
+    .execute(&state.db)
+    .await?;
+
+    let _ = sqlx::query(
+        r#"insert into audit_log (organization_id, actor_id, entity_type, entity_id, action, after_state)
+           values ($1, $2, 'organization', $1, 'tenant_rejected', $3)"#,
+    )
+    .bind(id)
+    .bind(auth.user_id)
+    .bind(serde_json::json!({ "reason": reason }))
+    .execute(&state.db)
+    .await;
+
+    let row: TenantSummaryRow = sqlx::query_as(&format!("{TENANT_SUMMARY_QUERY} where o.id = $1"))
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
+    Ok(Json(row.into()))
 }

@@ -35,10 +35,35 @@ impl ApiClient {
         }
     }
 
-    pub async fn signup(&self, input: SignupInput) -> Result<AuthSession, ApiError> {
+    pub async fn signup(&self, input: SignupInput) -> Result<domain::SignupResult, ApiError> {
         match self {
             Self::Mock(api) => api.signup(input).await,
             Self::Http(api) => api.signup(input).await,
+        }
+    }
+
+    pub async fn current_terms(&self) -> Result<domain::TermsVersion, ApiError> {
+        match self {
+            Self::Mock(api) => api.current_terms().await,
+            Self::Http(api) => api.current_terms().await,
+        }
+    }
+
+    pub async fn approve_organization(&self, id: Uuid) -> Result<domain::PlatformOrganizationSummary, ApiError> {
+        match self {
+            Self::Mock(api) => api.approve_organization(id).await,
+            Self::Http(api) => api.approve_organization(id).await,
+        }
+    }
+
+    pub async fn reject_organization(
+        &self,
+        id: Uuid,
+        reason: String,
+    ) -> Result<domain::PlatformOrganizationSummary, ApiError> {
+        match self {
+            Self::Mock(api) => api.reject_organization(id, reason).await,
+            Self::Http(api) => api.reject_organization(id, reason).await,
         }
     }
 

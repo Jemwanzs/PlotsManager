@@ -14,6 +14,7 @@ mod reports;
 mod roles;
 mod sales;
 mod settings;
+mod terms;
 mod users;
 
 use axum::Router;
@@ -39,4 +40,5 @@ pub fn router() -> Router<AppState> {
         .merge(roles::router())
         .merge(users::router())
         .merge(branches::router())
+        .merge(terms::router())
 }

@@ -456,6 +456,34 @@ a {
 .auth-card .field {
   text-align: left;
 }
+/* Signup collects far more fields than login (business details, terms
+   acceptance) — a plain `.auth-card` at 380px would force every field
+   into one long column. Widened, still centered like every other auth
+   screen (that convention stays even on desktop), with room for
+   `.form-grid-2` pairing inside it. */
+.auth-card-wide {
+  max-width: min(640px, calc(100vw - 2 * var(--space-5)));
+}
+.auth-card-wide .field {
+  text-align: left;
+}
+.terms-box {
+  text-align: left;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+  background: var(--color-bg);
+  white-space: pre-wrap;
+}
+.pending-approval-icon {
+  font-size: 2.5rem;
+  margin-bottom: var(--space-3);
+}
 .auth-brand {
   display: flex;
   align-items: center;
@@ -1190,6 +1218,54 @@ a {
   .analytics-grid .card-span-full {
     grid-column: 1 / -1;
   }
+}
+
+/* Two same-weight donuts (portfolio health, inventory) sitting side by
+   side rather than one wide/one narrow like `.analytics-grid` — each
+   resolves from its own <Suspense>, so the grid lives on a shared
+   parent wrapping both boundaries. */
+.analytics-grid-even {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+@media (min-width: 768px) {
+  .analytics-grid-even {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Sales-trend card header: title left, QTD/YTD figures right — folds
+   the numbers directly into the chart that explains them instead of a
+   separate stat row above it. */
+.dash-trend-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.dash-trend-kpis {
+  display: flex;
+  gap: var(--space-5);
+}
+.dash-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dash-kpi-label {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.dash-kpi-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--color-text);
 }
 
 .kpi-compare {

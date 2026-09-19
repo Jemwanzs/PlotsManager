@@ -59,11 +59,16 @@ pub struct LoginInput {
     pub password: String,
 }
 
-/// Creates a brand-new tenant: the organization, its first (admin) user,
-/// and a 48-hour trial subscription, all in one transaction — see
-/// `crates/backend/src/routes/auth.rs`'s `signup` handler and
-/// docs/16-billing-and-subscriptions.md. Returns an `AuthSession` just
-/// like login, since signing up should land you straight in the app.
+/// Creates a brand-new tenant application: the organization (in
+/// `pending_approval`), its first (admin) user, and a recorded Terms &
+/// Conditions acceptance, all in one transaction — see
+/// `crates/backend/src/routes/auth.rs`'s `signup` handler. Deliberately
+/// does **not** create a trial subscription or issue a session token:
+/// per the tenant-onboarding spec, sign-up only creates the
+/// application — the trial starts when the Platform Owner approves it
+/// (`routes/platform.rs::approve_organization`), so an applicant
+/// waiting for review never loses trial days to that wait. Returns
+/// `SignupResult`, not `AuthSession` — nobody is signed in yet.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignupInput {
     pub organization_name: String,
@@ -71,6 +76,33 @@ pub struct SignupInput {
     pub admin_full_name: String,
     pub admin_email: String,
     pub admin_password: String,
+    pub admin_mobile: String,
+    pub business_registration_number: Option<String>,
+    pub sector: String,
+    pub business_location: String,
+    pub contact_person_name: String,
+    pub expected_users: Option<i32>,
+    pub number_of_branches: Option<i32>,
+    pub preferred_package_code: Option<String>,
+    /// Which `TermsVersion` the applicant was actually shown — the
+    /// backend rejects the submission if this isn't still the current
+    /// version (it changed under them mid-fill) rather than silently
+    /// recording acceptance of a version they never saw.
+    pub terms_version_id: Uuid,
+    pub terms_accepted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignupResult {
+    pub organization_id: Uuid,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TermsVersion {
+    pub id: Uuid,
+    pub version_label: String,
+    pub body: String,
 }
 
 /// A project plus the counts a list screen needs, without shipping every
@@ -320,6 +352,26 @@ pub struct PlatformOrganizationSummary {
     pub subscription_status: Option<String>,
     pub trial_ends_at: Option<DateTime<Utc>>,
     pub plan_name: Option<String>,
+    // Onboarding-application fields, populated at sign-up
+    // (`SignupInput`) and reviewed by the Platform Owner before
+    // approval — see `routes/platform.rs::approve_organization`/
+    // `reject_organization`.
+    pub business_registration_number: Option<String>,
+    pub sector: Option<String>,
+    pub business_location: Option<String>,
+    pub contact_person_name: Option<String>,
+    pub expected_users: Option<i32>,
+    pub number_of_branches: Option<i32>,
+    pub preferred_package_code: Option<String>,
+    pub approved_at: Option<DateTime<Utc>>,
+    pub approved_by_name: Option<String>,
+    pub rejected_at: Option<DateTime<Utc>>,
+    pub rejected_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RejectOrganizationInput {
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

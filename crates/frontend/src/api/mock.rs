@@ -114,29 +114,34 @@ impl MockApi {
     /// `MockDb` models one fixed demo organization, not a list — a real
     /// multi-tenant signup can't be simulated here the way it works
     /// against the real backend (crates/backend/src/routes/auth.rs).
-    /// This just mints a session for whatever was typed in, without
-    /// touching shared state, so the signup screen is previewable
-    /// against mock data the same way every other screen is.
-    pub async fn signup(&self, input: SignupInput) -> Result<AuthSession, ApiError> {
+    /// Matches the real backend's contract (a pending application, not
+    /// a live session) without touching shared state, so the signup
+    /// screen is previewable against mock data the same way every
+    /// other screen is.
+    pub async fn signup(&self, input: SignupInput) -> Result<domain::SignupResult, ApiError> {
         settle(400).await;
         if input.admin_password.len() < 8 {
             return Err(ApiError::InvalidCredentials(
                 "Password must be at least 8 characters.".to_string(),
             ));
         }
-        Ok(AuthSession {
-            token: "mock-session-token".to_string(),
-            user: User {
-                id: Uuid::new_v4(),
-                organization_id: Uuid::new_v4(),
-                branch_id: None,
-                full_name: input.admin_full_name,
-                email: input.admin_email,
-                is_active: true,
-                is_platform_owner: false,
-                created_at: Utc::now(),
-                must_change_password: false,
-            },
+        if !input.terms_accepted {
+            return Err(ApiError::InvalidCredentials(
+                "You must accept the Terms & Conditions to register.".to_string(),
+            ));
+        }
+        Ok(domain::SignupResult {
+            organization_id: Uuid::new_v4(),
+            message: "Your account is awaiting activation. You will be notified once your workspace has been approved.".to_string(),
+        })
+    }
+
+    pub async fn current_terms(&self) -> Result<domain::TermsVersion, ApiError> {
+        settle(100).await;
+        Ok(domain::TermsVersion {
+            id: Uuid::new_v4(),
+            version_label: "1.0".to_string(),
+            body: "These Terms & Conditions govern access to and use of Real Estate Manager (\"the Platform\"). By creating an organization account you agree to: (1) provide accurate registration information; (2) use the Platform only for lawful property/plot sales management; (3) keep your account credentials confidential; (4) accept that your workspace is subject to Platform Owner review and activation before use; (5) accept the subscription and billing terms presented at the time of your chosen package; (6) allow the Platform to preserve your organization's operational data according to its retention rules even if your subscription is suspended or terminated.".to_string(),
         })
     }
 
@@ -1167,6 +1172,24 @@ impl MockApi {
     }
 
     pub async fn reactivate_organization(&self, _id: Uuid) -> Result<(), ApiError> {
+        settle(200).await;
+        Err(ApiError::InvalidCredentials(
+            "This account doesn't have platform administrator access.".to_string(),
+        ))
+    }
+
+    pub async fn approve_organization(&self, _id: Uuid) -> Result<PlatformOrganizationSummary, ApiError> {
+        settle(200).await;
+        Err(ApiError::InvalidCredentials(
+            "This account doesn't have platform administrator access.".to_string(),
+        ))
+    }
+
+    pub async fn reject_organization(
+        &self,
+        _id: Uuid,
+        _reason: String,
+    ) -> Result<PlatformOrganizationSummary, ApiError> {
         settle(200).await;
         Err(ApiError::InvalidCredentials(
             "This account doesn't have platform administrator access.".to_string(),

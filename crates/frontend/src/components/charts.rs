@@ -134,7 +134,7 @@ pub fn LineChart(points: Vec<ChartPoint>) -> impl IntoView {
 /// same circle) rather than hand-computed SVG arc paths — the standard
 /// lightweight way to fake a donut without arc-flag math.
 #[component]
-pub fn DonutChart(segments: Vec<DonutSegment>, center_label: String) -> impl IntoView {
+pub fn DonutChart(segments: Vec<DonutSegment>, center_label: String, center_caption: String) -> impl IntoView {
     const RADIUS: f64 = 64.0;
     const STROKE_WIDTH: f64 = 26.0;
     const GAP: f64 = 3.0;
@@ -186,7 +186,7 @@ pub fn DonutChart(segments: Vec<DonutSegment>, center_label: String) -> impl Int
                     text-anchor="middle" class="donut-center-caption"
                     fill="var(--color-text-muted)"
                 >
-                    "total plots"
+                    {center_caption.clone()}
                 </text>
             </svg>
             <ul class="chart-legend">

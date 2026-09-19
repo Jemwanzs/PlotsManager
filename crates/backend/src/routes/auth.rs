@@ -1,6 +1,6 @@
 use axum::{extract::State, routing::post, Json, Router};
 use chrono::{DateTime, Duration, Utc};
-use domain::{AuthSession, LoginInput, SignupInput, User};
+use domain::{AuthSession, LoginInput, SignupInput, SignupResult, User};
 use uuid::Uuid;
 
 use crate::auth::{hash_password, issue_session_token, verify_password};
@@ -130,10 +130,13 @@ async fn login(
     }))
 }
 
-const TRIAL_HOURS: i64 = 48;
-
-/// Creates a brand-new tenant — organization, first (admin) user, and a
-/// 48-hour trial — in one transaction, then signs them straight in. See
+/// Creates a brand-new tenant *application* — organization (in
+/// `pending_approval`), first (admin) user, and a recorded Terms &
+/// Conditions acceptance, all in one transaction. Deliberately does
+/// **not** create a trial subscription or sign the applicant in: see
+/// `SignupResult`'s doc comment — the trial only starts once the
+/// Platform Owner approves this application
+/// (`routes/platform.rs::approve_organization`). See
 /// docs/16-billing-and-subscriptions.md's "Org + first-admin sign-up
 /// sequencing" note: nothing before this handler could create that
 /// first row transactionally, which is exactly why platform-owner
@@ -141,11 +144,15 @@ const TRIAL_HOURS: i64 = 48;
 async fn signup(
     State(state): State<AppState>,
     Json(input): Json<SignupInput>,
-) -> Result<Json<AuthSession>, AppError> {
+) -> Result<Json<SignupResult>, AppError> {
     let org_name = input.organization_name.trim();
     let org_code = input.organization_code.trim().to_uppercase();
     let admin_name = input.admin_full_name.trim();
     let admin_email = input.admin_email.trim();
+    let admin_mobile = input.admin_mobile.trim();
+    let sector = input.sector.trim();
+    let business_location = input.business_location.trim();
+    let contact_person_name = input.contact_person_name.trim();
 
     if org_name.is_empty() || org_code.is_empty() {
         return Err(AppError::bad_request(
@@ -158,6 +165,19 @@ async fn signup(
     if input.admin_password.len() < 8 {
         return Err(AppError::bad_request(
             "Password must be at least 8 characters.",
+        ));
+    }
+    if admin_mobile.is_empty() {
+        return Err(AppError::bad_request("Enter a mobile number."));
+    }
+    if sector.is_empty() || business_location.is_empty() || contact_person_name.is_empty() {
+        return Err(AppError::bad_request(
+            "Enter your sector, business location, and contact person.",
+        ));
+    }
+    if !input.terms_accepted {
+        return Err(AppError::bad_request(
+            "You must accept the Terms & Conditions to register.",
         ));
     }
 
@@ -183,16 +203,42 @@ async fn signup(
         ));
     }
 
+    // Reject a stale terms version rather than silently recording
+    // acceptance of a version the Platform Owner has since superseded —
+    // the applicant may have had the page open before an update.
+    let current_terms_id: Uuid =
+        sqlx::query_scalar("select id from terms_versions where is_current = true")
+            .fetch_one(&state.db)
+            .await?;
+    if current_terms_id != input.terms_version_id {
+        return Err(AppError::conflict(
+            "The Terms & Conditions have been updated — please review and accept the latest version.",
+        ));
+    }
+
     let password_hash =
         hash_password(&input.admin_password).map_err(|e| AppError::Internal(e.into()))?;
 
     let mut tx = state.db.begin().await?;
 
     let org_id: Uuid = sqlx::query_scalar(
-        "insert into organizations (name, code) values ($1, $2) returning id",
+        r#"insert into organizations (
+               name, code, status, business_registration_number, sector,
+               business_location, contact_person_name, expected_users,
+               number_of_branches, preferred_package_code
+           )
+           values ($1, $2, 'pending_approval', $3, $4, $5, $6, $7, $8, $9)
+           returning id"#,
     )
     .bind(org_name)
     .bind(&org_code)
+    .bind(input.business_registration_number.as_deref().map(str::trim))
+    .bind(sector)
+    .bind(business_location)
+    .bind(contact_person_name)
+    .bind(input.expected_users)
+    .bind(input.number_of_branches)
+    .bind(input.preferred_package_code.as_deref())
     .fetch_one(&mut *tx)
     .await?;
 
@@ -205,12 +251,13 @@ async fn signup(
     .await?;
 
     let user_id: Uuid = sqlx::query_scalar(
-        "insert into users (organization_id, full_name, email, password_hash) values ($1, $2, $3, $4) returning id",
+        "insert into users (organization_id, full_name, email, password_hash, mobile) values ($1, $2, $3, $4, $5) returning id",
     )
     .bind(org_id)
     .bind(admin_name)
     .bind(admin_email)
     .bind(&password_hash)
+    .bind(admin_mobile)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -220,36 +267,32 @@ async fn signup(
         .execute(&mut *tx)
         .await?;
 
-    // The 'TRIAL' plan is reference data seeded by migration 0005 — it
-    // exists in every environment, never just some.
-    let trial_plan_id: Uuid = sqlx::query_scalar("select id from subscription_plans where code = 'TRIAL'")
-        .fetch_one(&mut *tx)
-        .await?;
-
     sqlx::query(
-        &format!(
-            r#"insert into organization_subscriptions (organization_id, plan_id, status, current_period_start, current_period_end)
-               values ($1, $2, 'trialing', now(), now() + interval '{TRIAL_HOURS} hours')"#
-        ),
+        r#"insert into terms_acceptances (organization_id, user_id, terms_version_id)
+           values ($1, $2, $3)"#,
     )
     .bind(org_id)
-    .bind(trial_plan_id)
+    .bind(user_id)
+    .bind(input.terms_version_id)
     .execute(&mut *tx)
     .await?;
 
     sqlx::query(
         r#"insert into audit_log (organization_id, actor_id, entity_type, entity_id, action)
-           values ($1, $2, 'session', $2, 'login')"#,
+           values ($1, $2, 'organization', $3, 'tenant_registered')"#,
     )
     .bind(org_id)
     .bind(user_id)
+    .bind(org_id)
     .execute(&mut *tx)
     .await?;
 
     // Every organization gets a plot/project numbering config from the
     // moment it exists — matches the backfill migration 0010 runs for
     // orgs that predate it, so `GET /api/v1/settings` never has to
-    // special-case "not configured yet".
+    // special-case "not configured yet". Harmless to provision ahead of
+    // approval — nothing can be created against it until the tenant can
+    // actually sign in.
     sqlx::query(
         r#"insert into numbering_sequences (organization_id, entity_type, prefix, padding)
            values ($1, 'plot', 'PLT', 4), ($1, 'project', 'PRJ', 4)"#,
@@ -260,27 +303,8 @@ async fn signup(
 
     tx.commit().await?;
 
-    let token = issue_session_token(
-        user_id,
-        org_id,
-        false,
-        &state.jwt_secret,
-        Duration::hours(SESSION_TTL_HOURS),
-    )
-    .map_err(|e| AppError::Internal(e.into()))?;
-
-    Ok(Json(AuthSession {
-        token,
-        user: User {
-            id: user_id,
-            organization_id: org_id,
-            branch_id: None,
-            full_name: admin_name.to_string(),
-            email: admin_email.to_string(),
-            is_active: true,
-            is_platform_owner: false,
-            created_at: Utc::now(),
-            must_change_password: false,
-        },
+    Ok(Json(SignupResult {
+        organization_id: org_id,
+        message: "Your account is awaiting activation. You will be notified once your workspace has been approved.".to_string(),
     }))
 }

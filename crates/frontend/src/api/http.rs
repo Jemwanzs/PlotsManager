@@ -31,9 +31,10 @@ use domain::{
     DecideApprovalInput, GeneratedNumber, InventoryReport, LinkPlotInput, LoanAccountDetail,
     LoanAccountSummary, LoginInput, MapPolygons, OrganizationSettings, PlatformOrganizationDetail,
     PlatformOrganizationSummary, PlotWithColor, ProjectMapSummary, ProjectSummary,
-    QuotationDetail, QuotationSummary, RecordPaymentInput, ResetPasswordInput, Role, SalesReport,
-    SignupInput, TenantUser, UpdateBranchInput, UpdateLeadInput, UpdateMapPolygonsInput,
-    UpdateOrganizationSettingsInput, UpdatePlotInput, UpdateRoleInput, UpdateUserInput,
+    QuotationDetail, QuotationSummary, RecordPaymentInput, RejectOrganizationInput,
+    ResetPasswordInput, Role, SalesReport, SignupInput, SignupResult, TenantUser, TermsVersion,
+    UpdateBranchInput, UpdateLeadInput, UpdateMapPolygonsInput, UpdateOrganizationSettingsInput,
+    UpdatePlotInput, UpdateRoleInput, UpdateUserInput,
 };
 
 #[derive(Clone)]
@@ -181,10 +182,8 @@ impl HttpApi {
         Ok(session)
     }
 
-    pub async fn signup(&self, input: SignupInput) -> Result<AuthSession, ApiError> {
-        let session: AuthSession = self.post("/api/v1/auth/signup", &input).await?;
-        *self.token.lock().unwrap() = Some(session.token.clone());
-        Ok(session)
+    pub async fn signup(&self, input: SignupInput) -> Result<SignupResult, ApiError> {
+        self.post("/api/v1/auth/signup", &input).await
     }
 
     pub async fn dashboard_summary(&self) -> Result<DashboardSummary, ApiError> {
@@ -302,6 +301,27 @@ impl HttpApi {
             )
             .await?;
         Ok(())
+    }
+
+    pub async fn approve_organization(&self, id: Uuid) -> Result<PlatformOrganizationSummary, ApiError> {
+        self.post(&format!("/api/v1/platform/organizations/{id}/approve"), &())
+            .await
+    }
+
+    pub async fn reject_organization(
+        &self,
+        id: Uuid,
+        reason: String,
+    ) -> Result<PlatformOrganizationSummary, ApiError> {
+        self.post(
+            &format!("/api/v1/platform/organizations/{id}/reject"),
+            &RejectOrganizationInput { reason },
+        )
+        .await
+    }
+
+    pub async fn current_terms(&self) -> Result<TermsVersion, ApiError> {
+        self.get("/api/v1/terms/current").await
     }
 
     pub async fn list_quotations(
