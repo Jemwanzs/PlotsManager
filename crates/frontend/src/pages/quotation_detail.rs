@@ -97,7 +97,7 @@ pub fn QuotationDetailPage() -> impl IntoView {
                                     </div>
                                 })}
 
-                                <div class="card" style="max-width: 480px">
+                                <div class="card form-card">
                                     <p><strong>"Payment mode: "</strong>{format_payment_mode(d.quotation.payment_mode)}</p>
                                     <p>
                                         <strong>"Quoted price: "</strong>{format_money(d.quotation.quoted_price, &currency.get())}

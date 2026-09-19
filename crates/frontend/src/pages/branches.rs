@@ -56,7 +56,7 @@ pub fn Branches() -> impl IntoView {
                             let users_for_form = users.clone();
                             view! {
                                 <Show when=move || show_new.get()>
-                                    <div class="card" style="margin-bottom: var(--space-4); max-width: 480px;">
+                                    <div class="card form-card" style="margin-bottom: var(--space-4);">
                                         <BranchForm
                                             managers=users_for_form.clone()
                                             existing=None

@@ -109,7 +109,23 @@ pub fn Icon(name: IconName) -> impl IntoView {
 
     view! {
         <svg
-            attr:viewBox="0 0 24 24"
+            // No `attr:` prefix — every SVG element's typed-attribute
+            // list is empty in tachys (Leptos 0.7's renderer; checked
+            // its source directly), so `width`/`height`/`fill`/`stroke`
+            // below already go through its generic bare-attribute
+            // fallback rather than a typed setter, and that same
+            // fallback handles `viewBox` correctly too. `attr:` is only
+            // needed for genuinely reactive/computed values; adding it
+            // to a plain literal here was the actual bug — it made the
+            // macro emit a real attribute literally named "attr:viewBox"
+            // (colon included) instead of `viewBox` (confirmed via
+            // direct DOM inspection). Without a real viewBox, every path
+            // below (authored in a 24x24 coordinate space) rendered
+            // unscaled inside this 20x20 canvas and got clipped by the
+            // SVG's own default overflow — that was the actual cause of
+            // icons (most visibly the smaller 18x18 theme-toggle ones)
+            // appearing cut off, not a CSS container/overflow issue.
+            viewBox="0 0 24 24"
             width="20"
             height="20"
             fill="none"

@@ -61,7 +61,7 @@ pub fn Roles() -> impl IntoView {
                             let perms_for_list = perms;
                             view! {
                                 <Show when=move || show_new.get()>
-                                    <div class="card" style="margin-bottom: var(--space-4); max-width: 560px;">
+                                    <div class="card form-card" style="margin-bottom: var(--space-4);">
                                         <RoleForm
                                             perms=perms_for_form.clone()
                                             existing=None

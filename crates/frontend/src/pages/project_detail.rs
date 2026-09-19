@@ -1552,7 +1552,7 @@ fn MapCanvas(
             />
             <svg
                 on:click=on_svg_click
-                attr:viewBox=move || {
+                viewBox=move || {
                     let (w, h) = img_dims.get();
                     format!("0 0 {w} {h}")
                 }
@@ -1609,7 +1609,7 @@ fn MapCanvas(
                                         fill="#fff"
                                         stroke="#00000099"
                                         stroke-width="3"
-                                        attr:paint-order="stroke"
+                                        paint-order="stroke"
                                         font-size="13"
                                         font-weight="700"
                                         text-anchor="middle"

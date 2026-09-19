@@ -60,7 +60,7 @@ pub fn UsersAccess() -> impl IntoView {
                             let branches_for_form = branches.clone();
                             view! {
                                 <Show when=move || show_new.get()>
-                                    <div class="card" style="margin-bottom: var(--space-4); max-width: 560px;">
+                                    <div class="card form-card" style="margin-bottom: var(--space-4);">
                                         <UserForm
                                             roles=roles_for_form.clone()
                                             branches=branches_for_form.clone()
@@ -436,35 +436,37 @@ fn UserForm(
             <h3 class="mt-0">{if is_edit { "Edit user" } else { "New user" }}</h3>
             {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
 
-            <div class="field">
-                <label for="user-name">"Name"</label>
-                <input
-                    id="user-name"
-                    type="text"
-                    required
-                    prop:value=full_name
-                    on:input=move |ev| full_name.set(event_target_value(&ev))
-                />
-            </div>
-            <div class="field">
-                <label for="user-email">"Email"</label>
-                <input
-                    id="user-email"
-                    type="email"
-                    autocomplete="username"
-                    required
-                    prop:value=email
-                    on:input=move |ev| email.set(event_target_value(&ev))
-                />
-            </div>
-            <div class="field">
-                <label for="user-mobile">"Mobile (optional)"</label>
-                <input
-                    id="user-mobile"
-                    type="text"
-                    prop:value=mobile
-                    on:input=move |ev| mobile.set(event_target_value(&ev))
-                />
+            <div class="form-grid-2">
+                <div class="field">
+                    <label for="user-name">"Name"</label>
+                    <input
+                        id="user-name"
+                        type="text"
+                        required
+                        prop:value=full_name
+                        on:input=move |ev| full_name.set(event_target_value(&ev))
+                    />
+                </div>
+                <div class="field">
+                    <label for="user-email">"Email"</label>
+                    <input
+                        id="user-email"
+                        type="email"
+                        autocomplete="username"
+                        required
+                        prop:value=email
+                        on:input=move |ev| email.set(event_target_value(&ev))
+                    />
+                </div>
+                <div class="field">
+                    <label for="user-mobile">"Mobile (optional)"</label>
+                    <input
+                        id="user-mobile"
+                        type="text"
+                        prop:value=mobile
+                        on:input=move |ev| mobile.set(event_target_value(&ev))
+                    />
+                </div>
             </div>
             <div class="field">
                 <label for="user-role">"Role"</label>

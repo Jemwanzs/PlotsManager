@@ -55,7 +55,7 @@ pub fn NewCustomer() -> impl IntoView {
             </div>
         </div>
 
-        <div class="card" style="max-width: 480px;">
+        <div class="card form-card">
             <form on:submit=on_submit>
                 {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
 
@@ -70,51 +70,53 @@ pub fn NewCustomer() -> impl IntoView {
                     />
                 </div>
 
-                <div class="field">
-                    <label for="phone">"Phone"</label>
-                    <input
-                        id="phone"
-                        type="tel"
-                        prop:value=phone
-                        on:input=move |ev| phone.set(event_target_value(&ev))
-                    />
-                </div>
+                <div class="form-grid-2">
+                    <div class="field">
+                        <label for="phone">"Phone"</label>
+                        <input
+                            id="phone"
+                            type="tel"
+                            prop:value=phone
+                            on:input=move |ev| phone.set(event_target_value(&ev))
+                        />
+                    </div>
 
-                <div class="field">
-                    <label for="email">"Email"</label>
-                    <input
-                        id="email"
-                        type="email"
-                        prop:value=email
-                        on:input=move |ev| email.set(event_target_value(&ev))
-                    />
-                </div>
+                    <div class="field">
+                        <label for="email">"Email"</label>
+                        <input
+                            id="email"
+                            type="email"
+                            prop:value=email
+                            on:input=move |ev| email.set(event_target_value(&ev))
+                        />
+                    </div>
 
-                <div class="field">
-                    <label for="id_number">"National ID / Passport"</label>
-                    <input
-                        id="id_number"
-                        type="text"
-                        prop:value=id_number
-                        on:input=move |ev| id_number.set(event_target_value(&ev))
-                    />
-                </div>
+                    <div class="field">
+                        <label for="id_number">"National ID / Passport"</label>
+                        <input
+                            id="id_number"
+                            type="text"
+                            prop:value=id_number
+                            on:input=move |ev| id_number.set(event_target_value(&ev))
+                        />
+                    </div>
 
-                <div class="field">
-                    <label for="source">"How did they find us?"</label>
-                    <select
-                        id="source"
-                        prop:value=source
-                        on:change=move |ev| source.set(event_target_value(&ev))
-                    >
-                        <option value="">"Not sure yet"</option>
-                        <option value="Walk-in">"Walk-in"</option>
-                        <option value="Referral">"Referral"</option>
-                        <option value="Website">"Website"</option>
-                        <option value="Phone inquiry">"Phone inquiry"</option>
-                        <option value="Agent outreach">"Agent outreach"</option>
-                        <option value="Social media">"Social media"</option>
-                    </select>
+                    <div class="field">
+                        <label for="source">"How did they find us?"</label>
+                        <select
+                            id="source"
+                            prop:value=source
+                            on:change=move |ev| source.set(event_target_value(&ev))
+                        >
+                            <option value="">"Not sure yet"</option>
+                            <option value="Walk-in">"Walk-in"</option>
+                            <option value="Referral">"Referral"</option>
+                            <option value="Website">"Website"</option>
+                            <option value="Phone inquiry">"Phone inquiry"</option>
+                            <option value="Agent outreach">"Agent outreach"</option>
+                            <option value="Social media">"Social media"</option>
+                        </select>
+                    </div>
                 </div>
 
                 <button type="submit" class="btn btn-primary" disabled=submitting>

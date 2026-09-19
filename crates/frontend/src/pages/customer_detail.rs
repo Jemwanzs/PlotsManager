@@ -132,7 +132,7 @@ pub fn CustomerDetail() -> impl IntoView {
                                 {if !converted {
                                     let api = api_for_save.clone();
                                     view! {
-                                        <div class="card" style="max-width: 480px; margin-bottom: var(--space-5)">
+                                        <div class="card form-card" style="margin-bottom: var(--space-5)">
                                             <h2 class="mt-0">"Pipeline"</h2>
                                             {d.customer.source.clone().map(|s| view! {
                                                 <p class="meta">"Source: " {s}</p>
@@ -140,29 +140,31 @@ pub fn CustomerDetail() -> impl IntoView {
 
                                             {move || save_error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
 
-                                            <div class="field">
-                                                <label for="stage">"Stage"</label>
-                                                <select
-                                                    id="stage"
-                                                    prop:value=move || stage_value(stage_signal.get()).to_string()
-                                                    on:change=move |ev| stage_signal.set(stage_from_value(&event_target_value(&ev)))
-                                                >
-                                                    <option value="new">"New"</option>
-                                                    <option value="contacted">"Contacted"</option>
-                                                    <option value="site_visit">"Site Visit"</option>
-                                                    <option value="negotiating">"Negotiating"</option>
-                                                    <option value="lost">"Lost"</option>
-                                                </select>
-                                            </div>
+                                            <div class="form-grid-2">
+                                                <div class="field">
+                                                    <label for="stage">"Stage"</label>
+                                                    <select
+                                                        id="stage"
+                                                        prop:value=move || stage_value(stage_signal.get()).to_string()
+                                                        on:change=move |ev| stage_signal.set(stage_from_value(&event_target_value(&ev)))
+                                                    >
+                                                        <option value="new">"New"</option>
+                                                        <option value="contacted">"Contacted"</option>
+                                                        <option value="site_visit">"Site Visit"</option>
+                                                        <option value="negotiating">"Negotiating"</option>
+                                                        <option value="lost">"Lost"</option>
+                                                    </select>
+                                                </div>
 
-                                            <div class="field">
-                                                <label for="follow_up">"Next follow-up"</label>
-                                                <input
-                                                    id="follow_up"
-                                                    type="date"
-                                                    prop:value=follow_up_signal
-                                                    on:input=move |ev| follow_up_signal.set(event_target_value(&ev))
-                                                />
+                                                <div class="field">
+                                                    <label for="follow_up">"Next follow-up"</label>
+                                                    <input
+                                                        id="follow_up"
+                                                        type="date"
+                                                        prop:value=follow_up_signal
+                                                        on:input=move |ev| follow_up_signal.set(event_target_value(&ev))
+                                                    />
+                                                </div>
                                             </div>
 
                                             <div class="field">

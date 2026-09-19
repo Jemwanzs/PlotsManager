@@ -1143,6 +1143,38 @@ a {
   margin-top: 0;
 }
 
+/* Shared responsive layout utilities — mobile stacks vertically
+   (default), desktop expands horizontally first. Two levels: cards/
+   sections that should sit side by side instead of one long column
+   (`.section-grid-2`), and fields within a single card that pair up
+   naturally (`.form-grid-2`, already used by Branches — this is the
+   same class, just declared once here as the shared utility every
+   page should reach for instead of a one-off page-specific rule).
+   `.span-full` opts one grid item out of the columns on either. */
+.section-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+  max-width: 1100px;
+}
+@media (min-width: 1024px) {
+  .section-grid-2 {
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+  }
+  .section-grid-2 .span-full {
+    grid-column: 1 / -1;
+  }
+}
+
+/* A form/settings card's comfortable reading width when it's on its
+   own (not inside `.section-grid-2`) — wide enough to fit
+   `.form-grid-2`'s two columns rather than the ~480px this app used
+   to hardcode per page, which only ever fit one. */
+.form-card {
+  max-width: 760px;
+}
+
 /* Executive dashboard analytics — line/donut/bar charts
    (crates/frontend/src/components/charts.rs). */
 .analytics-grid {

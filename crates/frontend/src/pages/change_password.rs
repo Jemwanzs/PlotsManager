@@ -82,7 +82,7 @@ pub fn ChangePassword() -> impl IntoView {
             </div>
         </div>
 
-        <div class="card" style="max-width: 480px;">
+        <div class="card form-card">
             {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
             {move || {
                 if success.get() {

@@ -81,8 +81,8 @@ pub fn LineChart(points: Vec<ChartPoint>) -> impl IntoView {
     view! {
         <div class="chart-wrap">
             <svg
-                attr:viewBox=format!("0 0 {WIDTH} {HEIGHT}")
-                attr:preserveAspectRatio="none"
+                viewBox=format!("0 0 {WIDTH} {HEIGHT}")
+                preserveAspectRatio="none"
                 class="chart-svg line-chart-svg"
             >
                 <line
@@ -160,8 +160,8 @@ pub fn DonutChart(segments: Vec<DonutSegment>, center_label: String) -> impl Int
 
     view! {
         <div class="donut-wrap">
-            <svg attr:viewBox=format!("0 0 {size} {size}") class="donut-svg">
-                <g attr:transform=format!("rotate(-90 {center} {center})")>
+            <svg viewBox=format!("0 0 {size} {size}") class="donut-svg">
+                <g transform=format!("rotate(-90 {center} {center})")>
                     {arcs.into_iter().map(|(label, seg_len, offset, color)| {
                         view! {
                             <circle
@@ -169,7 +169,7 @@ pub fn DonutChart(segments: Vec<DonutSegment>, center_label: String) -> impl Int
                                 stroke=color stroke-width=STROKE_WIDTH
                                 stroke-dasharray=format!("{seg_len:.2} {:.2}", circumference - seg_len)
                                 stroke-dashoffset=format!("{offset:.2}")
-                                attr:aria-label=label
+                                aria-label=label
                             />
                         }
                     }).collect_view()}
@@ -177,14 +177,14 @@ pub fn DonutChart(segments: Vec<DonutSegment>, center_label: String) -> impl Int
                 <text
                     x=center y=center - 4.0
                     text-anchor="middle" class="donut-center-value"
-                    attr:fill="var(--color-text)"
+                    fill="var(--color-text)"
                 >
                     {center_label.clone()}
                 </text>
                 <text
                     x=center y=center + 16.0
                     text-anchor="middle" class="donut-center-caption"
-                    attr:fill="var(--color-text-muted)"
+                    fill="var(--color-text-muted)"
                 >
                     "total plots"
                 </text>

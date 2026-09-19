@@ -187,140 +187,148 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
                 success.get().then(|| view! { <div class="alert alert-success">"Settings saved."</div> })
             }}
 
-            <div id="general" class="card" style="max-width: 640px; margin-bottom: var(--space-4)">
-                <h2 class="mt-0">"General"</h2>
-                <div class="field">
-                    <label for="currency">"Currency code"</label>
-                    <input
-                        id="currency"
-                        type="text"
-                        required
-                        maxlength="5"
-                        placeholder="e.g. KES, USD"
-                        prop:value=currency
-                        on:input=move |ev| currency.set(event_target_value(&ev).to_uppercase())
-                    />
+            <div class="section-grid-2">
+                <div id="general" class="card span-full">
+                    <h2 class="mt-0">"General"</h2>
+                    <div class="form-grid-2">
+                        <div class="field">
+                            <label for="currency">"Currency code"</label>
+                            <input
+                                id="currency"
+                                type="text"
+                                required
+                                maxlength="5"
+                                placeholder="e.g. KES, USD"
+                                prop:value=currency
+                                on:input=move |ev| currency.set(event_target_value(&ev).to_uppercase())
+                            />
+                        </div>
+                        <div class="field">
+                            <label for="date-format">"Date format"</label>
+                            <select
+                                id="date-format"
+                                prop:value=date_format
+                                on:change=move |ev| date_format.set(event_target_value(&ev))
+                            >
+                                <option value="DD/MM/YYYY">"DD/MM/YYYY"</option>
+                                <option value="MM/DD/YYYY">"MM/DD/YYYY"</option>
+                                <option value="YYYY-MM-DD">"YYYY-MM-DD"</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="timezone">"Time zone"</label>
+                            <input
+                                id="timezone"
+                                type="text"
+                                required
+                                placeholder="e.g. Africa/Nairobi"
+                                prop:value=timezone
+                                on:input=move |ev| timezone.set(event_target_value(&ev))
+                            />
+                        </div>
+                    </div>
                 </div>
-                <div class="field">
-                    <label for="date-format">"Date format"</label>
-                    <select
-                        id="date-format"
-                        prop:value=date_format
-                        on:change=move |ev| date_format.set(event_target_value(&ev))
-                    >
-                        <option value="DD/MM/YYYY">"DD/MM/YYYY"</option>
-                        <option value="MM/DD/YYYY">"MM/DD/YYYY"</option>
-                        <option value="YYYY-MM-DD">"YYYY-MM-DD"</option>
-                    </select>
+
+                <div id="numbering" class="card">
+                    <h2 class="mt-0">"Plot numbering"</h2>
+                    <p class="meta">"Preview: " <strong>{plot_preview}</strong></p>
+                    <div class="form-grid-2">
+                        <div class="field">
+                            <label for="plot-prefix">"Prefix"</label>
+                            <input
+                                id="plot-prefix"
+                                type="text"
+                                placeholder="e.g. PLT"
+                                prop:value=plot_prefix
+                                on:input=move |ev| plot_prefix.set(event_target_value(&ev))
+                            />
+                        </div>
+                        <div class="field">
+                            <label for="plot-padding">"Digit padding"</label>
+                            <input
+                                id="plot-padding"
+                                type="text"
+                                inputmode="numeric"
+                                prop:value=plot_padding
+                                on:input=move |ev| plot_padding.set(event_target_value(&ev))
+                            />
+                        </div>
+                    </div>
+                    <label class="checkbox-field">
+                        <input
+                            type="checkbox"
+                            prop:checked=plot_include_year
+                            on:change=move |ev| plot_include_year.set(event_target_checked(&ev))
+                        />
+                        "Include year"
+                    </label>
+                    <label class="checkbox-field">
+                        <input
+                            type="checkbox"
+                            prop:checked=plot_include_code
+                            on:change=move |ev| plot_include_code.set(event_target_checked(&ev))
+                        />
+                        "Include project code"
+                    </label>
+                    <div class="field">
+                        <label for="plot-next">"Next number to issue"</label>
+                        <input
+                            id="plot-next"
+                            type="text"
+                            inputmode="numeric"
+                            prop:value=plot_next
+                            on:input=move |ev| plot_next.set(event_target_value(&ev))
+                        />
+                    </div>
                 </div>
-                <div class="field">
-                    <label for="timezone">"Time zone"</label>
-                    <input
-                        id="timezone"
-                        type="text"
-                        required
-                        placeholder="e.g. Africa/Nairobi"
-                        prop:value=timezone
-                        on:input=move |ev| timezone.set(event_target_value(&ev))
-                    />
+
+                <div class="card">
+                    <h2 class="mt-0">"Project numbering"</h2>
+                    <p class="meta">"Preview: " <strong>{project_preview}</strong></p>
+                    <div class="form-grid-2">
+                        <div class="field">
+                            <label for="project-prefix">"Prefix"</label>
+                            <input
+                                id="project-prefix"
+                                type="text"
+                                placeholder="e.g. PRJ"
+                                prop:value=project_prefix
+                                on:input=move |ev| project_prefix.set(event_target_value(&ev))
+                            />
+                        </div>
+                        <div class="field">
+                            <label for="project-padding">"Digit padding"</label>
+                            <input
+                                id="project-padding"
+                                type="text"
+                                inputmode="numeric"
+                                prop:value=project_padding
+                                on:input=move |ev| project_padding.set(event_target_value(&ev))
+                            />
+                        </div>
+                    </div>
+                    <label class="checkbox-field">
+                        <input
+                            type="checkbox"
+                            prop:checked=project_include_year
+                            on:change=move |ev| project_include_year.set(event_target_checked(&ev))
+                        />
+                        "Include year"
+                    </label>
+                    <div class="field">
+                        <label for="project-next">"Next number to issue"</label>
+                        <input
+                            id="project-next"
+                            type="text"
+                            inputmode="numeric"
+                            prop:value=project_next
+                            on:input=move |ev| project_next.set(event_target_value(&ev))
+                        />
+                    </div>
                 </div>
             </div>
 
-            <div id="numbering" class="card" style="max-width: 640px; margin-bottom: var(--space-4)">
-                <h2 class="mt-0">"Plot numbering"</h2>
-                <p class="meta">"Preview: " <strong>{plot_preview}</strong></p>
-                <div class="field">
-                    <label for="plot-prefix">"Prefix"</label>
-                    <input
-                        id="plot-prefix"
-                        type="text"
-                        placeholder="e.g. PLT"
-                        prop:value=plot_prefix
-                        on:input=move |ev| plot_prefix.set(event_target_value(&ev))
-                    />
-                </div>
-                <label class="checkbox-field">
-                    <input
-                        type="checkbox"
-                        prop:checked=plot_include_year
-                        on:change=move |ev| plot_include_year.set(event_target_checked(&ev))
-                    />
-                    "Include year"
-                </label>
-                <label class="checkbox-field">
-                    <input
-                        type="checkbox"
-                        prop:checked=plot_include_code
-                        on:change=move |ev| plot_include_code.set(event_target_checked(&ev))
-                    />
-                    "Include project code"
-                </label>
-                <div class="field">
-                    <label for="plot-padding">"Digit padding"</label>
-                    <input
-                        id="plot-padding"
-                        type="text"
-                        inputmode="numeric"
-                        prop:value=plot_padding
-                        on:input=move |ev| plot_padding.set(event_target_value(&ev))
-                    />
-                </div>
-                <div class="field">
-                    <label for="plot-next">"Next number to issue"</label>
-                    <input
-                        id="plot-next"
-                        type="text"
-                        inputmode="numeric"
-                        prop:value=plot_next
-                        on:input=move |ev| plot_next.set(event_target_value(&ev))
-                    />
-                </div>
-            </div>
-
-            <div class="card" style="max-width: 640px; margin-bottom: var(--space-4)">
-                <h2 class="mt-0">"Project numbering"</h2>
-                <p class="meta">"Preview: " <strong>{project_preview}</strong></p>
-                <div class="field">
-                    <label for="project-prefix">"Prefix"</label>
-                    <input
-                        id="project-prefix"
-                        type="text"
-                        placeholder="e.g. PRJ"
-                        prop:value=project_prefix
-                        on:input=move |ev| project_prefix.set(event_target_value(&ev))
-                    />
-                </div>
-                <label class="checkbox-field">
-                    <input
-                        type="checkbox"
-                        prop:checked=project_include_year
-                        on:change=move |ev| project_include_year.set(event_target_checked(&ev))
-                    />
-                    "Include year"
-                </label>
-                <div class="field">
-                    <label for="project-padding">"Digit padding"</label>
-                    <input
-                        id="project-padding"
-                        type="text"
-                        inputmode="numeric"
-                        prop:value=project_padding
-                        on:input=move |ev| project_padding.set(event_target_value(&ev))
-                    />
-                </div>
-                <div class="field">
-                    <label for="project-next">"Next number to issue"</label>
-                    <input
-                        id="project-next"
-                        type="text"
-                        inputmode="numeric"
-                        prop:value=project_next
-                        on:input=move |ev| project_next.set(event_target_value(&ev))
-                    />
-                </div>
-            </div>
-
-            <button type="submit" class="btn btn-primary" disabled=submitting>
+            <button type="submit" class="btn btn-primary" disabled=submitting style="margin-top: var(--space-4);">
                 {move || if submitting.get() { "Saving…" } else { "Save settings" }}
             </button>
         </form>

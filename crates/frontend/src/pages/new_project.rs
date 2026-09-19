@@ -87,7 +87,7 @@ pub fn NewProject() -> impl IntoView {
             </div>
         </div>
 
-        <div class="card" style="max-width: 480px;">
+        <div class="card form-card">
             <form on:submit=on_submit>
                 {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
 
@@ -136,25 +136,27 @@ pub fn NewProject() -> impl IntoView {
                     />
                 </div>
 
-                <div class="field">
-                    <label for="size">"Total size"</label>
-                    <input
-                        id="size"
-                        type="text"
-                        inputmode="decimal"
-                        required
-                        prop:value=total_size
-                        on:input=move |ev| total_size.set(event_target_value(&ev))
-                    />
-                </div>
+                <div class="form-grid-2">
+                    <div class="field">
+                        <label for="size">"Total size"</label>
+                        <input
+                            id="size"
+                            type="text"
+                            inputmode="decimal"
+                            required
+                            prop:value=total_size
+                            on:input=move |ev| total_size.set(event_target_value(&ev))
+                        />
+                    </div>
 
-                <div class="field">
-                    <label for="unit">"Unit"</label>
-                    <select id="unit" prop:value=area_unit on:change=move |ev| area_unit.set(event_target_value(&ev))>
-                        <option value="acres">"Acres"</option>
-                        <option value="hectares">"Hectares"</option>
-                        <option value="square_metres">"Square metres"</option>
-                    </select>
+                    <div class="field">
+                        <label for="unit">"Unit"</label>
+                        <select id="unit" prop:value=area_unit on:change=move |ev| area_unit.set(event_target_value(&ev))>
+                            <option value="acres">"Acres"</option>
+                            <option value="hectares">"Hectares"</option>
+                            <option value="square_metres">"Square metres"</option>
+                        </select>
+                    </div>
                 </div>
 
                 <button type="submit" class="btn btn-primary" disabled=submitting>
