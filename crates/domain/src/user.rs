@@ -58,3 +58,45 @@ pub struct UpdateRoleInput {
     pub name: String,
     pub permissions: Vec<String>,
 }
+
+/// Settings -> Users & Access — one row of the tenant's user list. A
+/// distinct read model from `User` (the authenticated-session shape)
+/// because this carries joined display context (`role_name`,
+/// `branch_name`) that a session token never needs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TenantUser {
+    pub id: Uuid,
+    pub full_name: String,
+    pub email: String,
+    pub mobile: Option<String>,
+    pub is_active: bool,
+    pub branch_id: Option<Uuid>,
+    pub branch_name: Option<String>,
+    /// A user has at most one role, assigned through this same page —
+    /// `role_assignments` supports more per user, but nothing in this
+    /// tenant-facing UI needs more than one, so `None` here just means
+    /// "no role assigned yet" rather than a second concept to reconcile.
+    pub role_id: Option<Uuid>,
+    pub role_name: Option<String>,
+    pub last_login_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateUserInput {
+    pub full_name: String,
+    pub email: String,
+    pub mobile: Option<String>,
+    pub branch_id: Option<Uuid>,
+    pub role_id: Uuid,
+    pub temporary_password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateUserInput {
+    pub full_name: String,
+    pub email: String,
+    pub mobile: Option<String>,
+    pub branch_id: Option<Uuid>,
+    pub role_id: Uuid,
+}

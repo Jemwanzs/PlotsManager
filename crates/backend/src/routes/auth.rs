@@ -86,8 +86,8 @@ async fn login(
     .map_err(|e| AppError::Internal(e.into()))?;
 
     // Access history for the platform-admin view
-    // (routes/platform.rs) — best-effort: a logging failure shouldn't
-    // block a legitimate login.
+    // (routes/platform.rs) and the Users & Access "Last Login" column —
+    // best-effort: a logging failure shouldn't block a legitimate login.
     let _ = sqlx::query(
         r#"insert into audit_log (organization_id, actor_id, entity_type, entity_id, action)
            values ($1, $2, 'session', $2, 'login')"#,
@@ -96,6 +96,10 @@ async fn login(
     .bind(row.id)
     .execute(&state.db)
     .await;
+    let _ = sqlx::query("update users set last_login_at = now() where id = $1")
+        .bind(row.id)
+        .execute(&state.db)
+        .await;
 
     Ok(Json(AuthSession {
         token,

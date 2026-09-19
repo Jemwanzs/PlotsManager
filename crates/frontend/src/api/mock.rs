@@ -46,6 +46,8 @@ struct MockDb {
     approval_requests: Vec<ApprovalRequest>,
     project_maps: HashMap<Uuid, MockProjectMap>,
     roles: Vec<domain::Role>,
+    tenant_users: Vec<domain::TenantUser>,
+    branches: Vec<domain::Branch>,
 }
 
 /// Mirrors one row of the real `numbering_sequences` table
@@ -687,6 +689,141 @@ impl MockApi {
         }
         db.roles.retain(|r| r.id != id);
         Ok(())
+    }
+
+    pub async fn list_users(&self) -> Result<Vec<domain::TenantUser>, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+        Ok(db.tenant_users.clone())
+    }
+
+    pub async fn create_user(&self, input: domain::CreateUserInput) -> Result<domain::TenantUser, ApiError> {
+        settle(250).await;
+        let mut db = self.db.lock().unwrap();
+        let full_name = input.full_name.trim().to_string();
+        let email = input.email.trim().to_string();
+        if full_name.is_empty() {
+            return Err(ApiError::InvalidCredentials("Enter a name.".to_string()));
+        }
+        if email.is_empty() {
+            return Err(ApiError::InvalidCredentials("Enter an email.".to_string()));
+        }
+        if input.temporary_password.len() < 8 {
+            return Err(ApiError::InvalidCredentials(
+                "Temporary password must be at least 8 characters.".to_string(),
+            ));
+        }
+        let email_taken = db.tenant_users.iter().any(|u| u.email.eq_ignore_ascii_case(&email))
+            || db.demo_user.email.eq_ignore_ascii_case(&email);
+        if email_taken {
+            return Err(ApiError::InvalidCredentials(
+                "An account with that email already exists.".to_string(),
+            ));
+        }
+        let Some(role_name) = db.roles.iter().find(|r| r.id == input.role_id).map(|r| r.name.clone()) else {
+            return Err(ApiError::InvalidCredentials("Choose a valid role.".to_string()));
+        };
+        let branch_name = input
+            .branch_id
+            .and_then(|bid| db.branches.iter().find(|b| b.id == bid).map(|b| b.name.clone()));
+
+        let user = domain::TenantUser {
+            id: Uuid::new_v4(),
+            full_name,
+            email,
+            mobile: input.mobile.map(|m| m.trim().to_string()).filter(|m| !m.is_empty()),
+            is_active: true,
+            branch_id: input.branch_id,
+            branch_name,
+            role_id: Some(input.role_id),
+            role_name: Some(role_name),
+            last_login_at: None,
+            created_at: Utc::now(),
+        };
+        db.tenant_users.push(user.clone());
+        if let Some(role) = db.roles.iter_mut().find(|r| r.id == input.role_id) {
+            role.assigned_user_count += 1;
+        }
+        Ok(user)
+    }
+
+    pub async fn update_user(&self, id: Uuid, input: domain::UpdateUserInput) -> Result<domain::TenantUser, ApiError> {
+        settle(250).await;
+        let mut db = self.db.lock().unwrap();
+        let full_name = input.full_name.trim().to_string();
+        let email = input.email.trim().to_string();
+        if full_name.is_empty() {
+            return Err(ApiError::InvalidCredentials("Enter a name.".to_string()));
+        }
+        if email.is_empty() {
+            return Err(ApiError::InvalidCredentials("Enter an email.".to_string()));
+        }
+        let email_taken = db
+            .tenant_users
+            .iter()
+            .any(|u| u.id != id && u.email.eq_ignore_ascii_case(&email));
+        if email_taken {
+            return Err(ApiError::InvalidCredentials(
+                "An account with that email already exists.".to_string(),
+            ));
+        }
+        let Some(role_name) = db.roles.iter().find(|r| r.id == input.role_id).map(|r| r.name.clone()) else {
+            return Err(ApiError::InvalidCredentials("Choose a valid role.".to_string()));
+        };
+        let branch_name = input
+            .branch_id
+            .and_then(|bid| db.branches.iter().find(|b| b.id == bid).map(|b| b.name.clone()));
+
+        let old_role_id = db.tenant_users.iter().find(|u| u.id == id).and_then(|u| u.role_id);
+
+        let user = db.tenant_users.iter_mut().find(|u| u.id == id).ok_or(ApiError::NotFound)?;
+        user.full_name = full_name;
+        user.email = email;
+        user.mobile = input.mobile.map(|m| m.trim().to_string()).filter(|m| !m.is_empty());
+        user.branch_id = input.branch_id;
+        user.branch_name = branch_name;
+        user.role_id = Some(input.role_id);
+        user.role_name = Some(role_name);
+        let result = user.clone();
+
+        if old_role_id != Some(input.role_id) {
+            if let Some(old_id) = old_role_id {
+                if let Some(r) = db.roles.iter_mut().find(|r| r.id == old_id) {
+                    r.assigned_user_count = r.assigned_user_count.saturating_sub(1);
+                }
+            }
+            if let Some(r) = db.roles.iter_mut().find(|r| r.id == input.role_id) {
+                r.assigned_user_count += 1;
+            }
+        }
+        Ok(result)
+    }
+
+    pub async fn activate_user(&self, id: Uuid) -> Result<domain::TenantUser, ApiError> {
+        settle(150).await;
+        let mut db = self.db.lock().unwrap();
+        let user = db.tenant_users.iter_mut().find(|u| u.id == id).ok_or(ApiError::NotFound)?;
+        user.is_active = true;
+        Ok(user.clone())
+    }
+
+    pub async fn deactivate_user(&self, id: Uuid) -> Result<domain::TenantUser, ApiError> {
+        settle(150).await;
+        let mut db = self.db.lock().unwrap();
+        if id == db.demo_user.id {
+            return Err(ApiError::InvalidCredentials(
+                "You can't deactivate your own account.".to_string(),
+            ));
+        }
+        let user = db.tenant_users.iter_mut().find(|u| u.id == id).ok_or(ApiError::NotFound)?;
+        user.is_active = false;
+        Ok(user.clone())
+    }
+
+    pub async fn list_branches(&self) -> Result<Vec<domain::Branch>, ApiError> {
+        settle(100).await;
+        let db = self.db.lock().unwrap();
+        Ok(db.branches.clone())
     }
 
     /// Records a payment against a Plot Loan Account and updates its
@@ -1870,6 +2007,7 @@ fn seed() -> MockDb {
         is_platform_owner: false,
         created_at: Utc::now(),
     };
+    let admin_role_id = Uuid::new_v4();
 
     let project_specs = [
         ("Acacia Grove — Phase I", "AG-P1", "Kitengela, Kajiado", 16),
@@ -2065,6 +2203,20 @@ fn seed() -> MockDb {
         sales.push(sale);
     }
 
+    let demo_tenant_user = domain::TenantUser {
+        id: demo_user.id,
+        full_name: demo_user.full_name.clone(),
+        email: demo_user.email.clone(),
+        mobile: None,
+        is_active: true,
+        branch_id: None,
+        branch_name: None,
+        role_id: Some(admin_role_id),
+        role_name: Some("Admin".to_string()),
+        last_login_at: None,
+        created_at: demo_user.created_at,
+    };
+
     MockDb {
         organization,
         date_format,
@@ -2082,11 +2234,17 @@ fn seed() -> MockDb {
         approval_requests: Vec::new(),
         project_maps: HashMap::new(),
         roles: vec![domain::Role {
-            id: Uuid::new_v4(),
+            id: admin_role_id,
             organization_id: org_id,
             name: "Admin".to_string(),
             permissions: vec!["*".to_string()],
             assigned_user_count: 1,
         }],
+        tenant_users: vec![demo_tenant_user],
+        // No branches exist yet in the real backend either (`branches`
+        // has never had a row inserted — Settings -> Branches, a later
+        // phase, is what creates the first one), so the mock matches
+        // that reality rather than pre-seeding one.
+        branches: Vec::new(),
     }
 }

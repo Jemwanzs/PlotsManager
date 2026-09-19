@@ -21,6 +21,7 @@ mod reports;
 mod roles;
 mod settings;
 mod signup;
+mod users_access;
 
 pub use approvals_list::ApprovalsList;
 pub use bulk_sales_import::BulkSalesImport;
@@ -45,3 +46,4 @@ pub use reports::Reports;
 pub use roles::Roles;
 pub use settings::Settings;
 pub use signup::Signup;
+pub use users_access::UsersAccess;

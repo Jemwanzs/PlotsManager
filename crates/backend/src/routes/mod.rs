@@ -1,5 +1,6 @@
 mod approvals;
 mod auth;
+mod branches;
 mod customers;
 mod dashboard;
 mod finance;
@@ -12,6 +13,7 @@ mod reports;
 mod roles;
 mod sales;
 mod settings;
+mod users;
 
 use axum::Router;
 
@@ -33,4 +35,6 @@ pub fn router() -> Router<AppState> {
         .merge(project_map::router())
         .merge(settings::router())
         .merge(roles::router())
+        .merge(users::router())
+        .merge(branches::router())
 }

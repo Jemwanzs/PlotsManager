@@ -468,4 +468,50 @@ impl ApiClient {
             Self::Http(api) => api.delete_role(id).await,
         }
     }
+
+    pub async fn list_users(&self) -> Result<Vec<domain::TenantUser>, ApiError> {
+        match self {
+            Self::Mock(api) => api.list_users().await,
+            Self::Http(api) => api.list_users().await,
+        }
+    }
+
+    pub async fn create_user(&self, input: domain::CreateUserInput) -> Result<domain::TenantUser, ApiError> {
+        match self {
+            Self::Mock(api) => api.create_user(input).await,
+            Self::Http(api) => api.create_user(input).await,
+        }
+    }
+
+    pub async fn update_user(
+        &self,
+        id: Uuid,
+        input: domain::UpdateUserInput,
+    ) -> Result<domain::TenantUser, ApiError> {
+        match self {
+            Self::Mock(api) => api.update_user(id, input).await,
+            Self::Http(api) => api.update_user(id, input).await,
+        }
+    }
+
+    pub async fn activate_user(&self, id: Uuid) -> Result<domain::TenantUser, ApiError> {
+        match self {
+            Self::Mock(api) => api.activate_user(id).await,
+            Self::Http(api) => api.activate_user(id).await,
+        }
+    }
+
+    pub async fn deactivate_user(&self, id: Uuid) -> Result<domain::TenantUser, ApiError> {
+        match self {
+            Self::Mock(api) => api.deactivate_user(id).await,
+            Self::Http(api) => api.deactivate_user(id).await,
+        }
+    }
+
+    pub async fn list_branches(&self) -> Result<Vec<domain::Branch>, ApiError> {
+        match self {
+            Self::Mock(api) => api.list_branches().await,
+            Self::Http(api) => api.list_branches().await,
+        }
+    }
 }

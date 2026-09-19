@@ -24,14 +24,15 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use domain::{
-    AgentPerformanceReport, ApiError, ApprovalRequestSummary, AuthSession, BulkImportResult,
-    BulkSaleRow, CreateCustomerInput, CreatePlotInput, CreateProjectInput, CreateQuotationInput,
-    CreateRoleInput, CreateSaleInput, CustomerDetail, CustomerSummary, DashboardSummary,
-    DecideApprovalInput, GeneratedNumber, InventoryReport, LinkPlotInput, LoanAccountDetail,
-    LoanAccountSummary, LoginInput, MapPolygons, OrganizationSettings, PlatformOrganizationDetail,
-    PlatformOrganizationSummary, PlotWithColor, ProjectMapSummary, ProjectSummary, QuotationDetail,
-    QuotationSummary, RecordPaymentInput, Role, SalesReport, SignupInput, UpdateLeadInput,
-    UpdateMapPolygonsInput, UpdateOrganizationSettingsInput, UpdatePlotInput, UpdateRoleInput,
+    AgentPerformanceReport, ApiError, ApprovalRequestSummary, AuthSession, Branch,
+    BulkImportResult, BulkSaleRow, CreateCustomerInput, CreatePlotInput, CreateProjectInput,
+    CreateQuotationInput, CreateRoleInput, CreateSaleInput, CreateUserInput, CustomerDetail,
+    CustomerSummary, DashboardSummary, DecideApprovalInput, GeneratedNumber, InventoryReport,
+    LinkPlotInput, LoanAccountDetail, LoanAccountSummary, LoginInput, MapPolygons,
+    OrganizationSettings, PlatformOrganizationDetail, PlatformOrganizationSummary, PlotWithColor,
+    ProjectMapSummary, ProjectSummary, QuotationDetail, QuotationSummary, RecordPaymentInput,
+    Role, SalesReport, SignupInput, TenantUser, UpdateLeadInput, UpdateMapPolygonsInput,
+    UpdateOrganizationSettingsInput, UpdatePlotInput, UpdateRoleInput, UpdateUserInput,
 };
 
 #[derive(Clone)]
@@ -547,5 +548,29 @@ impl HttpApi {
 
     pub async fn delete_role(&self, id: Uuid) -> Result<(), ApiError> {
         self.delete(&format!("/api/v1/roles/{id}")).await
+    }
+
+    pub async fn list_users(&self) -> Result<Vec<TenantUser>, ApiError> {
+        self.get("/api/v1/users").await
+    }
+
+    pub async fn create_user(&self, input: CreateUserInput) -> Result<TenantUser, ApiError> {
+        self.post("/api/v1/users", &input).await
+    }
+
+    pub async fn update_user(&self, id: Uuid, input: UpdateUserInput) -> Result<TenantUser, ApiError> {
+        self.put(&format!("/api/v1/users/{id}"), &input).await
+    }
+
+    pub async fn activate_user(&self, id: Uuid) -> Result<TenantUser, ApiError> {
+        self.put(&format!("/api/v1/users/{id}/activate"), &()).await
+    }
+
+    pub async fn deactivate_user(&self, id: Uuid) -> Result<TenantUser, ApiError> {
+        self.put(&format!("/api/v1/users/{id}/deactivate"), &()).await
+    }
+
+    pub async fn list_branches(&self) -> Result<Vec<Branch>, ApiError> {
+        self.get("/api/v1/branches").await
     }
 }
