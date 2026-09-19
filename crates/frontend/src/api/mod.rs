@@ -514,4 +514,32 @@ impl ApiClient {
             Self::Http(api) => api.list_branches().await,
         }
     }
+
+    pub async fn reset_user_password(
+        &self,
+        id: Uuid,
+        input: domain::ResetPasswordInput,
+    ) -> Result<domain::TenantUser, ApiError> {
+        match self {
+            Self::Mock(api) => api.reset_user_password(id, input).await,
+            Self::Http(api) => api.reset_user_password(id, input).await,
+        }
+    }
+
+    pub async fn revoke_user_sessions(&self, id: Uuid) -> Result<domain::TenantUser, ApiError> {
+        match self {
+            Self::Mock(api) => api.revoke_user_sessions(id).await,
+            Self::Http(api) => api.revoke_user_sessions(id).await,
+        }
+    }
+
+    pub async fn change_password(
+        &self,
+        input: domain::ChangePasswordInput,
+    ) -> Result<domain::AuthSession, ApiError> {
+        match self {
+            Self::Mock(api) => api.change_password(input).await,
+            Self::Http(api) => api.change_password(input).await,
+        }
+    }
 }

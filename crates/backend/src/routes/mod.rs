@@ -1,3 +1,4 @@
+mod account;
 mod approvals;
 mod auth;
 mod branches;
@@ -21,6 +22,7 @@ use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(account::router())
         .merge(auth::router())
         .merge(dashboard::router())
         .merge(finance::router())

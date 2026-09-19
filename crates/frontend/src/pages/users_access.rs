@@ -128,6 +128,8 @@ fn UserRow(
     let api = use_api();
     let editing = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
+    let resetting = RwSignal::new(false);
+    let revoking = RwSignal::new(false);
     let user_id = user.id;
     let is_active = user.is_active;
 
@@ -151,6 +153,31 @@ fn UserRow(
             });
         }
     };
+
+    let on_revoke_sessions = {
+        let api = api.clone();
+        let on_changed = on_changed.clone();
+        move |_| {
+            error.set(None);
+            revoking.set(true);
+            let api = api.clone();
+            let on_changed = on_changed.clone();
+            spawn_local(async move {
+                match api.revoke_user_sessions(user_id).await {
+                    Ok(_) => on_changed(),
+                    Err(e) => error.set(Some(format!("{e}"))),
+                }
+                revoking.set(false);
+            });
+        }
+    };
+
+    // Two separate clones so each `<Show>` block below's own
+    // auto-generated `move` closure captures its own copy — a shared
+    // `on_changed` would get moved into the first block whole, even
+    // though only a `.clone()` of it is used inside.
+    let on_changed_for_edit = on_changed.clone();
+    let on_changed_for_reset = on_changed.clone();
 
     view! {
         <tr>
@@ -185,6 +212,16 @@ fn UserRow(
                 >
                     {if is_active { "Deactivate" } else { "Activate" }}
                 </button>
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    on:click=move |_| resetting.update(|v| *v = !*v)
+                >
+                    {move || if resetting.get() { "Cancel" } else { "Reset password" }}
+                </button>
+                <button type="button" class="btn btn-secondary" disabled=revoking on:click=on_revoke_sessions>
+                    {move || if revoking.get() { "Revoking…" } else { "Revoke sessions" }}
+                </button>
             </td>
         </tr>
         {move || error.get().map(|msg| view! {
@@ -198,7 +235,7 @@ fn UserRow(
                         branches=branches.clone()
                         existing=Some(user.clone())
                         on_saved={
-                            let on_changed = on_changed.clone();
+                            let on_changed = on_changed_for_edit.clone();
                             move || {
                                 editing.set(false);
                                 on_changed();
@@ -208,6 +245,68 @@ fn UserRow(
                 </td>
             </tr>
         </Show>
+        <Show when=move || resetting.get()>
+            <tr>
+                <td colspan="8">
+                    <ResetPasswordForm
+                        user_id=user_id
+                        on_saved={
+                            let on_changed = on_changed_for_reset.clone();
+                            move || {
+                                resetting.set(false);
+                                on_changed();
+                            }
+                        }
+                    />
+                </td>
+            </tr>
+        </Show>
+    }
+}
+
+#[component]
+fn ResetPasswordForm(user_id: Uuid, on_saved: impl Fn() + Clone + Send + Sync + 'static) -> impl IntoView {
+    let api = use_api();
+    let temporary_password = RwSignal::new(String::new());
+    let error = RwSignal::new(None::<String>);
+    let submitting = RwSignal::new(false);
+
+    let on_submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        if submitting.get() {
+            return;
+        }
+        error.set(None);
+        submitting.set(true);
+        let api = api.clone();
+        let on_saved = on_saved.clone();
+        let input = domain::ResetPasswordInput { temporary_password: temporary_password.get() };
+        spawn_local(async move {
+            match api.reset_user_password(user_id, input).await {
+                Ok(_) => on_saved(),
+                Err(e) => error.set(Some(format!("{e}"))),
+            }
+            submitting.set(false);
+        });
+    };
+
+    view! {
+        <form on:submit=on_submit>
+            <h3 class="mt-0">"Set a new temporary password"</h3>
+            <p class="meta">"They'll be required to change it the next time they sign in."</p>
+            {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+            <PasswordField
+                id="reset-temp-password"
+                label="Temporary password"
+                value=temporary_password
+                autocomplete="new-password"
+                minlength=8
+                show_strength=true
+            />
+            <button type="submit" class="btn btn-primary" disabled=submitting>
+                {move || if submitting.get() { "Saving…" } else { "Set temporary password" }}
+            </button>
+        </form>
     }
 }
 

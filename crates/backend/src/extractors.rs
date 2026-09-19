@@ -55,6 +55,7 @@ struct TenantGateRow {
     status: String,
     subscription_status: Option<String>,
     trial_ends_at: Option<DateTime<Utc>>,
+    session_valid_after: DateTime<Utc>,
 }
 
 #[async_trait]
@@ -84,12 +85,15 @@ impl FromRequestParts<AppState> for AuthUser {
         let gate: Option<TenantGateRow> = sqlx::query_as(
             r#"select o.status,
                    os.status as subscription_status,
-                   os.current_period_end as trial_ends_at
+                   os.current_period_end as trial_ends_at,
+                   u.session_valid_after
                from organizations o
+               join users u on u.organization_id = o.id and u.id = $2
                left join organization_subscriptions os on os.organization_id = o.id
                where o.id = $1"#,
         )
         .bind(claims.organization_id)
+        .bind(claims.sub)
         .fetch_optional(&state.db)
         .await
         .map_err(|_| AppError::Unauthorized)?;
@@ -101,6 +105,13 @@ impl FromRequestParts<AppState> for AuthUser {
                 gate.subscription_status.as_deref(),
                 gate.trial_ends_at,
             )?;
+
+            // A password reset or an explicit "Revoke sessions" bumps
+            // this to now() — any token issued before that (`iat`) is
+            // stale, even though it hasn't hit its own `exp` yet.
+            if claims.iat < gate.session_valid_after.timestamp() {
+                return Err(AppError::Unauthorized);
+            }
         }
 
         let permission_rows: Vec<(serde_json::Value,)> = sqlx::query_as(

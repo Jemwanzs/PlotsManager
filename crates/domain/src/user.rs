@@ -21,6 +21,13 @@ pub struct User {
     /// per-organization `roles`/`role_assignments` RBAC below.
     pub is_platform_owner: bool,
     pub created_at: DateTime<Utc>,
+    /// Set when an admin creates the account or resets its password
+    /// (`crates/backend/src/routes/users.rs`); cleared once the user
+    /// successfully changes it themselves
+    /// (`POST /api/v1/account/change-password`). The frontend redirects
+    /// to a mandatory change-password screen on login when this is
+    /// true — see `crates/frontend/src/layout/mod.rs`'s `AppShell`.
+    pub must_change_password: bool,
 }
 
 /// Roles are organisation-defined records in the database (role name +
@@ -80,6 +87,8 @@ pub struct TenantUser {
     pub role_name: Option<String>,
     pub last_login_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    pub must_change_password: bool,
+    pub password_changed_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,4 +108,24 @@ pub struct UpdateUserInput {
     pub mobile: Option<String>,
     pub branch_id: Option<Uuid>,
     pub role_id: Uuid,
+}
+
+/// `PUT /api/v1/users/:id/reset-password` — an admin sets a new
+/// temporary password for someone else. Also flips `must_change_password`
+/// and bumps `session_valid_after`, so every session already issued to
+/// that user stops working on its next request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResetPasswordInput {
+    pub temporary_password: String,
+}
+
+/// `PUT /api/v1/account/change-password` — the authenticated user
+/// changes their own password (Profile -> Security, or the mandatory
+/// gate after a `must_change_password` login). Requires the current
+/// password so a hijacked but still-logged-in session can't be used to
+/// lock the real owner out permanently.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangePasswordInput {
+    pub current_password: String,
+    pub new_password: String,
 }

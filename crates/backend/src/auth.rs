@@ -51,6 +51,15 @@ pub struct Claims {
     /// request.
     #[serde(default)]
     pub is_platform_owner: bool,
+    /// When this token was issued — compared against `users.
+    /// session_valid_after` on every authenticated request
+    /// (`crates/backend/src/extractors.rs`) so a password reset or an
+    /// explicit "Revoke sessions" can invalidate already-issued tokens
+    /// without a server-side session table. Defaults to 0 (always
+    /// stale) rather than failing to decode an older token that
+    /// predates this field.
+    #[serde(default)]
+    pub iat: i64,
     pub exp: i64,
 }
 
@@ -65,6 +74,7 @@ pub fn issue_session_token(
         sub: user_id,
         organization_id,
         is_platform_owner,
+        iat: Utc::now().timestamp(),
         exp: (Utc::now() + ttl).timestamp(),
     };
     encode(

@@ -1,15 +1,20 @@
 //! Settings -> Users & Access. Tenant Admins manage the users belonging
 //! to their own organization — never across the tenant boundary (every
 //! query here is scoped to `auth.organization_id`, same as the rest of
-//! the app). Password reset / temporary-password expiry / session
-//! revocation are a later phase of the same spec; this one covers list,
-//! create, edit (name/email/mobile/branch/role), and activate/
-//! deactivate.
+//! the app): list, create, edit (name/email/mobile/branch/role),
+//! activate/deactivate, reset a user's password, and revoke their
+//! sessions. Self-service password change lives in
+//! `crates/backend/src/routes/account.rs` instead — a different actor
+//! (the user themselves, not an admin) and a different permission
+//! model (no `PERM_MANAGE_USERS` check, just "is this you").
 
 use axum::extract::Path;
 use axum::{extract::State, routing::get, Json, Router};
-use chrono::{DateTime, Utc};
-use domain::{CreateUserInput, TenantUser, UpdateUserInput, PERM_MANAGE_USERS};
+use chrono::{DateTime, Duration, Utc};
+use domain::{
+    CreateUserInput, ResetPasswordInput, TenantUser, UpdateUserInput, PERM_MANAGE_SESSIONS,
+    PERM_MANAGE_USERS, PERM_RESET_PASSWORD,
+};
 use uuid::Uuid;
 
 use crate::auth::hash_password;
@@ -17,12 +22,20 @@ use crate::error::AppError;
 use crate::extractors::AuthUser;
 use crate::state::AppState;
 
+/// How long an admin-issued temporary password stays valid before
+/// login starts rejecting it (`routes/auth.rs`'s `login` handler) —
+/// long enough that a new hire starting next week isn't already locked
+/// out, short enough that a forgotten invite doesn't sit valid forever.
+const TEMP_PASSWORD_TTL_DAYS: i64 = 7;
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/users", get(list_users).post(create_user))
         .route("/api/v1/users/:id", axum::routing::put(update_user))
         .route("/api/v1/users/:id/activate", axum::routing::put(activate_user))
         .route("/api/v1/users/:id/deactivate", axum::routing::put(deactivate_user))
+        .route("/api/v1/users/:id/reset-password", axum::routing::put(reset_password))
+        .route("/api/v1/users/:id/revoke-sessions", axum::routing::put(revoke_sessions))
 }
 
 #[derive(sqlx::FromRow)]
@@ -38,6 +51,8 @@ struct TenantUserRow {
     role_name: Option<String>,
     last_login_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
+    must_change_password: bool,
+    password_changed_at: DateTime<Utc>,
 }
 
 impl TenantUserRow {
@@ -54,6 +69,8 @@ impl TenantUserRow {
             role_name: self.role_name,
             last_login_at: self.last_login_at,
             created_at: self.created_at,
+            must_change_password: self.must_change_password,
+            password_changed_at: self.password_changed_at,
         }
     }
 }
@@ -63,7 +80,8 @@ const USER_LIST_QUERY: &str = r#"
         u.id, u.full_name, u.email, u.mobile, u.is_active, u.branch_id,
         b.name as branch_name,
         rr.role_id, rr.role_name,
-        u.last_login_at, u.created_at
+        u.last_login_at, u.created_at,
+        u.must_change_password, u.password_changed_at
     from users u
     left join branches b on b.id = u.branch_id
     left join lateral (
@@ -186,12 +204,16 @@ async fn create_user(
     let password_hash =
         hash_password(&input.temporary_password).map_err(|e| AppError::Internal(e.into()))?;
     let mobile = normalize_mobile(input.mobile);
+    let expires_at = Utc::now() + Duration::days(TEMP_PASSWORD_TTL_DAYS);
 
     let mut tx = state.db.begin().await?;
 
     let user_id: Uuid = sqlx::query_scalar(
-        r#"insert into users (organization_id, branch_id, full_name, email, password_hash, mobile)
-           values ($1, $2, $3, $4, $5, $6) returning id"#,
+        r#"insert into users (
+               organization_id, branch_id, full_name, email, password_hash, mobile,
+               must_change_password, temp_password_expires_at
+           )
+           values ($1, $2, $3, $4, $5, $6, true, $7) returning id"#,
     )
     .bind(auth.organization_id)
     .bind(input.branch_id)
@@ -199,6 +221,7 @@ async fn create_user(
     .bind(email)
     .bind(&password_hash)
     .bind(&mobile)
+    .bind(expires_at)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -332,7 +355,10 @@ async fn set_active(
         return Err(AppError::bad_request("You can't deactivate your own account."));
     }
 
-    sqlx::query("update users set is_active = $1 where id = $2")
+    // Deactivating someone shouldn't leave their already-issued session
+    // token working until it expires on its own (up to 24h) — the same
+    // `session_valid_after` mechanism a password reset uses.
+    sqlx::query("update users set is_active = $1, session_valid_after = now() where id = $2")
         .bind(active)
         .bind(id)
         .execute(&state.db)
@@ -372,4 +398,96 @@ async fn deactivate_user(
     Path(id): Path<Uuid>,
 ) -> Result<Json<TenantUser>, AppError> {
     Ok(Json(set_active(&state, &auth, id, false).await?))
+}
+
+/// An admin sets a new temporary password for someone else. Flips
+/// `must_change_password` so `login` (routes/auth.rs) won't let them
+/// past it without changing it, sets a `TEMP_PASSWORD_TTL_DAYS` expiry,
+/// and bumps `session_valid_after` so whatever session they were
+/// already in stops working on its next request.
+async fn reset_password(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(input): Json<ResetPasswordInput>,
+) -> Result<Json<TenantUser>, AppError> {
+    auth.require_permission(PERM_RESET_PASSWORD)?;
+    ensure_user_in_org(&state, id, auth.organization_id).await?;
+
+    if input.temporary_password.len() < 8 {
+        return Err(AppError::bad_request(
+            "Temporary password must be at least 8 characters.",
+        ));
+    }
+    let password_hash =
+        hash_password(&input.temporary_password).map_err(|e| AppError::Internal(e.into()))?;
+    let expires_at = Utc::now() + Duration::days(TEMP_PASSWORD_TTL_DAYS);
+
+    sqlx::query(
+        r#"update users set
+               password_hash = $1,
+               must_change_password = true,
+               temp_password_expires_at = $2,
+               password_changed_at = now(),
+               session_valid_after = now()
+           where id = $3"#,
+    )
+    .bind(&password_hash)
+    .bind(expires_at)
+    .bind(id)
+    .execute(&state.db)
+    .await?;
+
+    let _ = sqlx::query(
+        r#"insert into audit_log (organization_id, actor_id, entity_type, entity_id, action)
+           values ($1, $2, 'user', $3, 'password_reset_initiated')"#,
+    )
+    .bind(auth.organization_id)
+    .bind(auth.user_id)
+    .bind(id)
+    .execute(&state.db)
+    .await;
+
+    let row: TenantUserRow = sqlx::query_as(&format!("{USER_LIST_QUERY} and u.id = $2"))
+        .bind(auth.organization_id)
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
+    Ok(Json(row.into_domain()))
+}
+
+/// Invalidates every session token already issued to this user, without
+/// touching their password — for "I think this account's session was
+/// left open on a shared machine" rather than "this password is
+/// compromised" (`reset_password` covers that, and already does this
+/// same bump as part of it).
+async fn revoke_sessions(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<TenantUser>, AppError> {
+    auth.require_permission(PERM_MANAGE_SESSIONS)?;
+    ensure_user_in_org(&state, id, auth.organization_id).await?;
+
+    sqlx::query("update users set session_valid_after = now() where id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+
+    let _ = sqlx::query(
+        r#"insert into audit_log (organization_id, actor_id, entity_type, entity_id, action)
+           values ($1, $2, 'user', $3, 'session_revoked')"#,
+    )
+    .bind(auth.organization_id)
+    .bind(auth.user_id)
+    .bind(id)
+    .execute(&state.db)
+    .await;
+
+    let row: TenantUserRow = sqlx::query_as(&format!("{USER_LIST_QUERY} and u.id = $2"))
+        .bind(auth.organization_id)
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
+    Ok(Json(row.into_domain()))
 }

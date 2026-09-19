@@ -168,6 +168,7 @@ fn sidebar_nav_groups(is_platform_owner: bool) -> Vec<NavGroup> {
                 NavChild { href: "/settings#numbering", label: "Numbering configuration" },
                 NavChild { href: "/settings/users", label: "Users & access" },
                 NavChild { href: "/settings/roles", label: "Roles & permissions" },
+                NavChild { href: "/account/change-password", label: "Change my password" },
             ],
         },
     ];
@@ -216,9 +217,25 @@ pub fn AppShell(children: Children) -> impl IntoView {
     // instead of leaving every module collapsed.
     let expanded_group: RwSignal<Option<&'static str>> = RwSignal::new(None);
 
+    let navigate_for_login_check = navigate.clone();
     Effect::new(move |_| {
         if auth.get().is_none() {
-            navigate("/login", Default::default());
+            navigate_for_login_check("/login", Default::default());
+        }
+    });
+
+    // A temporary password (admin-created account, or an admin-issued
+    // reset) must be changed before anything else — see
+    // `crates/frontend/src/pages/change_password.rs`. Re-evaluates on
+    // every navigation and every `auth` change, so it both catches a
+    // user trying to click away from the gate and clears itself the
+    // moment `change_password` succeeds and sets a fresh session.
+    let navigate_for_password_gate = navigate.clone();
+    Effect::new(move |_| {
+        let path = location.pathname.get();
+        let must_change = auth.get().map(|s| s.user.must_change_password).unwrap_or(false);
+        if must_change && path != "/account/change-password" {
+            navigate_for_password_gate("/account/change-password", Default::default());
         }
     });
 

@@ -25,14 +25,15 @@ use uuid::Uuid;
 
 use domain::{
     AgentPerformanceReport, ApiError, ApprovalRequestSummary, AuthSession, Branch,
-    BulkImportResult, BulkSaleRow, CreateCustomerInput, CreatePlotInput, CreateProjectInput,
-    CreateQuotationInput, CreateRoleInput, CreateSaleInput, CreateUserInput, CustomerDetail,
-    CustomerSummary, DashboardSummary, DecideApprovalInput, GeneratedNumber, InventoryReport,
-    LinkPlotInput, LoanAccountDetail, LoanAccountSummary, LoginInput, MapPolygons,
-    OrganizationSettings, PlatformOrganizationDetail, PlatformOrganizationSummary, PlotWithColor,
-    ProjectMapSummary, ProjectSummary, QuotationDetail, QuotationSummary, RecordPaymentInput,
-    Role, SalesReport, SignupInput, TenantUser, UpdateLeadInput, UpdateMapPolygonsInput,
-    UpdateOrganizationSettingsInput, UpdatePlotInput, UpdateRoleInput, UpdateUserInput,
+    BulkImportResult, BulkSaleRow, ChangePasswordInput, CreateCustomerInput, CreatePlotInput,
+    CreateProjectInput, CreateQuotationInput, CreateRoleInput, CreateSaleInput, CreateUserInput,
+    CustomerDetail, CustomerSummary, DashboardSummary, DecideApprovalInput, GeneratedNumber,
+    InventoryReport, LinkPlotInput, LoanAccountDetail, LoanAccountSummary, LoginInput,
+    MapPolygons, OrganizationSettings, PlatformOrganizationDetail, PlatformOrganizationSummary,
+    PlotWithColor, ProjectMapSummary, ProjectSummary, QuotationDetail, QuotationSummary,
+    RecordPaymentInput, ResetPasswordInput, Role, SalesReport, SignupInput, TenantUser,
+    UpdateLeadInput, UpdateMapPolygonsInput, UpdateOrganizationSettingsInput, UpdatePlotInput,
+    UpdateRoleInput, UpdateUserInput,
 };
 
 #[derive(Clone)]
@@ -572,5 +573,28 @@ impl HttpApi {
 
     pub async fn list_branches(&self) -> Result<Vec<Branch>, ApiError> {
         self.get("/api/v1/branches").await
+    }
+
+    pub async fn reset_user_password(
+        &self,
+        id: Uuid,
+        input: ResetPasswordInput,
+    ) -> Result<TenantUser, ApiError> {
+        self.put(&format!("/api/v1/users/{id}/reset-password"), &input).await
+    }
+
+    pub async fn revoke_user_sessions(&self, id: Uuid) -> Result<TenantUser, ApiError> {
+        self.put(&format!("/api/v1/users/{id}/revoke-sessions"), &()).await
+    }
+
+    /// Issues a fresh session token as a side effect of a successful
+    /// change (see `crates/backend/src/routes/account.rs`'s doc
+    /// comment for why) — stash it the same way `login`/`signup` do, or
+    /// every request right after this one would fail with a stale
+    /// token that the server just invalidated.
+    pub async fn change_password(&self, input: ChangePasswordInput) -> Result<AuthSession, ApiError> {
+        let session: AuthSession = self.put("/api/v1/account/change-password", &input).await?;
+        *self.token.lock().unwrap() = Some(session.token.clone());
+        Ok(session)
     }
 }

@@ -24,6 +24,8 @@ struct UserRow {
     is_active: bool,
     is_platform_owner: bool,
     created_at: DateTime<Utc>,
+    must_change_password: bool,
+    temp_password_expires_at: Option<DateTime<Utc>>,
     // joined context, used only for the checks below
     org_status: String,
     subscription_status: Option<String>,
@@ -45,6 +47,7 @@ async fn login(
         r#"
         select u.id, u.organization_id, u.branch_id, u.full_name, u.email, u.password_hash,
             u.is_active, u.is_platform_owner, u.created_at,
+            u.must_change_password, u.temp_password_expires_at,
             o.status as org_status,
             os.status as subscription_status, os.current_period_end as trial_ends_at
         from users u
@@ -74,6 +77,16 @@ async fn login(
         verify_password(&input.password, &row.password_hash).map_err(|e| AppError::Internal(e.into()))?;
     if !valid {
         return Err(generic_error());
+    }
+
+    if row.must_change_password {
+        if let Some(expires_at) = row.temp_password_expires_at {
+            if expires_at < Utc::now() {
+                return Err(AppError::bad_request(
+                    "Your temporary password has expired. Ask an admin to reset it.",
+                ));
+            }
+        }
     }
 
     let token = issue_session_token(
@@ -112,6 +125,7 @@ async fn login(
             is_active: row.is_active,
             is_platform_owner: row.is_platform_owner,
             created_at: row.created_at,
+            must_change_password: row.must_change_password,
         },
     }))
 }
@@ -266,6 +280,7 @@ async fn signup(
             is_active: true,
             is_platform_owner: false,
             created_at: Utc::now(),
+            must_change_password: false,
         },
     }))
 }

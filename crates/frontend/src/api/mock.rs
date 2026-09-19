@@ -135,6 +135,7 @@ impl MockApi {
                 is_active: true,
                 is_platform_owner: false,
                 created_at: Utc::now(),
+                must_change_password: false,
             },
         })
     }
@@ -739,6 +740,8 @@ impl MockApi {
             role_name: Some(role_name),
             last_login_at: None,
             created_at: Utc::now(),
+            must_change_password: true,
+            password_changed_at: Utc::now(),
         };
         db.tenant_users.push(user.clone());
         if let Some(role) = db.roles.iter_mut().find(|r| r.id == input.role_id) {
@@ -824,6 +827,61 @@ impl MockApi {
         settle(100).await;
         let db = self.db.lock().unwrap();
         Ok(db.branches.clone())
+    }
+
+    pub async fn reset_user_password(
+        &self,
+        id: Uuid,
+        input: domain::ResetPasswordInput,
+    ) -> Result<domain::TenantUser, ApiError> {
+        settle(250).await;
+        if input.temporary_password.len() < 8 {
+            return Err(ApiError::InvalidCredentials(
+                "Temporary password must be at least 8 characters.".to_string(),
+            ));
+        }
+        let mut db = self.db.lock().unwrap();
+        let user = db.tenant_users.iter_mut().find(|u| u.id == id).ok_or(ApiError::NotFound)?;
+        user.must_change_password = true;
+        user.password_changed_at = Utc::now();
+        Ok(user.clone())
+    }
+
+    pub async fn revoke_user_sessions(&self, id: Uuid) -> Result<domain::TenantUser, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+        db.tenant_users.iter().find(|u| u.id == id).cloned().ok_or(ApiError::NotFound)
+    }
+
+    /// Mock login only ever authenticates the single seeded `demo_user`
+    /// (see `login` above), so this can only meaningfully act on that
+    /// account — matches the same limitation.
+    pub async fn change_password(
+        &self,
+        input: domain::ChangePasswordInput,
+    ) -> Result<AuthSession, ApiError> {
+        settle(300).await;
+        if input.current_password != DEMO_PASSWORD {
+            return Err(ApiError::InvalidCredentials(
+                "Your current password is incorrect.".to_string(),
+            ));
+        }
+        if input.new_password.len() < 8 {
+            return Err(ApiError::InvalidCredentials(
+                "New password must be at least 8 characters.".to_string(),
+            ));
+        }
+        let mut db = self.db.lock().unwrap();
+        db.demo_user.must_change_password = false;
+        let demo_id = db.demo_user.id;
+        if let Some(tu) = db.tenant_users.iter_mut().find(|u| u.id == demo_id) {
+            tu.must_change_password = false;
+            tu.password_changed_at = Utc::now();
+        }
+        Ok(AuthSession {
+            token: "mock-session-token".to_string(),
+            user: db.demo_user.clone(),
+        })
     }
 
     /// Records a payment against a Plot Loan Account and updates its
@@ -2005,6 +2063,7 @@ fn seed() -> MockDb {
         email: DEMO_EMAIL.to_string(),
         is_active: true,
         is_platform_owner: false,
+        must_change_password: false,
         created_at: Utc::now(),
     };
     let admin_role_id = Uuid::new_v4();
@@ -2215,6 +2274,8 @@ fn seed() -> MockDb {
         role_name: Some("Admin".to_string()),
         last_login_at: None,
         created_at: demo_user.created_at,
+        must_change_password: false,
+        password_changed_at: demo_user.created_at,
     };
 
     MockDb {
