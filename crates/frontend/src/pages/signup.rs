@@ -5,7 +5,7 @@ use leptos_router::hooks::use_navigate;
 
 use crate::api::{ApiError, SignupInput};
 use crate::auth::{use_api, use_auth};
-use crate::components::ErrorAlert;
+use crate::components::{ErrorAlert, PasswordField};
 
 #[component]
 pub fn Signup() -> impl IntoView {
@@ -114,30 +114,21 @@ pub fn Signup() -> impl IntoView {
                             on:input=move |ev| admin_email.set(event_target_value(&ev))
                         />
                     </div>
-                    <div class="field">
-                        <label for="admin_password">"Password"</label>
-                        <input
-                            id="admin_password"
-                            type="password"
-                            autocomplete="new-password"
-                            required
-                            minlength="8"
-                            prop:value=admin_password
-                            on:input=move |ev| admin_password.set(event_target_value(&ev))
-                        />
-                    </div>
-                    <div class="field">
-                        <label for="confirm_password">"Confirm password"</label>
-                        <input
-                            id="confirm_password"
-                            type="password"
-                            autocomplete="new-password"
-                            required
-                            minlength="8"
-                            prop:value=confirm_password
-                            on:input=move |ev| confirm_password.set(event_target_value(&ev))
-                        />
-                    </div>
+                    <PasswordField
+                        id="admin_password"
+                        label="Password"
+                        value=admin_password
+                        autocomplete="new-password"
+                        minlength=8
+                        show_strength=true
+                    />
+                    <PasswordField
+                        id="confirm_password"
+                        label="Confirm password"
+                        value=confirm_password
+                        autocomplete="new-password"
+                        minlength=8
+                    />
                     <button type="submit" class="btn btn-primary btn-block" disabled=submitting>
                         {move || if submitting.get() { "Creating your account…" } else { "Create organization" }}
                     </button>

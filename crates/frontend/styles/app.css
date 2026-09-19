@@ -287,6 +287,74 @@ a {
   font-size: 0.82rem;
 }
 
+.password-input-wrap {
+  position: relative;
+}
+.password-input-wrap input {
+  padding-right: 44px;
+}
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.password-toggle:hover {
+  color: var(--color-text);
+  background: var(--color-accent-bg);
+}
+.password-toggle svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.password-strength {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.password-strength-bars {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+}
+.password-strength-bar {
+  height: 4px;
+  flex: 1;
+  border-radius: 2px;
+  background: var(--color-border);
+}
+.password-strength-bar.filled-weak {
+  background: var(--color-danger);
+}
+.password-strength-bar.filled-fair {
+  background: var(--color-warning-text);
+}
+.password-strength-bar.filled-good,
+.password-strength-bar.filled-strong {
+  background: var(--color-success);
+}
+.password-strength-label {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  min-width: 64px;
+  text-align: right;
+}
+
 .icon svg {
   display: block;
   flex-shrink: 0;

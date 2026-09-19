@@ -26,6 +26,8 @@ pub enum IconName {
     More,
     Sun,
     Moon,
+    Eye,
+    EyeOff,
 }
 
 /// A 20x20 outline icon. Every path below is hand-drawn at the same
@@ -93,6 +95,15 @@ pub fn Icon(name: IconName) -> impl IntoView {
             <circle cx="5" cy="12" r="1.4" />
             <circle cx="12" cy="12" r="1.4" />
             <circle cx="19" cy="12" r="1.4" />
+        }.into_any(),
+        IconName::Eye => view! {
+            <path d="M2 12C4.5 7 8 4.5 12 4.5S19.5 7 22 12c-2.5 5-6 7.5-10 7.5S4.5 17 2 12Z" />
+            <circle cx="12" cy="12" r="3" />
+        }.into_any(),
+        IconName::EyeOff => view! {
+            <path d="M2 12C4.5 7 8 4.5 12 4.5S19.5 7 22 12c-2.5 5-6 7.5-10 7.5S4.5 17 2 12Z" />
+            <circle cx="12" cy="12" r="3" />
+            <line x1="3" y1="3" x2="21" y2="21" />
         }.into_any(),
     };
 

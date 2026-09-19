@@ -5,7 +5,7 @@ use leptos_router::hooks::use_navigate;
 
 use crate::api::ApiError;
 use crate::auth::{use_api, use_auth};
-use crate::components::ErrorAlert;
+use crate::components::{ErrorAlert, PasswordField};
 
 #[component]
 pub fn Login() -> impl IntoView {
@@ -68,17 +68,12 @@ pub fn Login() -> impl IntoView {
                             on:input=move |ev| email.set(event_target_value(&ev))
                         />
                     </div>
-                    <div class="field">
-                        <label for="password">"Password"</label>
-                        <input
-                            id="password"
-                            type="password"
-                            autocomplete="current-password"
-                            required
-                            prop:value=password
-                            on:input=move |ev| password.set(event_target_value(&ev))
-                        />
-                    </div>
+                    <PasswordField
+                        id="password"
+                        label="Password"
+                        value=password
+                        autocomplete="current-password"
+                    />
                     <button type="submit" class="btn btn-primary btn-block" disabled=submitting>
                         {move || if submitting.get() { "Signing in…" } else { "Sign in" }}
                     </button>
