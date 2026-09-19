@@ -27,9 +27,9 @@ use domain::{
     AgentPerformanceReport, ApiError, ApprovalRequestSummary, AuthSession, Branch,
     BulkImportResult, BulkSaleRow, ChangePasswordInput, CreateBranchInput, CreateCustomerInput,
     CreatePlotInput, CreateProjectInput, CreateQuotationInput, CreateRoleInput, CreateSaleInput,
-    CreateUserInput, CustomerDetail, CustomerSummary, DashboardSummary, DecideApprovalInput,
-    GeneratedNumber, InventoryReport, LinkPlotInput, LoanAccountDetail, LoanAccountSummary,
-    LoginInput, MapPolygons, OrganizationSettings, PlatformOrganizationDetail,
+    CreateUserInput, CustomerDetail, CustomerSummary, DashboardAnalytics, DashboardSummary,
+    DecideApprovalInput, GeneratedNumber, InventoryReport, LinkPlotInput, LoanAccountDetail,
+    LoanAccountSummary, LoginInput, MapPolygons, OrganizationSettings, PlatformOrganizationDetail,
     PlatformOrganizationSummary, PlotWithColor, ProjectMapSummary, ProjectSummary,
     QuotationDetail, QuotationSummary, RecordPaymentInput, ResetPasswordInput, Role, SalesReport,
     SignupInput, TenantUser, UpdateBranchInput, UpdateLeadInput, UpdateMapPolygonsInput,
@@ -189,6 +189,10 @@ impl HttpApi {
 
     pub async fn dashboard_summary(&self) -> Result<DashboardSummary, ApiError> {
         self.get("/api/v1/dashboard").await
+    }
+
+    pub async fn dashboard_analytics(&self) -> Result<DashboardAnalytics, ApiError> {
+        self.get("/api/v1/dashboard/analytics").await
     }
 
     pub async fn list_projects(&self) -> Result<Vec<ProjectSummary>, ApiError> {

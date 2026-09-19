@@ -147,7 +147,7 @@ fn RoleCard(
     };
 
     view! {
-        <div class="card">
+        <div class="card" class:card-grid-item-editing=move || editing.get()>
             <div class="page-header" style="margin-bottom: var(--space-2)">
                 <h3 class="mt-0">{role.name.clone()}</h3>
                 <span class="meta">{format!("{assigned_count} user(s)")}</span>

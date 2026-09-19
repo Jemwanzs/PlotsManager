@@ -49,6 +49,13 @@ impl ApiClient {
         }
     }
 
+    pub async fn dashboard_analytics(&self) -> Result<domain::DashboardAnalytics, ApiError> {
+        match self {
+            Self::Mock(api) => api.dashboard_analytics().await,
+            Self::Http(api) => api.dashboard_analytics().await,
+        }
+    }
+
     pub async fn list_projects(&self) -> Result<Vec<ProjectSummary>, ApiError> {
         match self {
             Self::Mock(api) => api.list_projects().await,

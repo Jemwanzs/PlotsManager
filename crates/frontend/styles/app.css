@@ -934,6 +934,25 @@ a {
   }
 }
 
+/* A card-grid item being edited spans every column instead of staying
+   pinned to its one grid cell — with few cards (often just one), the
+   narrow cell left the edit form squeezed into a third of the width
+   while the rest of the row sat empty. `.form-grid-2` then lets that
+   extra width hold two fields per row instead of one long stack. */
+.card-grid-item-editing {
+  grid-column: 1 / -1;
+}
+.form-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr;
+  column-gap: var(--space-4);
+}
+@media (min-width: 640px) {
+  .form-grid-2 {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
 .project-card {
   display: block;
   text-decoration: none;
@@ -1122,4 +1141,195 @@ a {
 }
 .mt-0 {
   margin-top: 0;
+}
+
+/* Executive dashboard analytics — line/donut/bar charts
+   (crates/frontend/src/components/charts.rs). */
+.analytics-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+@media (min-width: 1024px) {
+  .analytics-grid {
+    grid-template-columns: 2fr 1fr;
+  }
+  .analytics-grid .card-span-full {
+    grid-column: 1 / -1;
+  }
+}
+
+.kpi-compare {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+.kpi-delta {
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.kpi-delta.up {
+  color: var(--color-success);
+  background: var(--color-success-bg);
+}
+.kpi-delta.down {
+  color: var(--color-danger);
+  background: var(--color-danger-bg);
+}
+.kpi-delta.flat {
+  color: var(--color-text-muted);
+  background: var(--color-accent-bg);
+}
+
+.chart-wrap {
+  position: relative;
+}
+.chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.chart-hit {
+  cursor: pointer;
+}
+.chart-x-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: var(--space-2);
+  padding: 0 2px;
+}
+.chart-x-label {
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+.chart-x-label.active {
+  color: var(--color-primary);
+  font-weight: 700;
+}
+.chart-tooltip {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.82rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+}
+.chart-tooltip.visible {
+  opacity: 1;
+}
+.chart-tooltip strong {
+  color: var(--color-text);
+}
+.chart-tooltip span {
+  color: var(--color-text-muted);
+}
+
+.donut-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+}
+@media (min-width: 480px) {
+  .donut-wrap {
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+  }
+}
+.donut-svg {
+  width: 180px;
+  height: 180px;
+  flex-shrink: 0;
+}
+.donut-center-value {
+  font-size: 22px;
+  font-weight: 800;
+}
+.donut-center-caption {
+  font-size: 10px;
+}
+
+.chart-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+}
+.chart-legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.85rem;
+}
+.legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.legend-label {
+  color: var(--color-text);
+  flex: 1;
+}
+.legend-value {
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+.bar-chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.bar-row {
+  display: grid;
+  grid-template-columns: 96px 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+}
+@media (min-width: 480px) {
+  .bar-row {
+    grid-template-columns: 160px 1fr auto;
+  }
+}
+.bar-label {
+  font-size: 0.82rem;
+  color: var(--color-text);
+  line-height: 1.25;
+}
+.bar-track {
+  background: var(--color-accent-bg);
+  border-radius: var(--radius-sm);
+  height: 14px;
+  overflow: hidden;
+}
+.bar-fill {
+  background: var(--color-primary);
+  height: 100%;
+  border-radius: var(--radius-sm);
+  transition: width 0.3s ease;
+}
+.bar-value {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--color-text);
+  white-space: nowrap;
 }

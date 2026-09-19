@@ -128,7 +128,7 @@ fn BranchCard(
     };
 
     view! {
-        <div class="card">
+        <div class="card" class:card-grid-item-editing=move || editing.get()>
             <div class="page-header" style="margin-bottom: var(--space-2)">
                 <h3 class="mt-0">{branch.name.clone()} " (" {branch.code.clone()} ")"</h3>
                 <span
@@ -285,63 +285,65 @@ fn BranchForm(
             <h3 class="mt-0">{if is_edit { "Edit branch" } else { "New branch" }}</h3>
             {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
 
-            <div class="field">
-                <label for="branch-name">"Branch name"</label>
-                <input
-                    id="branch-name"
-                    type="text"
-                    required
-                    placeholder="e.g. Nairobi Branch"
-                    prop:value=name
-                    on:input=move |ev| name.set(event_target_value(&ev))
-                />
-            </div>
-            <div class="field">
-                <label for="branch-code">"Branch code"</label>
-                <input
-                    id="branch-code"
-                    type="text"
-                    required
-                    placeholder="e.g. NBO"
-                    prop:value=code
-                    on:input=move |ev| code.set(event_target_value(&ev))
-                />
-            </div>
-            <div class="field">
-                <label for="branch-region">"Region (optional)"</label>
-                <input
-                    id="branch-region"
-                    type="text"
-                    prop:value=region
-                    on:input=move |ev| region.set(event_target_value(&ev))
-                />
-            </div>
-            <div class="field">
-                <label for="branch-location">"Location (optional)"</label>
-                <input
-                    id="branch-location"
-                    type="text"
-                    prop:value=location
-                    on:input=move |ev| location.set(event_target_value(&ev))
-                />
-            </div>
-            <div class="field">
-                <label for="branch-contact-name">"Contact name (optional)"</label>
-                <input
-                    id="branch-contact-name"
-                    type="text"
-                    prop:value=contact_name
-                    on:input=move |ev| contact_name.set(event_target_value(&ev))
-                />
-            </div>
-            <div class="field">
-                <label for="branch-contact-phone">"Contact phone (optional)"</label>
-                <input
-                    id="branch-contact-phone"
-                    type="text"
-                    prop:value=contact_phone
-                    on:input=move |ev| contact_phone.set(event_target_value(&ev))
-                />
+            <div class="form-grid-2">
+                <div class="field">
+                    <label for="branch-name">"Branch name"</label>
+                    <input
+                        id="branch-name"
+                        type="text"
+                        required
+                        placeholder="e.g. Nairobi Branch"
+                        prop:value=name
+                        on:input=move |ev| name.set(event_target_value(&ev))
+                    />
+                </div>
+                <div class="field">
+                    <label for="branch-code">"Branch code"</label>
+                    <input
+                        id="branch-code"
+                        type="text"
+                        required
+                        placeholder="e.g. NBO"
+                        prop:value=code
+                        on:input=move |ev| code.set(event_target_value(&ev))
+                    />
+                </div>
+                <div class="field">
+                    <label for="branch-region">"Region (optional)"</label>
+                    <input
+                        id="branch-region"
+                        type="text"
+                        prop:value=region
+                        on:input=move |ev| region.set(event_target_value(&ev))
+                    />
+                </div>
+                <div class="field">
+                    <label for="branch-location">"Location (optional)"</label>
+                    <input
+                        id="branch-location"
+                        type="text"
+                        prop:value=location
+                        on:input=move |ev| location.set(event_target_value(&ev))
+                    />
+                </div>
+                <div class="field">
+                    <label for="branch-contact-name">"Contact name (optional)"</label>
+                    <input
+                        id="branch-contact-name"
+                        type="text"
+                        prop:value=contact_name
+                        on:input=move |ev| contact_name.set(event_target_value(&ev))
+                    />
+                </div>
+                <div class="field">
+                    <label for="branch-contact-phone">"Contact phone (optional)"</label>
+                    <input
+                        id="branch-contact-phone"
+                        type="text"
+                        prop:value=contact_phone
+                        on:input=move |ev| contact_phone.set(event_target_value(&ev))
+                    />
+                </div>
             </div>
             <div class="field">
                 <label for="branch-manager">"Branch manager (optional)"</label>

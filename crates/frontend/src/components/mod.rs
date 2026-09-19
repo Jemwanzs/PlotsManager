@@ -2,6 +2,9 @@ use leptos::prelude::*;
 
 use crate::icons::{Icon, IconName};
 
+mod charts;
+pub use charts::{BarChart, ChartPoint, DonutChart, DonutSegment, LineChart};
+
 #[component]
 pub fn StatCard(
     label: &'static str,

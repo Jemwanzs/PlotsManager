@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     ApprovalRequest, AreaUnit, Customer, LeadStage, MapPolygons, Payment, PaymentMode, Plot,
-    PlotLoanAccount, ProjectStatus, Quotation, User,
+    PlotLoanAccount, PlotStatusCount, ProjectStatus, Quotation, User,
 };
 
 /// One row of the organization-wide Finance → Loan Accounts list
@@ -258,6 +258,52 @@ pub struct DashboardSummary {
     pub performing_amount: Decimal,
     pub non_performing_count: u32,
     pub non_performing_amount: Decimal,
+}
+
+/// `GET /api/v1/dashboard/analytics` — the Home dashboard's chart data
+/// (`crates/frontend/src/pages/dashboard.rs`'s `<AnalyticsSection>`).
+/// Separate endpoint from `DashboardSummary` rather than folded into
+/// it: the KPI strip above needs to render immediately, and splitting
+/// the heavier trend/breakdown queries into their own round trip means
+/// a slow chart query never blocks the cards a director looks at first.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardAnalytics {
+    pub qtd_sales_value: Decimal,
+    pub qtd_sales_count: u32,
+    pub ytd_sales_value: Decimal,
+    pub ytd_sales_count: u32,
+    /// Sales value from the same elapsed stretch of the *previous*
+    /// year (Jan 1 -> today's month/day, one year back) — what YTD
+    /// actually compares against; a bare "YTD total" alone doesn't say
+    /// whether that's ahead or behind last year.
+    pub prior_ytd_sales_value: Decimal,
+    /// Trailing 12 months, oldest first, one point per month even for
+    /// months with zero sales (a line chart with silently-skipped
+    /// months reads as a data gap, not a real zero).
+    pub monthly_trend: Vec<MonthlySalesPoint>,
+    /// Current plot inventory across every project, grouped by status
+    /// — the "current position" pie/donut. Uses the same
+    /// `plot_status_meta` colors as the plot grid/legend elsewhere in
+    /// the app, so a status means the same color everywhere.
+    pub inventory_by_status: Vec<PlotStatusCount>,
+    /// Year-to-date sales value per project, highest first, capped to
+    /// the top 8 — which projects are actually driving this year's
+    /// revenue.
+    pub sales_by_project: Vec<ProjectSalesSlice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonthlySalesPoint {
+    pub period_label: String,
+    pub sales_value: Decimal,
+    pub sales_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectSalesSlice {
+    pub project_name: String,
+    pub sales_value: Decimal,
+    pub sales_count: u32,
 }
 
 /// Cross-tenant administration — `crates/backend/src/routes/platform.rs`,

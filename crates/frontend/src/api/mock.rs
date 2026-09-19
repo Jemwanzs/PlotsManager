@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use std::collections::HashMap;
 
-use chrono::{NaiveDate, Utc};
+use chrono::{Datelike, NaiveDate, TimeZone, Utc};
 use domain::{
     approval_status_meta, loan_status_meta, plot_status_meta as status_meta,
     quotation_status_meta, AgentPerformanceReport, AgentPerformanceRow, ApiError, ApprovalRequest,
@@ -179,6 +179,115 @@ impl MockApi {
             performing_amount,
             non_performing_count,
             non_performing_amount,
+        })
+    }
+
+    pub async fn dashboard_analytics(&self) -> Result<domain::DashboardAnalytics, ApiError> {
+        settle(200).await;
+        let db = self.db.lock().unwrap();
+        let now = Utc::now();
+        let year_start = Utc.with_ymd_and_hms(now.year(), 1, 1, 0, 0, 0).single().unwrap_or(now);
+        let quarter_start_month = ((now.month() - 1) / 3) * 3 + 1;
+        let quarter_start = Utc
+            .with_ymd_and_hms(now.year(), quarter_start_month, 1, 0, 0, 0)
+            .single()
+            .unwrap_or(now);
+        let prior_year_start = Utc
+            .with_ymd_and_hms(now.year() - 1, 1, 1, 0, 0, 0)
+            .single()
+            .unwrap_or(year_start - chrono::Duration::days(365));
+        let prior_year_asof = prior_year_start + (now - year_start);
+
+        let qtd_sales: Vec<&PlotSale> = db.sales.iter().filter(|s| s.created_at >= quarter_start).collect();
+        let ytd_sales: Vec<&PlotSale> = db.sales.iter().filter(|s| s.created_at >= year_start).collect();
+        let prior_ytd_value: Decimal = db
+            .sales
+            .iter()
+            .filter(|s| s.created_at >= prior_year_start && s.created_at < prior_year_asof)
+            .map(|s| s.agreed_price)
+            .sum();
+
+        let months_back_start = now.year() * 12 + now.month0() as i32 - 11;
+        let mut monthly_trend = Vec::with_capacity(12);
+        for i in 0..12 {
+            let total_months = months_back_start + i;
+            let month_start = Utc
+                .with_ymd_and_hms(total_months.div_euclid(12), total_months.rem_euclid(12) as u32 + 1, 1, 0, 0, 0)
+                .single()
+                .unwrap_or(now);
+            let next_total_months = total_months + 1;
+            let month_end = Utc
+                .with_ymd_and_hms(next_total_months.div_euclid(12), next_total_months.rem_euclid(12) as u32 + 1, 1, 0, 0, 0)
+                .single()
+                .unwrap_or(month_start);
+            let in_month: Vec<&PlotSale> = db
+                .sales
+                .iter()
+                .filter(|s| s.created_at >= month_start && s.created_at < month_end)
+                .collect();
+            monthly_trend.push(domain::MonthlySalesPoint {
+                period_label: month_start.format("%b %Y").to_string(),
+                sales_value: in_month.iter().map(|s| s.agreed_price).sum(),
+                sales_count: in_month.len() as u32,
+            });
+        }
+
+        let mut by_status: Vec<(PlotStatus, u32, Decimal)> = Vec::new();
+        for plot in &db.plots {
+            match by_status.iter_mut().find(|(s, _, _)| *s == plot.status) {
+                Some(entry) => {
+                    entry.1 += 1;
+                    entry.2 += plot.asking_price;
+                }
+                None => by_status.push((plot.status, 1, plot.asking_price)),
+            }
+        }
+        let inventory_by_status = by_status
+            .into_iter()
+            .map(|(status, count, value)| {
+                let (label, color) = domain::plot_status_meta(status);
+                domain::PlotStatusCount {
+                    status,
+                    status_label: label.to_string(),
+                    status_color: color.to_string(),
+                    count,
+                    value,
+                }
+            })
+            .collect();
+
+        let mut by_project: Vec<(Uuid, String, u32, Decimal)> = Vec::new();
+        for sale in &ytd_sales {
+            let Some(plot) = db.plots.iter().find(|p| p.id == sale.plot_id) else { continue };
+            let Some(project) = db.projects.iter().find(|p| p.id == plot.project_id) else { continue };
+            match by_project.iter_mut().find(|(id, _, _, _)| *id == project.id) {
+                Some(entry) => {
+                    entry.2 += 1;
+                    entry.3 += sale.agreed_price;
+                }
+                None => by_project.push((project.id, project.name.clone(), 1, sale.agreed_price)),
+            }
+        }
+        by_project.sort_by(|a, b| b.3.cmp(&a.3));
+        by_project.truncate(8);
+        let sales_by_project = by_project
+            .into_iter()
+            .map(|(_, project_name, count, value)| domain::ProjectSalesSlice {
+                project_name,
+                sales_value: value,
+                sales_count: count,
+            })
+            .collect();
+
+        Ok(domain::DashboardAnalytics {
+            qtd_sales_value: qtd_sales.iter().map(|s| s.agreed_price).sum(),
+            qtd_sales_count: qtd_sales.len() as u32,
+            ytd_sales_value: ytd_sales.iter().map(|s| s.agreed_price).sum(),
+            ytd_sales_count: ytd_sales.len() as u32,
+            prior_ytd_sales_value: prior_ytd_value,
+            monthly_trend,
+            inventory_by_status,
+            sales_by_project,
         })
     }
 
@@ -2307,6 +2416,13 @@ fn seed() -> MockDb {
         next_customer += 1;
 
         plot.assigned_customer_id = Some(customer.id);
+        // Spread across the trailing ~10 months (not all `Utc::now()`)
+        // so the executive dashboard's monthly trend chart has an
+        // actual trend to show in the mock/demo instead of one spike
+        // in the current month and eleven empty ones.
+        let months_back = (next_customer % 10) as i64;
+        let sale_created_at =
+            Utc::now() - chrono::Duration::days(30 * months_back + (next_customer as i64 % 7));
         let sale = PlotSale {
             id: Uuid::new_v4(),
             plot_id: plot.id,
@@ -2315,7 +2431,7 @@ fn seed() -> MockDb {
             agent_id: Some(demo_user.id),
             payment_mode,
             agreed_price: plot.asking_price,
-            created_at: Utc::now(),
+            created_at: sale_created_at,
         };
 
         if payment_mode != PaymentMode::FullCash {
