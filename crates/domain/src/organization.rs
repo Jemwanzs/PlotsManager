@@ -20,6 +20,34 @@ pub struct Branch {
     pub name: String,
     pub code: String,
     pub region: Option<String>,
+    pub location: Option<String>,
+    pub contact_name: Option<String>,
+    pub contact_phone: Option<String>,
+    pub manager_id: Option<Uuid>,
+    pub manager_name: Option<String>,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateBranchInput {
+    pub name: String,
+    pub code: String,
+    pub region: Option<String>,
+    pub location: Option<String>,
+    pub contact_name: Option<String>,
+    pub contact_phone: Option<String>,
+    pub manager_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateBranchInput {
+    pub name: String,
+    pub code: String,
+    pub region: Option<String>,
+    pub location: Option<String>,
+    pub contact_name: Option<String>,
+    pub contact_phone: Option<String>,
+    pub manager_id: Option<Uuid>,
 }
 
 /// Which record types the auto-numbering engine currently issues numbers

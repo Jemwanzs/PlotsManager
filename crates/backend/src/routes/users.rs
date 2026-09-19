@@ -15,6 +15,7 @@ use domain::{
     CreateUserInput, ResetPasswordInput, TenantUser, UpdateUserInput, PERM_MANAGE_SESSIONS,
     PERM_MANAGE_USERS, PERM_RESET_PASSWORD,
 };
+use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::auth::hash_password;
@@ -47,6 +48,8 @@ struct TenantUserRow {
     is_active: bool,
     branch_id: Option<Uuid>,
     branch_name: Option<String>,
+    branch_ids: Vec<Uuid>,
+    branch_count: i64,
     role_id: Option<Uuid>,
     role_name: Option<String>,
     last_login_at: Option<DateTime<Utc>>,
@@ -65,6 +68,8 @@ impl TenantUserRow {
             is_active: self.is_active,
             branch_id: self.branch_id,
             branch_name: self.branch_name,
+            branch_ids: self.branch_ids,
+            branch_count: self.branch_count,
             role_id: self.role_id,
             role_name: self.role_name,
             last_login_at: self.last_login_at,
@@ -79,6 +84,8 @@ const USER_LIST_QUERY: &str = r#"
     select
         u.id, u.full_name, u.email, u.mobile, u.is_active, u.branch_id,
         b.name as branch_name,
+        coalesce((select array_agg(ub.branch_id) from user_branches ub where ub.user_id = u.id), '{}') as branch_ids,
+        (select count(*) from user_branches ub where ub.user_id = u.id) as branch_count,
         rr.role_id, rr.role_name,
         u.last_login_at, u.created_at,
         u.must_change_password, u.password_changed_at
@@ -139,26 +146,66 @@ async fn ensure_role_in_org(state: &AppState, role_id: Uuid, organization_id: Uu
     }
 }
 
-async fn ensure_branch_in_org(
+/// Dedupes while keeping the first occurrence's position — the first
+/// entry becomes the primary branch (`TenantUser::branch_id`'s doc
+/// comment), so which one survives a duplicate matters.
+fn dedupe_branch_ids(ids: Vec<Uuid>) -> Vec<Uuid> {
+    let mut seen = HashSet::new();
+    ids.into_iter().filter(|id| seen.insert(*id)).collect()
+}
+
+async fn ensure_branches_in_org(
     state: &AppState,
-    branch_id: Option<Uuid>,
+    branch_ids: &[Uuid],
     organization_id: Uuid,
 ) -> Result<(), AppError> {
-    let Some(branch_id) = branch_id else {
+    if branch_ids.is_empty() {
         return Ok(());
-    };
-    let exists: bool = sqlx::query_scalar(
-        "select exists(select 1 from branches where id = $1 and organization_id = $2)",
+    }
+    let count: i64 = sqlx::query_scalar(
+        "select count(*) from branches where organization_id = $1 and id = any($2)",
     )
-    .bind(branch_id)
     .bind(organization_id)
+    .bind(branch_ids)
     .fetch_one(&state.db)
     .await?;
-    if exists {
+    if count as usize == branch_ids.len() {
         Ok(())
     } else {
-        Err(AppError::bad_request("Choose a valid branch."))
+        Err(AppError::bad_request("Choose valid branches."))
     }
+}
+
+/// Replaces a user's whole `user_branches` set inside the caller's
+/// transaction and keeps `users.branch_id` (the "primary branch") in
+/// sync with the first entry — `create_user`/`update_user` both need
+/// exactly this, differing only in whether there's a previous set to
+/// diff for the audit log.
+async fn replace_branch_assignments(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    branch_ids: &[Uuid],
+) -> Result<(), AppError> {
+    sqlx::query("delete from user_branches where user_id = $1")
+        .bind(user_id)
+        .execute(&mut **tx)
+        .await?;
+    for (i, branch_id) in branch_ids.iter().enumerate() {
+        sqlx::query(
+            "insert into user_branches (user_id, branch_id, is_primary) values ($1, $2, $3)",
+        )
+        .bind(user_id)
+        .bind(branch_id)
+        .bind(i == 0)
+        .execute(&mut **tx)
+        .await?;
+    }
+    sqlx::query("update users set branch_id = $1 where id = $2")
+        .bind(branch_ids.first())
+        .bind(user_id)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
 }
 
 fn normalize_mobile(mobile: Option<String>) -> Option<String> {
@@ -188,7 +235,8 @@ async fn create_user(
         ));
     }
     ensure_role_in_org(&state, input.role_id, auth.organization_id).await?;
-    ensure_branch_in_org(&state, input.branch_id, auth.organization_id).await?;
+    let branch_ids = dedupe_branch_ids(input.branch_ids);
+    ensure_branches_in_org(&state, &branch_ids, auth.organization_id).await?;
 
     let email_taken: bool =
         sqlx::query_scalar("select exists(select 1 from users where email = $1)")
@@ -210,13 +258,12 @@ async fn create_user(
 
     let user_id: Uuid = sqlx::query_scalar(
         r#"insert into users (
-               organization_id, branch_id, full_name, email, password_hash, mobile,
+               organization_id, full_name, email, password_hash, mobile,
                must_change_password, temp_password_expires_at
            )
-           values ($1, $2, $3, $4, $5, $6, true, $7) returning id"#,
+           values ($1, $2, $3, $4, $5, true, $6) returning id"#,
     )
     .bind(auth.organization_id)
-    .bind(input.branch_id)
     .bind(full_name)
     .bind(email)
     .bind(&password_hash)
@@ -224,6 +271,8 @@ async fn create_user(
     .bind(expires_at)
     .fetch_one(&mut *tx)
     .await?;
+
+    replace_branch_assignments(&mut tx, user_id, &branch_ids).await?;
 
     sqlx::query("insert into role_assignments (user_id, role_id) values ($1, $2)")
         .bind(user_id)
@@ -270,7 +319,8 @@ async fn update_user(
         return Err(AppError::bad_request("Enter an email."));
     }
     ensure_role_in_org(&state, input.role_id, auth.organization_id).await?;
-    ensure_branch_in_org(&state, input.branch_id, auth.organization_id).await?;
+    let branch_ids = dedupe_branch_ids(input.branch_ids);
+    ensure_branches_in_org(&state, &branch_ids, auth.organization_id).await?;
 
     let email_taken: bool =
         sqlx::query_scalar("select exists(select 1 from users where email = $1 and id <> $2)")
@@ -292,19 +342,44 @@ async fn update_user(
     .bind(id)
     .fetch_optional(&state.db)
     .await?;
+    let previous_branch_ids: Vec<Uuid> =
+        sqlx::query_scalar("select branch_id from user_branches where user_id = $1")
+            .bind(id)
+            .fetch_all(&state.db)
+            .await?;
 
     let mut tx = state.db.begin().await?;
 
-    sqlx::query(
-        "update users set full_name = $1, email = $2, mobile = $3, branch_id = $4 where id = $5",
-    )
-    .bind(full_name)
-    .bind(email)
-    .bind(&mobile)
-    .bind(input.branch_id)
-    .bind(id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("update users set full_name = $1, email = $2, mobile = $3 where id = $4")
+        .bind(full_name)
+        .bind(email)
+        .bind(&mobile)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+    let branches_changed = {
+        let mut prev = previous_branch_ids.clone();
+        let mut next = branch_ids.clone();
+        prev.sort();
+        next.sort();
+        prev != next
+    };
+    if branches_changed {
+        replace_branch_assignments(&mut tx, id, &branch_ids).await?;
+
+        sqlx::query(
+            r#"insert into audit_log (organization_id, actor_id, entity_type, entity_id, action, before_state, after_state)
+               values ($1, $2, 'user', $3, 'branch_assignment_changed', $4, $5)"#,
+        )
+        .bind(auth.organization_id)
+        .bind(auth.user_id)
+        .bind(id)
+        .bind(serde_json::json!({ "branch_ids": previous_branch_ids }))
+        .bind(serde_json::json!({ "branch_ids": branch_ids }))
+        .execute(&mut *tx)
+        .await?;
+    }
 
     let role_changed = previous_role.as_ref().map(|(rid, _)| *rid) != Some(input.role_id);
     if role_changed {

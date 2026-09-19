@@ -14,6 +14,7 @@
 
 pub const PERM_MANAGE_USERS: &str = "users:manage";
 pub const PERM_MANAGE_ROLES: &str = "roles:manage";
+pub const PERM_MANAGE_BRANCHES: &str = "branches:manage";
 pub const PERM_RESET_PASSWORD: &str = "users:reset_password";
 pub const PERM_VIEW_ACCESS_LOGS: &str = "security:view_access_logs";
 pub const PERM_MANAGE_SESSIONS: &str = "security:manage_sessions";
@@ -27,6 +28,7 @@ pub const PERM_APPROVE_TRANSACTIONS: &str = "approvals:approve";
 pub const ALL_PERMISSIONS: &[(&str, &str)] = &[
     (PERM_MANAGE_USERS, "Manage users"),
     (PERM_MANAGE_ROLES, "Manage roles"),
+    (PERM_MANAGE_BRANCHES, "Manage branches"),
     (PERM_RESET_PASSWORD, "Reset user passwords"),
     (PERM_VIEW_ACCESS_LOGS, "View access logs"),
     (PERM_MANAGE_SESSIONS, "Manage sessions"),

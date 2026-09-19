@@ -515,6 +515,38 @@ impl ApiClient {
         }
     }
 
+    pub async fn create_branch(&self, input: domain::CreateBranchInput) -> Result<domain::Branch, ApiError> {
+        match self {
+            Self::Mock(api) => api.create_branch(input).await,
+            Self::Http(api) => api.create_branch(input).await,
+        }
+    }
+
+    pub async fn update_branch(
+        &self,
+        id: Uuid,
+        input: domain::UpdateBranchInput,
+    ) -> Result<domain::Branch, ApiError> {
+        match self {
+            Self::Mock(api) => api.update_branch(id, input).await,
+            Self::Http(api) => api.update_branch(id, input).await,
+        }
+    }
+
+    pub async fn activate_branch(&self, id: Uuid) -> Result<domain::Branch, ApiError> {
+        match self {
+            Self::Mock(api) => api.activate_branch(id).await,
+            Self::Http(api) => api.activate_branch(id).await,
+        }
+    }
+
+    pub async fn deactivate_branch(&self, id: Uuid) -> Result<domain::Branch, ApiError> {
+        match self {
+            Self::Mock(api) => api.deactivate_branch(id).await,
+            Self::Http(api) => api.deactivate_branch(id).await,
+        }
+    }
+
     pub async fn reset_user_password(
         &self,
         id: Uuid,

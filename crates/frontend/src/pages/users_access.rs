@@ -185,7 +185,13 @@ fn UserRow(
             <td>{user.email.clone()}</td>
             <td>{user.mobile.clone().unwrap_or_else(|| "—".to_string())}</td>
             <td>{user.role_name.clone().unwrap_or_else(|| "No role".to_string())}</td>
-            <td>{user.branch_name.clone().unwrap_or_else(|| "—".to_string())}</td>
+            <td>
+                {match (user.branch_name.clone(), user.branch_count) {
+                    (Some(name), count) if count > 1 => format!("{name} +{}", count - 1),
+                    (Some(name), _) => name,
+                    (None, _) => "—".to_string(),
+                }}
+            </td>
             <td>
                 <span
                     class="badge"
@@ -323,12 +329,37 @@ fn UserForm(
     let full_name = RwSignal::new(existing.as_ref().map(|u| u.full_name.clone()).unwrap_or_default());
     let email = RwSignal::new(existing.as_ref().map(|u| u.email.clone()).unwrap_or_default());
     let mobile = RwSignal::new(existing.as_ref().and_then(|u| u.mobile.clone()).unwrap_or_default());
-    let initial_branch_id =
-        existing.as_ref().and_then(|u| u.branch_id).map(|id| id.to_string()).unwrap_or_default();
+    // Primary branch first (submitting the list unchanged must keep it
+    // primary), the rest of the assigned branches after, deduped.
+    let initial_branch_ids: Vec<String> = {
+        let mut ids: Vec<Uuid> = Vec::new();
+        if let Some(existing) = existing.as_ref() {
+            if let Some(primary) = existing.branch_id {
+                ids.push(primary);
+            }
+            for id in &existing.branch_ids {
+                if !ids.contains(id) {
+                    ids.push(*id);
+                }
+            }
+        }
+        ids.into_iter().map(|id| id.to_string()).collect()
+    };
     let initial_role_id =
         existing.as_ref().and_then(|u| u.role_id).map(|id| id.to_string()).unwrap_or_default();
-    let branch_id = RwSignal::new(initial_branch_id.clone());
+    let selected_branch_ids = RwSignal::new(initial_branch_ids.clone());
     let role_id = RwSignal::new(initial_role_id.clone());
+    let toggle_branch = move |id: String, checked: bool| {
+        selected_branch_ids.update(|list| {
+            if checked {
+                if !list.contains(&id) {
+                    list.push(id);
+                }
+            } else {
+                list.retain(|b| b != &id);
+            }
+        });
+    };
     let temporary_password = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
     let submitting = RwSignal::new(false);
@@ -344,18 +375,11 @@ fn UserForm(
             error.set(Some("Choose a role.".to_string()));
             return;
         };
-        let branch_raw = branch_id.get();
-        let branch_uuid = if branch_raw.trim().is_empty() {
-            None
-        } else {
-            match Uuid::parse_str(branch_raw.trim()) {
-                Ok(v) => Some(v),
-                Err(_) => {
-                    error.set(Some("Choose a valid branch.".to_string()));
-                    return;
-                }
-            }
-        };
+        let branch_ids: Vec<Uuid> = selected_branch_ids
+            .get()
+            .iter()
+            .filter_map(|s| Uuid::parse_str(s).ok())
+            .collect();
         let mobile_raw = mobile.get();
         let mobile_value = if mobile_raw.trim().is_empty() { None } else { Some(mobile_raw) };
         let full_name_value = full_name.get();
@@ -374,7 +398,7 @@ fn UserForm(
                             full_name: full_name_value,
                             email: email_value,
                             mobile: mobile_value,
-                            branch_id: branch_uuid,
+                            branch_ids,
                             role_id: role_uuid,
                         },
                     )
@@ -393,7 +417,7 @@ fn UserForm(
                         full_name: full_name_value,
                         email: email_value,
                         mobile: mobile_value,
-                        branch_id: branch_uuid,
+                        branch_ids,
                         role_id: role_uuid,
                         temporary_password: temp_pw,
                     })
@@ -458,23 +482,35 @@ fn UserForm(
                 </select>
             </div>
             <div class="field">
-                <label for="user-branch">"Branch (optional)"</label>
+                <label>"Assigned branches (optional)"</label>
+                <p class="meta">"The first one checked becomes their primary branch."</p>
                 {if branches.is_empty() {
                     view! { <p class="meta">"No branches yet — add one under Settings → Branches."</p> }.into_any()
                 } else {
-                    view! {
-                        <select
-                            id="user-branch"
-                            on:change=move |ev| branch_id.set(event_target_value(&ev))
-                        >
-                            <option value="" selected=initial_branch_id.is_empty()>"No branch"</option>
-                            {branches.into_iter().map(|b| {
-                                let id = b.id.to_string();
-                                let is_selected = id == initial_branch_id;
-                                view! { <option value=id selected=is_selected>{b.name}</option> }
-                            }).collect_view()}
-                        </select>
-                    }.into_any()
+                    branches.into_iter().map(|b| {
+                        let id = b.id.to_string();
+                        let id_for_check = id.clone();
+                        let id_for_toggle = id.clone();
+                        let toggle_branch = toggle_branch;
+                        view! {
+                            <label class="checkbox-field">
+                                <input
+                                    type="checkbox"
+                                    prop:checked=move || selected_branch_ids.get().contains(&id_for_check)
+                                    on:change=move |ev| toggle_branch(id_for_toggle.clone(), event_target_checked(&ev))
+                                />
+                                {b.name}
+                                {move || {
+                                    let ids = selected_branch_ids.get();
+                                    if ids.first() == Some(&id) {
+                                        view! { <span class="meta"> " (primary)"</span> }.into_any()
+                                    } else {
+                                        ().into_any()
+                                    }
+                                }}
+                            </label>
+                        }
+                    }).collect_view().into_any()
                 }}
             </div>
             {if is_edit {

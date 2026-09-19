@@ -77,8 +77,15 @@ pub struct TenantUser {
     pub email: String,
     pub mobile: Option<String>,
     pub is_active: bool,
+    /// Primary branch (`user_branches.is_primary`) — `None` means no
+    /// branch assigned at all. `branch_ids` below is every branch this
+    /// user can access, primary included; this pair, not either alone,
+    /// is what the edit form's multi-select needs to pre-check the
+    /// right boxes and show the right one as primary.
     pub branch_id: Option<Uuid>,
     pub branch_name: Option<String>,
+    pub branch_ids: Vec<Uuid>,
+    pub branch_count: i64,
     /// A user has at most one role, assigned through this same page —
     /// `role_assignments` supports more per user, but nothing in this
     /// tenant-facing UI needs more than one, so `None` here just means
@@ -96,7 +103,10 @@ pub struct CreateUserInput {
     pub full_name: String,
     pub email: String,
     pub mobile: Option<String>,
-    pub branch_id: Option<Uuid>,
+    /// First entry becomes the primary branch — see `TenantUser::
+    /// branch_id`'s doc comment. Empty is valid (no branch assigned
+    /// yet).
+    pub branch_ids: Vec<Uuid>,
     pub role_id: Uuid,
     pub temporary_password: String,
 }
@@ -106,7 +116,7 @@ pub struct UpdateUserInput {
     pub full_name: String,
     pub email: String,
     pub mobile: Option<String>,
-    pub branch_id: Option<Uuid>,
+    pub branch_ids: Vec<Uuid>,
     pub role_id: Uuid,
 }
 

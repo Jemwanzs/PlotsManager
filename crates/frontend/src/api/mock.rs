@@ -724,9 +724,11 @@ impl MockApi {
         let Some(role_name) = db.roles.iter().find(|r| r.id == input.role_id).map(|r| r.name.clone()) else {
             return Err(ApiError::InvalidCredentials("Choose a valid role.".to_string()));
         };
-        let branch_name = input
-            .branch_id
-            .and_then(|bid| db.branches.iter().find(|b| b.id == bid).map(|b| b.name.clone()));
+        let mut branch_ids = input.branch_ids.clone();
+        branch_ids.dedup();
+        let branch_name = branch_ids
+            .first()
+            .and_then(|bid| db.branches.iter().find(|b| b.id == *bid).map(|b| b.name.clone()));
 
         let user = domain::TenantUser {
             id: Uuid::new_v4(),
@@ -734,8 +736,10 @@ impl MockApi {
             email,
             mobile: input.mobile.map(|m| m.trim().to_string()).filter(|m| !m.is_empty()),
             is_active: true,
-            branch_id: input.branch_id,
+            branch_id: branch_ids.first().copied(),
             branch_name,
+            branch_count: branch_ids.len() as i64,
+            branch_ids,
             role_id: Some(input.role_id),
             role_name: Some(role_name),
             last_login_at: None,
@@ -773,9 +777,11 @@ impl MockApi {
         let Some(role_name) = db.roles.iter().find(|r| r.id == input.role_id).map(|r| r.name.clone()) else {
             return Err(ApiError::InvalidCredentials("Choose a valid role.".to_string()));
         };
-        let branch_name = input
-            .branch_id
-            .and_then(|bid| db.branches.iter().find(|b| b.id == bid).map(|b| b.name.clone()));
+        let mut branch_ids = input.branch_ids.clone();
+        branch_ids.dedup();
+        let branch_name = branch_ids
+            .first()
+            .and_then(|bid| db.branches.iter().find(|b| b.id == *bid).map(|b| b.name.clone()));
 
         let old_role_id = db.tenant_users.iter().find(|u| u.id == id).and_then(|u| u.role_id);
 
@@ -783,8 +789,10 @@ impl MockApi {
         user.full_name = full_name;
         user.email = email;
         user.mobile = input.mobile.map(|m| m.trim().to_string()).filter(|m| !m.is_empty());
-        user.branch_id = input.branch_id;
+        user.branch_id = branch_ids.first().copied();
         user.branch_name = branch_name;
+        user.branch_count = branch_ids.len() as i64;
+        user.branch_ids = branch_ids;
         user.role_id = Some(input.role_id);
         user.role_name = Some(role_name);
         let result = user.clone();
@@ -827,6 +835,93 @@ impl MockApi {
         settle(100).await;
         let db = self.db.lock().unwrap();
         Ok(db.branches.clone())
+    }
+
+    pub async fn create_branch(&self, input: domain::CreateBranchInput) -> Result<domain::Branch, ApiError> {
+        settle(250).await;
+        let mut db = self.db.lock().unwrap();
+        let name = input.name.trim().to_string();
+        let code = input.code.trim().to_uppercase();
+        if name.is_empty() {
+            return Err(ApiError::InvalidCredentials("Enter a branch name.".to_string()));
+        }
+        if code.is_empty() {
+            return Err(ApiError::InvalidCredentials("Enter a branch code.".to_string()));
+        }
+        if db.branches.iter().any(|b| b.code == code) {
+            return Err(ApiError::InvalidCredentials(format!(
+                "A branch with code \"{code}\" already exists."
+            )));
+        }
+        let manager_name = input
+            .manager_id
+            .and_then(|mid| db.tenant_users.iter().find(|u| u.id == mid).map(|u| u.full_name.clone()));
+        let branch = domain::Branch {
+            id: Uuid::new_v4(),
+            organization_id: db.organization.id,
+            name,
+            code,
+            region: input.region.map(|r| r.trim().to_string()).filter(|r| !r.is_empty()),
+            location: input.location.map(|r| r.trim().to_string()).filter(|r| !r.is_empty()),
+            contact_name: input.contact_name.map(|r| r.trim().to_string()).filter(|r| !r.is_empty()),
+            contact_phone: input.contact_phone.map(|r| r.trim().to_string()).filter(|r| !r.is_empty()),
+            manager_id: input.manager_id,
+            manager_name,
+            is_active: true,
+        };
+        db.branches.push(branch.clone());
+        Ok(branch)
+    }
+
+    pub async fn update_branch(
+        &self,
+        id: Uuid,
+        input: domain::UpdateBranchInput,
+    ) -> Result<domain::Branch, ApiError> {
+        settle(250).await;
+        let mut db = self.db.lock().unwrap();
+        let name = input.name.trim().to_string();
+        let code = input.code.trim().to_uppercase();
+        if name.is_empty() {
+            return Err(ApiError::InvalidCredentials("Enter a branch name.".to_string()));
+        }
+        if code.is_empty() {
+            return Err(ApiError::InvalidCredentials("Enter a branch code.".to_string()));
+        }
+        if db.branches.iter().any(|b| b.id != id && b.code == code) {
+            return Err(ApiError::InvalidCredentials(format!(
+                "A branch with code \"{code}\" already exists."
+            )));
+        }
+        let manager_name = input
+            .manager_id
+            .and_then(|mid| db.tenant_users.iter().find(|u| u.id == mid).map(|u| u.full_name.clone()));
+        let branch = db.branches.iter_mut().find(|b| b.id == id).ok_or(ApiError::NotFound)?;
+        branch.name = name;
+        branch.code = code;
+        branch.region = input.region.map(|r| r.trim().to_string()).filter(|r| !r.is_empty());
+        branch.location = input.location.map(|r| r.trim().to_string()).filter(|r| !r.is_empty());
+        branch.contact_name = input.contact_name.map(|r| r.trim().to_string()).filter(|r| !r.is_empty());
+        branch.contact_phone = input.contact_phone.map(|r| r.trim().to_string()).filter(|r| !r.is_empty());
+        branch.manager_id = input.manager_id;
+        branch.manager_name = manager_name;
+        Ok(branch.clone())
+    }
+
+    pub async fn activate_branch(&self, id: Uuid) -> Result<domain::Branch, ApiError> {
+        settle(150).await;
+        let mut db = self.db.lock().unwrap();
+        let branch = db.branches.iter_mut().find(|b| b.id == id).ok_or(ApiError::NotFound)?;
+        branch.is_active = true;
+        Ok(branch.clone())
+    }
+
+    pub async fn deactivate_branch(&self, id: Uuid) -> Result<domain::Branch, ApiError> {
+        settle(150).await;
+        let mut db = self.db.lock().unwrap();
+        let branch = db.branches.iter_mut().find(|b| b.id == id).ok_or(ApiError::NotFound)?;
+        branch.is_active = false;
+        Ok(branch.clone())
     }
 
     pub async fn reset_user_password(
@@ -2270,6 +2365,8 @@ fn seed() -> MockDb {
         is_active: true,
         branch_id: None,
         branch_name: None,
+        branch_ids: Vec::new(),
+        branch_count: 0,
         role_id: Some(admin_role_id),
         role_name: Some("Admin".to_string()),
         last_login_at: None,

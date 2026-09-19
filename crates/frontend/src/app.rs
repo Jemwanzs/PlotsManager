@@ -7,11 +7,11 @@ use crate::api::ApiClient;
 use crate::auth::{AuthSignal, CurrencySignal};
 use crate::layout::AppShell;
 use crate::pages::{
-    ApprovalsList, BulkSalesImport, ChangePassword, CustomerDetail, CustomersList, Dashboard,
-    FinanceLoanAccounts, FinanceOverview, LoanAccountDetailPage, Login, NewCustomer, NewProject,
-    NotFound, PlatformOrganizationDetailPage, PlatformOrganizations, ProjectDetail, ProjectsList,
-    QuotationDetailPage, QuotationsList, RecentActivity, Reports, Roles, Settings, Signup,
-    UsersAccess,
+    ApprovalsList, Branches, BulkSalesImport, ChangePassword, CustomerDetail, CustomersList,
+    Dashboard, FinanceLoanAccounts, FinanceOverview, LoanAccountDetailPage, Login, NewCustomer,
+    NewProject, NotFound, PlatformOrganizationDetailPage, PlatformOrganizations, ProjectDetail,
+    ProjectsList, QuotationDetailPage, QuotationsList, RecentActivity, Reports, Roles, Settings,
+    Signup, UsersAccess,
 };
 use crate::theme::{apply_theme, initial_theme, ThemeSignal};
 
@@ -143,6 +143,10 @@ pub fn App() -> impl IntoView {
                 <Route
                     path=(StaticSegment("settings"), StaticSegment("users"))
                     view=|| view! { <AppShell><UsersAccess /></AppShell> }
+                />
+                <Route
+                    path=(StaticSegment("settings"), StaticSegment("branches"))
+                    view=|| view! { <AppShell><Branches /></AppShell> }
                 />
                 <Route
                     path=(StaticSegment("account"), StaticSegment("change-password"))

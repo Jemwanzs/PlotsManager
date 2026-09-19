@@ -25,15 +25,15 @@ use uuid::Uuid;
 
 use domain::{
     AgentPerformanceReport, ApiError, ApprovalRequestSummary, AuthSession, Branch,
-    BulkImportResult, BulkSaleRow, ChangePasswordInput, CreateCustomerInput, CreatePlotInput,
-    CreateProjectInput, CreateQuotationInput, CreateRoleInput, CreateSaleInput, CreateUserInput,
-    CustomerDetail, CustomerSummary, DashboardSummary, DecideApprovalInput, GeneratedNumber,
-    InventoryReport, LinkPlotInput, LoanAccountDetail, LoanAccountSummary, LoginInput,
-    MapPolygons, OrganizationSettings, PlatformOrganizationDetail, PlatformOrganizationSummary,
-    PlotWithColor, ProjectMapSummary, ProjectSummary, QuotationDetail, QuotationSummary,
-    RecordPaymentInput, ResetPasswordInput, Role, SalesReport, SignupInput, TenantUser,
-    UpdateLeadInput, UpdateMapPolygonsInput, UpdateOrganizationSettingsInput, UpdatePlotInput,
-    UpdateRoleInput, UpdateUserInput,
+    BulkImportResult, BulkSaleRow, ChangePasswordInput, CreateBranchInput, CreateCustomerInput,
+    CreatePlotInput, CreateProjectInput, CreateQuotationInput, CreateRoleInput, CreateSaleInput,
+    CreateUserInput, CustomerDetail, CustomerSummary, DashboardSummary, DecideApprovalInput,
+    GeneratedNumber, InventoryReport, LinkPlotInput, LoanAccountDetail, LoanAccountSummary,
+    LoginInput, MapPolygons, OrganizationSettings, PlatformOrganizationDetail,
+    PlatformOrganizationSummary, PlotWithColor, ProjectMapSummary, ProjectSummary,
+    QuotationDetail, QuotationSummary, RecordPaymentInput, ResetPasswordInput, Role, SalesReport,
+    SignupInput, TenantUser, UpdateBranchInput, UpdateLeadInput, UpdateMapPolygonsInput,
+    UpdateOrganizationSettingsInput, UpdatePlotInput, UpdateRoleInput, UpdateUserInput,
 };
 
 #[derive(Clone)]
@@ -573,6 +573,22 @@ impl HttpApi {
 
     pub async fn list_branches(&self) -> Result<Vec<Branch>, ApiError> {
         self.get("/api/v1/branches").await
+    }
+
+    pub async fn create_branch(&self, input: CreateBranchInput) -> Result<Branch, ApiError> {
+        self.post("/api/v1/branches", &input).await
+    }
+
+    pub async fn update_branch(&self, id: Uuid, input: UpdateBranchInput) -> Result<Branch, ApiError> {
+        self.put(&format!("/api/v1/branches/{id}"), &input).await
+    }
+
+    pub async fn activate_branch(&self, id: Uuid) -> Result<Branch, ApiError> {
+        self.put(&format!("/api/v1/branches/{id}/activate"), &()).await
+    }
+
+    pub async fn deactivate_branch(&self, id: Uuid) -> Result<Branch, ApiError> {
+        self.put(&format!("/api/v1/branches/{id}/deactivate"), &()).await
     }
 
     pub async fn reset_user_password(

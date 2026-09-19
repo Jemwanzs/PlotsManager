@@ -1,4 +1,5 @@
 mod approvals_list;
+mod branches;
 mod bulk_sales_import;
 mod change_password;
 mod customer_detail;
@@ -25,6 +26,7 @@ mod signup;
 mod users_access;
 
 pub use approvals_list::ApprovalsList;
+pub use branches::Branches;
 pub use bulk_sales_import::BulkSalesImport;
 pub use change_password::ChangePassword;
 pub use customer_detail::CustomerDetail;

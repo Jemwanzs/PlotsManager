@@ -167,6 +167,7 @@ fn sidebar_nav_groups(is_platform_owner: bool) -> Vec<NavGroup> {
                 NavChild { href: "/settings", label: "General settings" },
                 NavChild { href: "/settings#numbering", label: "Numbering configuration" },
                 NavChild { href: "/settings/users", label: "Users & access" },
+                NavChild { href: "/settings/branches", label: "Branches" },
                 NavChild { href: "/settings/roles", label: "Roles & permissions" },
                 NavChild { href: "/account/change-password", label: "Change my password" },
             ],
