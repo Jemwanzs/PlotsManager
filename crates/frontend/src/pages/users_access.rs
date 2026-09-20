@@ -132,6 +132,13 @@ fn UserRow(
     let revoking = RwSignal::new(false);
     let user_id = user.id;
     let is_active = user.is_active;
+    // The platform owner's own account happens to live inside this
+    // tenant like any other user (see `TenantUser::is_platform_owner`'s
+    // doc comment) — deactivating or revoking it here would lock out
+    // the one cross-tenant admin account, so those two actions are
+    // grayed out for this row specifically. Backend has the same guard
+    // (`ensure_not_platform_owner` in `routes/users.rs`) as a backstop.
+    let is_platform_owner_row = user.is_platform_owner;
 
     let on_toggle_active = {
         let api = api.clone();
@@ -213,7 +220,19 @@ fn UserRow(
                 </button>
                 <button
                     type="button"
-                    class=if is_active { "btn btn-danger" } else { "btn btn-secondary" }
+                    class=if is_platform_owner_row && is_active {
+                        "btn btn-secondary"
+                    } else if is_active {
+                        "btn btn-danger"
+                    } else {
+                        "btn btn-secondary"
+                    }
+                    disabled=is_platform_owner_row && is_active
+                    title=if is_platform_owner_row && is_active {
+                        "The platform owner's account can't be deactivated from here."
+                    } else {
+                        ""
+                    }
                     on:click=on_toggle_active
                 >
                     {if is_active { "Deactivate" } else { "Activate" }}
@@ -225,7 +244,17 @@ fn UserRow(
                 >
                     {move || if resetting.get() { "Cancel" } else { "Reset password" }}
                 </button>
-                <button type="button" class="btn btn-secondary" disabled=revoking on:click=on_revoke_sessions>
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    disabled=move || is_platform_owner_row || revoking.get()
+                    title=if is_platform_owner_row {
+                        "The platform owner's sessions can't be revoked from here."
+                    } else {
+                        ""
+                    }
+                    on:click=on_revoke_sessions
+                >
                     {move || if revoking.get() { "Revoking…" } else { "Revoke sessions" }}
                 </button>
             </td>

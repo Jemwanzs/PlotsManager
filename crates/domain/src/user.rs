@@ -77,6 +77,12 @@ pub struct TenantUser {
     pub email: String,
     pub mobile: Option<String>,
     pub is_active: bool,
+    /// True only for the one platform-owner account, which happens to
+    /// live inside its own tenant like any other user and so shows up
+    /// in that tenant's own Users & Access list. The frontend uses this
+    /// to gray out Deactivate/Revoke sessions for that row — see
+    /// `crates/frontend/src/pages/users_access.rs`.
+    pub is_platform_owner: bool,
     /// Primary branch (`user_branches.is_primary`) — `None` means no
     /// branch assigned at all. `branch_ids` below is every branch this
     /// user can access, primary included; this pair, not either alone,

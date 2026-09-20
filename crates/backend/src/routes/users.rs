@@ -46,6 +46,7 @@ struct TenantUserRow {
     email: String,
     mobile: Option<String>,
     is_active: bool,
+    is_platform_owner: bool,
     branch_id: Option<Uuid>,
     branch_name: Option<String>,
     branch_ids: Vec<Uuid>,
@@ -66,6 +67,7 @@ impl TenantUserRow {
             email: self.email,
             mobile: self.mobile,
             is_active: self.is_active,
+            is_platform_owner: self.is_platform_owner,
             branch_id: self.branch_id,
             branch_name: self.branch_name,
             branch_ids: self.branch_ids,
@@ -82,7 +84,7 @@ impl TenantUserRow {
 
 const USER_LIST_QUERY: &str = r#"
     select
-        u.id, u.full_name, u.email, u.mobile, u.is_active, u.branch_id,
+        u.id, u.full_name, u.email, u.mobile, u.is_active, u.is_platform_owner, u.branch_id,
         b.name as branch_name,
         coalesce((select array_agg(ub.branch_id) from user_branches ub where ub.user_id = u.id), '{}') as branch_ids,
         (select count(*) from user_branches ub where ub.user_id = u.id) as branch_count,
@@ -128,6 +130,31 @@ async fn ensure_user_in_org(state: &AppState, user_id: Uuid, organization_id: Uu
         Ok(())
     } else {
         Err(AppError::NotFound)
+    }
+}
+
+/// The platform owner's own user row lives inside their own tenant
+/// (same as any other admin) and shows up in that tenant's own Users &
+/// Access list — but deactivating or revoking that account from inside
+/// a regular tenant-admin flow would lock out the one cross-tenant
+/// admin account, including the `/platform/*` pages that could undo
+/// it. Mirrors `routes/platform.rs`'s guard against ever deactivating
+/// the platform owner's organization; this is the equivalent for the
+/// user row. The frontend also grays these actions out for this user
+/// (`crates/frontend/src/pages/users_access.rs`) — this is the
+/// server-side backstop.
+async fn ensure_not_platform_owner(state: &AppState, user_id: Uuid) -> Result<(), AppError> {
+    let is_owner: bool =
+        sqlx::query_scalar("select is_platform_owner from users where id = $1")
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await?;
+    if is_owner {
+        Err(AppError::bad_request(
+            "The platform owner's account can't be deactivated or have its sessions revoked from here.",
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -429,6 +456,9 @@ async fn set_active(
     if !active && id == auth.user_id {
         return Err(AppError::bad_request("You can't deactivate your own account."));
     }
+    if !active {
+        ensure_not_platform_owner(state, id).await?;
+    }
 
     // Deactivating someone shouldn't leave their already-issued session
     // token working until it expires on its own (up to 24h) — the same
@@ -543,6 +573,7 @@ async fn revoke_sessions(
 ) -> Result<Json<TenantUser>, AppError> {
     auth.require_permission(PERM_MANAGE_SESSIONS)?;
     ensure_user_in_org(&state, id, auth.organization_id).await?;
+    ensure_not_platform_owner(&state, id).await?;
 
     sqlx::query("update users set session_valid_after = now() where id = $1")
         .bind(id)
