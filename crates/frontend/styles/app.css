@@ -1235,6 +1235,19 @@ a {
   }
 }
 
+/* Plot Details' commercial-position summary
+   (pages/project_detail.rs::PlotCommercialPosition) — reuses
+   .form-grid-2's column layout, just needs its own row spacing since
+   each cell here is a label+value pair, not a form field. */
+.commercial-position {
+  margin: var(--space-3) 0 var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+.commercial-position-grid {
+  row-gap: var(--space-3);
+}
+
 .project-card {
   display: block;
   text-decoration: none;

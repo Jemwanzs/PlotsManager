@@ -494,6 +494,56 @@ impl MockApi {
         Ok(plot.clone())
     }
 
+    pub async fn get_plot_commercial_summary(
+        &self,
+        project_id: Uuid,
+        plot_id: Uuid,
+    ) -> Result<domain::PlotCommercialSummary, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+        let plot = db
+            .plots
+            .iter()
+            .find(|p| p.id == plot_id && p.project_id == project_id)
+            .ok_or(ApiError::NotFound)?
+            .clone();
+        let (status_label, status_color) = domain::plot_status_meta(plot.status);
+
+        let sale = db
+            .sales
+            .iter()
+            .filter(|s| s.plot_id == plot_id)
+            .max_by_key(|s| s.created_at)
+            .and_then(|s| {
+                let customer = db.customers.iter().find(|c| c.id == s.customer_id)?;
+                let loan_account = db.loan_accounts.iter().find(|l| l.sale_id == s.id).cloned();
+                let (loan_status_label, loan_status_color) = match &loan_account {
+                    Some(l) => {
+                        let (label, color) = domain::loan_status_meta(l.status);
+                        (Some(label.to_string()), Some(color.to_string()))
+                    }
+                    None => (None, None),
+                };
+                Some(domain::PlotSaleSummary {
+                    customer_id: customer.id,
+                    customer_name: customer.full_name.clone(),
+                    payment_mode: s.payment_mode,
+                    agreed_price: s.agreed_price,
+                    created_at: s.created_at,
+                    loan_account,
+                    loan_status_label,
+                    loan_status_color,
+                })
+            });
+
+        Ok(domain::PlotCommercialSummary {
+            plot,
+            status_label: status_label.to_string(),
+            status_color: status_color.to_string(),
+            sale,
+        })
+    }
+
     pub async fn list_customers(&self) -> Result<Vec<CustomerSummary>, ApiError> {
         settle(150).await;
         let db = self.db.lock().unwrap();

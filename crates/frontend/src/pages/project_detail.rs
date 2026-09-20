@@ -14,7 +14,7 @@ use crate::api::{
 use crate::auth::{has_permission, use_api, use_auth, use_currency};
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
 use crate::csv_import::{self, ParsedRow};
-use crate::format::format_money;
+use crate::format::{format_money, format_payment_mode};
 use domain::{
     MapFeature, MapPolygons, PaymentMode, PlotStatus, PERM_PLOTS_BULK_IMPORT, PERM_PLOTS_CREATE,
     PERM_PLOTS_EDIT, PERM_PLOTS_MAP_EDIT_BOUNDARIES, PERM_PLOTS_MAP_LINK, PERM_PLOTS_MAP_UPLOAD,
@@ -323,6 +323,8 @@ pub fn ProjectDetail() -> impl IntoView {
                             <p>"Dimensions: " {dimensions_text}</p>
                             {pwc.plot.title_number.clone().map(|t| view! { <p>"Title: " {t}</p> })}
 
+                            <PlotCommercialPosition project_id=pwc.plot.project_id plot_id=plot_id />
+
                             {can_edit_plot.then(|| view! {
                                 <button
                                     type="button"
@@ -527,7 +529,7 @@ fn AddPlotForm(
                         disabled=generating
                         on:click=on_generate
                     >
-                        {move || if generating.get() { "…" } else { "Auto-generate" }}
+                        {move || if generating.get() { "…" } else { "Generate..." }}
                     </button>
                 </div>
             </div>
@@ -941,6 +943,116 @@ fn BulkPlotImport(project_id: Uuid, on_imported: impl Fn() + Clone + Send + 'sta
                     })}
                 </div>
             })}
+        </div>
+    }
+}
+
+/// The plot's full commercial position — reservation/sale, buyer,
+/// purchase type, and (for Lipa Pole Pole) the linked loan account's
+/// payment/finance position, all in one place so a director doesn't
+/// have to cross-reference the Finance module to answer "where does
+/// this plot actually stand?" Plot Status (the badge above this, in
+/// the caller) and Finance Status here are deliberately two separate
+/// fields, never merged into one — a plot can be Sold while its
+/// account is still merely Performing, and collapsing that into a
+/// single status would hide exactly the distinction this exists to
+/// show.
+#[component]
+fn PlotCommercialPosition(project_id: Uuid, plot_id: Uuid) -> impl IntoView {
+    let api = use_api();
+    let currency = use_currency();
+
+    let summary = LocalResource::new(move || {
+        let api = api.clone();
+        async move { api.get_plot_commercial_summary(project_id, plot_id).await }
+    });
+
+    view! {
+        <div class="commercial-position">
+            <Suspense fallback=|| view! { <LoadingState label="Loading commercial position…" /> }>
+                {move || {
+                    let currency = currency.get();
+                    summary
+                        .get()
+                        .map(|wrapped| wrapped.take())
+                        .map(move |result| match result {
+                            Ok(s) => match s.sale {
+                                None => view! {
+                                    <p class="meta">"Available — No active reservation or buyer."</p>
+                                }.into_any(),
+                                Some(sale) => {
+                                    let purchase_type = format_payment_mode(sale.payment_mode);
+                                    view! {
+                                        <div class="form-grid-2 commercial-position-grid">
+                                            <div>
+                                                <span class="meta">"Customer / Buyer"</span>
+                                                <p class="mt-0">{sale.customer_name.clone()}</p>
+                                            </div>
+                                            <div>
+                                                <span class="meta">"Purchase Type"</span>
+                                                <p class="mt-0">{purchase_type}</p>
+                                            </div>
+                                            <div>
+                                                <span class="meta">"Selling Price"</span>
+                                                <p class="mt-0">{format_money(sale.agreed_price, &currency)}</p>
+                                            </div>
+                                            {match &sale.loan_account {
+                                                None => view! {
+                                                    <div>
+                                                        <span class="meta">"Payment Status"</span>
+                                                        <p class="mt-0">"Paid in full (cash)"</p>
+                                                    </div>
+                                                }.into_any(),
+                                                Some(loan) => {
+                                                    let label = sale.loan_status_label.clone().unwrap_or_default();
+                                                    let color = sale.loan_status_color.clone().unwrap_or_else(|| "#6b7280".to_string());
+                                                    let interest_text = match loan.interest_rate {
+                                                        Some(rate) => format!("{rate}% p.a."),
+                                                        None => "No interest".to_string(),
+                                                    };
+                                                    view! {
+                                                        <div>
+                                                            <span class="meta">"Deposit"</span>
+                                                            <p class="mt-0">
+                                                                {format_money(loan.deposit_paid, &currency)} " of "
+                                                                {format_money(loan.deposit_required, &currency)}
+                                                            </p>
+                                                        </div>
+                                                        <div>
+                                                            <span class="meta">"Total Paid"</span>
+                                                            <p class="mt-0">{format_money(loan.amount_paid, &currency)}</p>
+                                                        </div>
+                                                        <div>
+                                                            <span class="meta">"Outstanding Balance"</span>
+                                                            <p class="mt-0">{format_money(loan.outstanding_balance, &currency)}</p>
+                                                        </div>
+                                                        <div>
+                                                            <span class="meta">"Finance Status"</span>
+                                                            <p class="mt-0"><StatusBadge label=label color=color /></p>
+                                                        </div>
+                                                        <div>
+                                                            <span class="meta">"Interest"</span>
+                                                            <p class="mt-0">{interest_text}</p>
+                                                        </div>
+                                                        {(loan.days_in_arrears > 0).then(|| view! {
+                                                            <div>
+                                                                <span class="meta">"Days Overdue"</span>
+                                                                <p class="mt-0" style="color: var(--color-danger); font-weight: 700;">
+                                                                    {loan.days_in_arrears}
+                                                                </p>
+                                                            </div>
+                                                        })}
+                                                    }.into_any()
+                                                }
+                                            }}
+                                        </div>
+                                    }.into_any()
+                                }
+                            },
+                            Err(e) => view! { <ErrorAlert message=format!("Couldn't load this plot's commercial position: {e}") /> }.into_any(),
+                        })
+                }}
+            </Suspense>
         </div>
     }
 }

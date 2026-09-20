@@ -16,6 +16,41 @@ use crate::{
     PlotLoanAccount, PlotStatusCount, ProjectStatus, Quotation, User,
 };
 
+/// The full commercial position of one plot — what shows in Plot
+/// Details when clicked from the grid, the map, or search
+/// (`GET /api/v1/projects/:id/plots/:plot_id/commercial-summary`,
+/// `crates/backend/src/routes/projects.rs`). Deliberately not part of
+/// `PlotWithColor`/the plots-list response: the list renders a whole
+/// project's plots at once (mostly `Available`, no sale to join), so
+/// this join only runs for the one plot actually opened. `sale` is
+/// `None` for an untouched plot — no reservation, no buyer, nothing
+/// else on this type is meaningful.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlotCommercialSummary {
+    pub plot: Plot,
+    pub status_label: String,
+    pub status_color: String,
+    pub sale: Option<PlotSaleSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlotSaleSummary {
+    pub customer_id: Uuid,
+    pub customer_name: String,
+    pub payment_mode: PaymentMode,
+    pub agreed_price: Decimal,
+    pub created_at: DateTime<Utc>,
+    /// `None` for a full-cash sale — no loan account exists for one,
+    /// it's paid in full the moment it's recorded (see
+    /// `routes/sales.rs::execute_sale`'s own docs on why). Carries
+    /// `PlotLoanAccount` wholesale rather than duplicating its fields
+    /// here — Deposit Required/Paid, Amount Paid, Outstanding Balance,
+    /// Interest Rate, and Days in Arrears are all already on it.
+    pub loan_account: Option<PlotLoanAccount>,
+    pub loan_status_label: Option<String>,
+    pub loan_status_color: Option<String>,
+}
+
 /// One row of the organization-wide Finance → Loan Accounts list
 /// (`GET /api/v1/finance/loan-accounts`) — every Lipa Pole Pole
 /// receivable across every project, which nothing surfaced as a single

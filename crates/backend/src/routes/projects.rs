@@ -3,8 +3,9 @@ use axum::{extract::State, routing::get, routing::post, routing::put, Json, Rout
 use chrono::{DateTime, Utc};
 use domain::{
     BulkImportResult, BulkImportRowError, CreatePlotInput, CreateProjectInput, Plot,
-    PlotWithColor, Project, ProjectSummary, UpdatePlotInput, PERM_PLOTS_BULK_IMPORT,
-    PERM_PLOTS_CREATE, PERM_PLOTS_EDIT, PERM_PROJECTS_CREATE,
+    PlotCommercialSummary, PlotLoanAccount, PlotSaleSummary, PlotWithColor, Project,
+    ProjectSummary, UpdatePlotInput, PERM_PLOTS_BULK_IMPORT, PERM_PLOTS_CREATE, PERM_PLOTS_EDIT,
+    PERM_PROJECTS_CREATE,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -26,6 +27,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/:project_id/plots/:plot_id",
             put(update_plot),
+        )
+        .route(
+            "/api/v1/projects/:project_id/plots/:plot_id/commercial-summary",
+            get(get_plot_commercial_summary),
         )
 }
 
@@ -457,4 +462,160 @@ pub(crate) async fn ensure_project_in_org(
     } else {
         Err(AppError::NotFound)
     }
+}
+
+#[derive(sqlx::FromRow)]
+struct PlotCommercialRow {
+    // plot
+    id: Uuid,
+    project_id: Uuid,
+    plot_number: String,
+    title_number: Option<String>,
+    size: Decimal,
+    side_1: Option<Decimal>,
+    side_2: Option<Decimal>,
+    dimension_unit: String,
+    asking_price: Decimal,
+    minimum_price: Decimal,
+    status: String,
+    map_feature_id: Option<String>,
+    assigned_customer_id: Option<Uuid>,
+    created_at: DateTime<Utc>,
+    // sale (null when the plot has never had one)
+    customer_id: Option<Uuid>,
+    customer_name: Option<String>,
+    payment_mode: Option<String>,
+    agreed_price: Option<Decimal>,
+    sale_created_at: Option<DateTime<Utc>>,
+    // loan account (null for a full-cash sale, or no sale at all)
+    loan_id: Option<Uuid>,
+    account_number: Option<String>,
+    sale_id: Option<Uuid>,
+    principal: Option<Decimal>,
+    interest_rate: Option<Decimal>,
+    deposit_required: Option<Decimal>,
+    deposit_paid: Option<Decimal>,
+    instalment_amount: Option<Decimal>,
+    repayment_frequency_days: Option<i32>,
+    start_date: Option<chrono::NaiveDate>,
+    loan_status: Option<String>,
+    amount_paid: Option<Decimal>,
+    outstanding_balance: Option<Decimal>,
+    days_in_arrears: Option<i32>,
+}
+
+/// The full commercial position behind one plot — reservation/sale,
+/// buyer, purchase type, and (for Lipa Pole Pole) the linked loan
+/// account, all in one call. Only runs this join for the one plot
+/// actually opened (see `PlotCommercialSummary`'s own docs on why
+/// this isn't folded into `list_plots`).
+async fn get_plot_commercial_summary(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((project_id, plot_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<PlotCommercialSummary>, AppError> {
+    ensure_project_in_org(&state, project_id, auth.organization_id).await?;
+
+    let row: Option<PlotCommercialRow> = sqlx::query_as(
+        r#"
+        select pl.id, pl.project_id, pl.plot_number, pl.title_number, pl.size, pl.side_1, pl.side_2,
+            pl.dimension_unit, pl.asking_price, pl.minimum_price, pl.status, pl.map_feature_id,
+            pl.assigned_customer_id, pl.created_at,
+            ps.customer_id, c.full_name as customer_name, ps.payment_mode, ps.agreed_price,
+            ps.created_at as sale_created_at,
+            pla.id as loan_id, pla.account_number, pla.sale_id, pla.principal, pla.interest_rate,
+            pla.deposit_required, pla.deposit_paid, pla.instalment_amount, pla.repayment_frequency_days,
+            pla.start_date, pla.status as loan_status, pla.amount_paid, pla.outstanding_balance,
+            pla.days_in_arrears
+        from plots pl
+        left join plot_sales ps on ps.id = (
+            select id from plot_sales where plot_id = pl.id order by created_at desc limit 1
+        )
+        left join customers c on c.id = ps.customer_id
+        left join plot_loan_accounts pla on pla.sale_id = ps.id
+        where pl.id = $1 and pl.project_id = $2
+        "#,
+    )
+    .bind(plot_id)
+    .bind(project_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let row = row.ok_or(AppError::NotFound)?;
+
+    let status: domain::PlotStatus = from_pg("plots.status", &row.status)?;
+    let (status_label, status_color) = domain::plot_status_meta(status);
+
+    let sale = match (row.customer_id, row.customer_name, row.payment_mode, row.agreed_price, row.sale_created_at) {
+        (Some(customer_id), Some(customer_name), Some(payment_mode), Some(agreed_price), Some(created_at)) => {
+            let loan_account = match (
+                row.loan_id, row.account_number, row.sale_id, row.principal, row.deposit_required,
+                row.deposit_paid, row.instalment_amount, row.repayment_frequency_days, row.start_date,
+                row.loan_status.clone(), row.amount_paid, row.outstanding_balance, row.days_in_arrears,
+            ) {
+                (
+                    Some(id), Some(account_number), Some(sale_id), Some(principal), Some(deposit_required),
+                    Some(deposit_paid), Some(instalment_amount), Some(repayment_frequency_days), Some(start_date),
+                    Some(loan_status_raw), Some(amount_paid), Some(outstanding_balance), Some(days_in_arrears),
+                ) => Some(PlotLoanAccount {
+                    id,
+                    account_number,
+                    sale_id,
+                    principal,
+                    interest_rate: row.interest_rate,
+                    deposit_required,
+                    deposit_paid,
+                    instalment_amount,
+                    repayment_frequency_days,
+                    start_date,
+                    status: from_pg("plot_loan_accounts.status", &loan_status_raw)?,
+                    amount_paid,
+                    outstanding_balance,
+                    days_in_arrears,
+                }),
+                _ => None,
+            };
+            let (loan_status_label, loan_status_color) = match &loan_account {
+                Some(l) => {
+                    let (label, color) = domain::loan_status_meta(l.status);
+                    (Some(label.to_string()), Some(color.to_string()))
+                }
+                None => (None, None),
+            };
+
+            Some(PlotSaleSummary {
+                customer_id,
+                customer_name,
+                payment_mode: from_pg("plot_sales.payment_mode", &payment_mode)?,
+                agreed_price,
+                created_at,
+                loan_account,
+                loan_status_label,
+                loan_status_color,
+            })
+        }
+        _ => None,
+    };
+
+    Ok(Json(PlotCommercialSummary {
+        plot: Plot {
+            id: row.id,
+            project_id: row.project_id,
+            plot_number: row.plot_number,
+            title_number: row.title_number,
+            size: row.size,
+            side_1: row.side_1,
+            side_2: row.side_2,
+            dimension_unit: row.dimension_unit,
+            asking_price: row.asking_price,
+            minimum_price: row.minimum_price,
+            status,
+            map_feature_id: row.map_feature_id,
+            assigned_customer_id: row.assigned_customer_id,
+            created_at: row.created_at,
+        },
+        status_label: status_label.to_string(),
+        status_color: status_color.to_string(),
+        sale,
+    }))
 }

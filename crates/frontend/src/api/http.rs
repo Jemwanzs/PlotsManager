@@ -30,7 +30,8 @@ use domain::{
     CreateUserInput, CustomerDetail, CustomerSummary, DashboardAnalytics, DashboardSummary,
     DecideApprovalInput, GeneratedNumber, InventoryReport, LinkPlotInput, LoanAccountDetail,
     LoanAccountSummary, LoginInput, MapPolygons, OrganizationSettings, PermissionDef,
-    PlatformOrganizationDetail, PlatformOrganizationSummary, PlotWithColor, ProjectMapSummary, ProjectSummary,
+    PlatformOrganizationDetail, PlatformOrganizationSummary, PlotCommercialSummary, PlotWithColor,
+    ProjectMapSummary, ProjectSummary,
     QuotationDetail, QuotationSummary, RecordPaymentInput, RejectOrganizationInput,
     ResetPasswordInput, Role, SalesReport, SignupInput, SignupResult, TenantUser, TermsVersion,
     UpdateBranchInput, UpdateLeadInput, UpdateMapPolygonsInput, UpdateOrganizationSettingsInput,
@@ -227,6 +228,14 @@ impl HttpApi {
     ) -> Result<domain::Plot, ApiError> {
         let path = format!("/api/v1/projects/{project_id}/plots/{plot_id}");
         self.put(&path, &input).await
+    }
+
+    pub async fn get_plot_commercial_summary(
+        &self,
+        project_id: Uuid,
+        plot_id: Uuid,
+    ) -> Result<PlotCommercialSummary, ApiError> {
+        self.get(&format!("/api/v1/projects/{project_id}/plots/{plot_id}/commercial-summary")).await
     }
 
     pub async fn list_customers(&self) -> Result<Vec<CustomerSummary>, ApiError> {
