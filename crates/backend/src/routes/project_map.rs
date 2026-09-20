@@ -28,7 +28,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
-use domain::{CreatePlotInput, LinkPlotInput, MapPolygons, ProjectMapSummary, UpdateMapPolygonsInput};
+use domain::{
+    CreatePlotInput, LinkPlotInput, MapPolygons, ProjectMapSummary, UpdateMapPolygonsInput,
+    PERM_PLOTS_MAP_EDIT_BOUNDARIES, PERM_PLOTS_MAP_LINK, PERM_PLOTS_MAP_UPLOAD,
+};
 use uuid::Uuid;
 
 use crate::auth::verify_session_token;
@@ -121,6 +124,8 @@ async fn upload_map_image(
     Path(project_id): Path<Uuid>,
     mut multipart: Multipart,
 ) -> Result<Json<ProjectMapSummary>, AppError> {
+    auth.require_permission(PERM_PLOTS_MAP_UPLOAD)?;
+
     let Some(org_id) = project_organization_id(&state.db, project_id).await? else {
         return Err(AppError::NotFound);
     };
@@ -214,6 +219,8 @@ async fn update_polygons(
     Path(project_id): Path<Uuid>,
     Json(input): Json<UpdateMapPolygonsInput>,
 ) -> Result<Json<ProjectMapSummary>, AppError> {
+    auth.require_permission(PERM_PLOTS_MAP_EDIT_BOUNDARIES)?;
+
     let Some(org_id) = project_organization_id(&state.db, project_id).await? else {
         return Err(AppError::NotFound);
     };
@@ -306,6 +313,7 @@ async fn create_plot_for_feature(
     Path((project_id, feature_id)): Path<(Uuid, String)>,
     Json(input): Json<CreatePlotInput>,
 ) -> Result<Json<ProjectMapSummary>, AppError> {
+    auth.require_permission(PERM_PLOTS_MAP_LINK)?;
     ensure_project_in_org(&state, project_id, auth.organization_id).await?;
 
     let mut polygons = load_polygons(&state, project_id).await?;
@@ -335,6 +343,7 @@ async fn link_plot_to_feature(
     Path((project_id, feature_id)): Path<(Uuid, String)>,
     Json(input): Json<LinkPlotInput>,
 ) -> Result<Json<ProjectMapSummary>, AppError> {
+    auth.require_permission(PERM_PLOTS_MAP_LINK)?;
     ensure_project_in_org(&state, project_id, auth.organization_id).await?;
 
     let plot_ok: bool = sqlx::query_scalar(
@@ -384,6 +393,7 @@ async fn unlink_feature(
     auth: AuthUser,
     Path((project_id, feature_id)): Path<(Uuid, String)>,
 ) -> Result<Json<ProjectMapSummary>, AppError> {
+    auth.require_permission(PERM_PLOTS_MAP_LINK)?;
     ensure_project_in_org(&state, project_id, auth.organization_id).await?;
 
     let mut polygons = load_polygons(&state, project_id).await?;

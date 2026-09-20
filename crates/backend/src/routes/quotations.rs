@@ -12,7 +12,8 @@ use axum::{extract::State, routing::get, Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
 use domain::{
     CreateQuotationInput, PaymentMode, Quotation, QuotationDetail, QuotationStatus,
-    QuotationSummary,
+    QuotationSummary, PERM_QUOTES_ACCEPT, PERM_QUOTES_CREATE, PERM_QUOTES_REJECT,
+    PERM_QUOTES_SEND,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -129,6 +130,8 @@ async fn create_quotation(
     auth: AuthUser,
     Json(input): Json<CreateQuotationInput>,
 ) -> Result<Json<Quotation>, AppError> {
+    auth.require_permission(PERM_QUOTES_CREATE)?;
+
     if input.quoted_price <= Decimal::ZERO {
         return Err(AppError::bad_request(
             "Enter a quoted price greater than zero.",
@@ -316,6 +319,7 @@ async fn send_quotation(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Quotation>, AppError> {
+    auth.require_permission(PERM_QUOTES_SEND)?;
     transition(&state, auth.organization_id, id, QuotationStatus::Draft, QuotationStatus::Sent).await
 }
 
@@ -324,6 +328,7 @@ async fn reject_quotation(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Quotation>, AppError> {
+    auth.require_permission(PERM_QUOTES_REJECT)?;
     transition(&state, auth.organization_id, id, QuotationStatus::Sent, QuotationStatus::Rejected).await
 }
 
@@ -376,6 +381,8 @@ async fn accept_quotation(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Quotation>, AppError> {
+    auth.require_permission(PERM_QUOTES_ACCEPT)?;
+
     let mut tx = state.db.begin().await?;
 
     let existing: Option<(String, Uuid, Uuid, String, Decimal, Option<Uuid>)> = sqlx::query_as(

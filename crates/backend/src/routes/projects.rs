@@ -3,7 +3,8 @@ use axum::{extract::State, routing::get, routing::post, routing::put, Json, Rout
 use chrono::{DateTime, Utc};
 use domain::{
     BulkImportResult, BulkImportRowError, CreatePlotInput, CreateProjectInput, Plot,
-    PlotWithColor, Project, ProjectSummary, UpdatePlotInput,
+    PlotWithColor, Project, ProjectSummary, UpdatePlotInput, PERM_PLOTS_BULK_IMPORT,
+    PERM_PLOTS_CREATE, PERM_PLOTS_EDIT, PERM_PROJECTS_CREATE,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -120,6 +121,8 @@ async fn create_project(
     auth: AuthUser,
     Json(input): Json<CreateProjectInput>,
 ) -> Result<Json<Project>, AppError> {
+    auth.require_permission(PERM_PROJECTS_CREATE)?;
+
     let name = input.name.trim();
     let code = input.code.trim().to_uppercase();
     let location = input.location.trim();
@@ -267,6 +270,7 @@ async fn create_plot(
     Path(project_id): Path<Uuid>,
     Json(input): Json<CreatePlotInput>,
 ) -> Result<Json<Plot>, AppError> {
+    auth.require_permission(PERM_PLOTS_CREATE)?;
     ensure_project_in_org(&state, project_id, auth.organization_id).await?;
     Ok(Json(insert_plot(&state, project_id, &input).await?))
 }
@@ -349,6 +353,7 @@ async fn update_plot(
     Path((project_id, plot_id)): Path<(Uuid, Uuid)>,
     Json(input): Json<UpdatePlotInput>,
 ) -> Result<Json<Plot>, AppError> {
+    auth.require_permission(PERM_PLOTS_EDIT)?;
     ensure_project_in_org(&state, project_id, auth.organization_id).await?;
 
     let plot_number = input.plot_number.trim();
@@ -414,6 +419,7 @@ async fn bulk_create_plots(
     Path(project_id): Path<Uuid>,
     Json(inputs): Json<Vec<CreatePlotInput>>,
 ) -> Result<Json<BulkImportResult>, AppError> {
+    auth.require_permission(PERM_PLOTS_BULK_IMPORT)?;
     ensure_project_in_org(&state, project_id, auth.organization_id).await?;
 
     let mut created = 0u32;

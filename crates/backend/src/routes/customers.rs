@@ -4,7 +4,8 @@ use axum::{extract::State, routing::get, Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
 use domain::{
     BulkImportResult, BulkImportRowError, Customer, CustomerDetail, CustomerSaleView,
-    CustomerSummary, CreateCustomerInput, UpdateLeadInput,
+    CustomerSummary, CreateCustomerInput, UpdateLeadInput, PERM_CUSTOMERS_BULK_IMPORT,
+    PERM_CUSTOMERS_CREATE, PERM_CUSTOMERS_LEADS_UPDATE,
 };
 use uuid::Uuid;
 
@@ -136,6 +137,7 @@ async fn create_customer(
     auth: AuthUser,
     Json(input): Json<CreateCustomerInput>,
 ) -> Result<Json<Customer>, AppError> {
+    auth.require_permission(PERM_CUSTOMERS_CREATE)?;
     Ok(Json(insert_customer(&state, auth.organization_id, auth.user_id, &input).await?))
 }
 
@@ -201,6 +203,8 @@ async fn bulk_create_customers(
     auth: AuthUser,
     Json(inputs): Json<Vec<CreateCustomerInput>>,
 ) -> Result<Json<BulkImportResult>, AppError> {
+    auth.require_permission(PERM_CUSTOMERS_BULK_IMPORT)?;
+
     let mut created = 0u32;
     let mut errors = Vec::new();
     for (idx, input) in inputs.iter().enumerate() {
@@ -222,6 +226,8 @@ async fn update_lead(
     Path(id): Path<Uuid>,
     Json(input): Json<UpdateLeadInput>,
 ) -> Result<Json<Customer>, AppError> {
+    auth.require_permission(PERM_CUSTOMERS_LEADS_UPDATE)?;
+
     let notes = input.notes.as_deref().map(str::trim).filter(|s| !s.is_empty());
 
     let row: Option<CustomerRow> = sqlx::query_as(&format!(

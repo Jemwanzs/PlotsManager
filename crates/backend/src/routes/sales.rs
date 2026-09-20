@@ -2,7 +2,8 @@ use axum::{extract::State, routing::post, Json, Router};
 use chrono::NaiveTime;
 use domain::{
     BulkImportResult, BulkImportRowError, BulkSaleRow, CreateSaleInput, LoanAccountStatus,
-    PaymentMode, PlotSale, PlotStatus,
+    PaymentMode, PlotSale, PlotStatus, PERM_PLOTS_TRANSACTIONS_BULK_IMPORT,
+    PERM_PLOTS_TRANSACTIONS_CREATE,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -28,6 +29,8 @@ async fn create_sale(
     auth: AuthUser,
     Json(input): Json<CreateSaleInput>,
 ) -> Result<Json<PlotSale>, AppError> {
+    auth.require_permission(PERM_PLOTS_TRANSACTIONS_CREATE)?;
+
     // Below the plot's minimum_price? gate_price records/consumes an
     // approval before we ever open the sale transaction — see its docs
     // on why that has to happen against the pool, not this tx.
@@ -214,6 +217,8 @@ async fn bulk_create_sales(
     auth: AuthUser,
     Json(inputs): Json<Vec<BulkSaleRow>>,
 ) -> Result<Json<BulkImportResult>, AppError> {
+    auth.require_permission(PERM_PLOTS_TRANSACTIONS_BULK_IMPORT)?;
+
     let mut created = 0u32;
     let mut errors = Vec::new();
     for (idx, input) in inputs.iter().enumerate() {
