@@ -399,6 +399,167 @@ a {
   border: 1px solid var(--color-success-border);
 }
 
+/* Roles & Permissions editor (crates/frontend/src/pages/roles.rs) — a
+   collapsible Module -> Feature -> Action hierarchy instead of one
+   long flat checkbox list, so ~45+ permissions stay scannable and use
+   horizontal space (chips wrap in a row) rather than one per line. */
+.perm-toolbar {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+.perm-search {
+  flex: 1 1 240px;
+  min-width: 200px;
+}
+.perm-wildcard-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  background: var(--color-accent-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-3);
+}
+.perm-module {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-3);
+  overflow: hidden;
+}
+.perm-module-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-accent-bg);
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.perm-module-chevron {
+  flex: none;
+  transition: transform 0.12s ease;
+  color: var(--color-text-muted);
+}
+.perm-module-chevron.open {
+  transform: rotate(90deg);
+}
+.perm-module-name {
+  font-weight: 700;
+  flex: none;
+}
+.perm-module-count {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+.perm-module-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-2);
+}
+.perm-module-body {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
+.perm-feature {
+  margin-top: var(--space-3);
+}
+.perm-feature:first-child {
+  margin-top: 0;
+}
+.perm-feature-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.perm-feature-name {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.perm-feature-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-2);
+}
+.perm-feature-actions button,
+.perm-module-actions button {
+  font-size: 0.76rem;
+  background: none;
+  border: none;
+  color: var(--color-primary);
+  cursor: pointer;
+  padding: 2px 4px;
+  font-weight: 600;
+}
+.perm-feature-actions button:hover,
+.perm-module-actions button:hover {
+  text-decoration: underline;
+}
+.perm-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.perm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  font-size: 0.82rem;
+  cursor: pointer;
+  user-select: none;
+}
+.perm-chip input {
+  width: auto;
+  margin: 0;
+}
+.perm-chip.selected {
+  border-color: var(--color-primary);
+  background: var(--color-accent-bg);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+.perm-chip-sensitive-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-danger);
+  flex: none;
+}
+.perm-module-sensitive-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.perm-removal-warning {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  margin: var(--space-3) 0;
+  font-size: 0.88rem;
+}
+
 .checkbox-field {
   display: flex;
   align-items: center;

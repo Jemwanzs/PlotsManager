@@ -29,8 +29,8 @@ use domain::{
     CreatePlotInput, CreateProjectInput, CreateQuotationInput, CreateRoleInput, CreateSaleInput,
     CreateUserInput, CustomerDetail, CustomerSummary, DashboardAnalytics, DashboardSummary,
     DecideApprovalInput, GeneratedNumber, InventoryReport, LinkPlotInput, LoanAccountDetail,
-    LoanAccountSummary, LoginInput, MapPolygons, OrganizationSettings, PlatformOrganizationDetail,
-    PlatformOrganizationSummary, PlotWithColor, ProjectMapSummary, ProjectSummary,
+    LoanAccountSummary, LoginInput, MapPolygons, OrganizationSettings, PermissionDef,
+    PlatformOrganizationDetail, PlatformOrganizationSummary, PlotWithColor, ProjectMapSummary, ProjectSummary,
     QuotationDetail, QuotationSummary, RecordPaymentInput, RejectOrganizationInput,
     ResetPasswordInput, Role, SalesReport, SignupInput, SignupResult, TenantUser, TermsVersion,
     UpdateBranchInput, UpdateLeadInput, UpdateMapPolygonsInput, UpdateOrganizationSettingsInput,
@@ -559,7 +559,7 @@ impl HttpApi {
         self.get("/api/v1/roles").await
     }
 
-    pub async fn list_permissions(&self) -> Result<Vec<(String, String)>, ApiError> {
+    pub async fn list_permissions(&self) -> Result<Vec<PermissionDef>, ApiError> {
         self.get("/api/v1/roles/permissions").await
     }
 

@@ -739,12 +739,9 @@ impl MockApi {
         Ok(db.roles.clone())
     }
 
-    pub async fn list_permissions(&self) -> Result<Vec<(String, String)>, ApiError> {
+    pub async fn list_permissions(&self) -> Result<Vec<domain::PermissionDef>, ApiError> {
         settle(100).await;
-        Ok(domain::ALL_PERMISSIONS
-            .iter()
-            .map(|(perm, label)| (perm.to_string(), label.to_string()))
-            .collect())
+        Ok(domain::all_permissions())
     }
 
     pub async fn create_role(&self, input: domain::CreateRoleInput) -> Result<domain::Role, ApiError> {

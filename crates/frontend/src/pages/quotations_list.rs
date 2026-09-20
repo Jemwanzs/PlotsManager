@@ -30,15 +30,26 @@ pub fn QuotationsList() -> impl IntoView {
     let currency = use_currency();
 
     // `/quotations?filter=active` (the Settings/Approvals/Reports nav
-    // sub-items follow the same pattern) pre-selects the tab; the tabs
-    // stay switchable afterward like any other in-page filter.
+    // sub-items follow the same pattern) selects the tab; the tabs stay
+    // switchable afterward like any other in-page filter. Re-derived on
+    // every query change, not just read once at mount — see reports.rs's
+    // identical Effect for why (leptos_router reuses this component
+    // across query-only navigation, it doesn't remount it).
     let query = use_query_map();
-    let initial_filter = if query.get_untracked().get("filter").as_deref() == Some("active") {
-        Filter::Active
-    } else {
-        Filter::All
-    };
-    let filter = RwSignal::new(initial_filter);
+    let filter = RwSignal::new(
+        if query.get_untracked().get("filter").as_deref() == Some("active") {
+            Filter::Active
+        } else {
+            Filter::All
+        },
+    );
+    Effect::new(move |_| {
+        filter.set(if query.get().get("filter").as_deref() == Some("active") {
+            Filter::Active
+        } else {
+            Filter::All
+        });
+    });
 
     let quotations = LocalResource::new(move || {
         let api = api.clone();

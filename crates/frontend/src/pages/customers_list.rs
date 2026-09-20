@@ -50,8 +50,18 @@ pub fn CustomersList() -> impl IntoView {
     // `/customers?import=1` (the sidebar's "Import customers" nav
     // sub-item) opens straight into the bulk-import panel instead of
     // making that click land on the list and require a second click.
+    // Re-derived on every query change, not just read once at mount —
+    // see reports.rs's identical Effect for why (leptos_router reuses
+    // this component across query-only navigation, it doesn't remount
+    // it), so clicking "Import customers" a second time after
+    // navigating away from it and back must still open the panel.
     let query = use_query_map();
     let show_bulk_import = RwSignal::new(query.get_untracked().get("import").as_deref() == Some("1"));
+    Effect::new(move |_| {
+        if query.get().get("import").as_deref() == Some("1") {
+            show_bulk_import.set(true);
+        }
+    });
 
     let customers = LocalResource::new(move || {
         let api = api.clone();

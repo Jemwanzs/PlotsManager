@@ -7,7 +7,10 @@
 
 use axum::extract::Path;
 use axum::{extract::State, routing::get, Json, Router};
-use domain::{CreateRoleInput, Role, UpdateRoleInput, ALL_PERMISSIONS, PERM_MANAGE_ROLES};
+use domain::{
+    all_permission_keys, all_permissions, CreateRoleInput, PermissionDef, Role, UpdateRoleInput,
+    PERM_MANAGE_ROLES,
+};
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
@@ -78,19 +81,16 @@ async fn list_roles(
 
 /// The catalog itself — static, not org data, but gated the same as the
 /// rest of this router so only someone who can reach the Roles editor
-/// sees what's available to grant.
-async fn list_permissions(auth: AuthUser) -> Result<Json<Vec<(String, String)>>, AppError> {
+/// sees what's available to grant. Returned as the full `PermissionDef`
+/// (not just key/label) so the frontend can group by module/feature and
+/// flag sensitive ones without a second lookup table.
+async fn list_permissions(auth: AuthUser) -> Result<Json<Vec<PermissionDef>>, AppError> {
     auth.require_permission(PERM_MANAGE_ROLES)?;
-    Ok(Json(
-        ALL_PERMISSIONS
-            .iter()
-            .map(|(perm, label)| (perm.to_string(), label.to_string()))
-            .collect(),
-    ))
+    Ok(Json(all_permissions()))
 }
 
 fn validate_permissions(permissions: &[String]) -> Result<(), AppError> {
-    let known: Vec<&str> = ALL_PERMISSIONS.iter().map(|(p, _)| *p).collect();
+    let known = all_permission_keys();
     for p in permissions {
         if p != "*" && !known.contains(&p.as_str()) {
             return Err(AppError::bad_request(format!("Unknown permission \"{p}\".")));

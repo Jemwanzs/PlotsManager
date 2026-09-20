@@ -27,15 +27,27 @@ impl Tab {
 #[component]
 pub fn Reports() -> impl IntoView {
     // `/reports?tab=inventory` / `?tab=agents` (the sidebar's Reports
-    // sub-items) pre-select a tab; still switchable afterward like any
-    // other in-page filter.
+    // sub-items) select a tab; still switchable afterward like any other
+    // in-page filter. Re-derived on every query change (not just read
+    // once at mount) — clicking a different Reports sub-item while
+    // already on this page changes the query string but not the route
+    // itself, so leptos_router reuses this same component instance
+    // rather than remounting it; without this Effect, `tab` would only
+    // ever reflect whichever sub-item was clicked *first*.
     let query = use_query_map();
-    let initial_tab = match query.get_untracked().get("tab").as_deref() {
+    let tab = RwSignal::new(match query.get_untracked().get("tab").as_deref() {
         Some("inventory") => Tab::Inventory,
         Some("agents") => Tab::Agents,
         _ => Tab::Sales,
-    };
-    let tab = RwSignal::new(initial_tab);
+    });
+    Effect::new(move |_| {
+        let t = match query.get().get("tab").as_deref() {
+            Some("inventory") => Tab::Inventory,
+            Some("agents") => Tab::Agents,
+            _ => Tab::Sales,
+        };
+        tab.set(t);
+    });
 
     view! {
         <div class="page-header">

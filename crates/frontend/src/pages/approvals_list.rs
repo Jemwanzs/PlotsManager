@@ -75,15 +75,26 @@ pub fn ApprovalsList() -> impl IntoView {
     let currency = use_currency();
 
     // `/approvals?tab=history` (the sidebar's "Approval history" nav
-    // sub-item) pre-selects the Decided tab; still switchable afterward
-    // like any other in-page filter.
+    // sub-item) selects the Decided tab; still switchable afterward like
+    // any other in-page filter. Re-derived on every query change, not
+    // just read once at mount — see reports.rs's identical Effect for
+    // why (leptos_router reuses this component across query-only
+    // navigation, it doesn't remount it).
     let query = use_query_map();
-    let initial_filter = if query.get_untracked().get("tab").as_deref() == Some("history") {
-        Filter::Decided
-    } else {
-        Filter::Pending
-    };
-    let filter = RwSignal::new(initial_filter);
+    let filter = RwSignal::new(
+        if query.get_untracked().get("tab").as_deref() == Some("history") {
+            Filter::Decided
+        } else {
+            Filter::Pending
+        },
+    );
+    Effect::new(move |_| {
+        filter.set(if query.get().get("tab").as_deref() == Some("history") {
+            Filter::Decided
+        } else {
+            Filter::Pending
+        });
+    });
     let working = RwSignal::new(false);
     let action_error = RwSignal::new(None::<String>);
     let refresh = RwSignal::new(0u32);

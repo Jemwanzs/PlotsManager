@@ -469,7 +469,7 @@ impl ApiClient {
         }
     }
 
-    pub async fn list_permissions(&self) -> Result<Vec<(String, String)>, ApiError> {
+    pub async fn list_permissions(&self) -> Result<Vec<domain::PermissionDef>, ApiError> {
         match self {
             Self::Mock(api) => api.list_permissions().await,
             Self::Http(api) => api.list_permissions().await,
