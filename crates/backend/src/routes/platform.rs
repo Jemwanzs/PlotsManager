@@ -21,8 +21,11 @@ use crate::state::AppState;
 /// Phase-1 fixed trial length for a newly approved tenant — the
 /// tenant-onboarding spec calls for this to be Platform-Owner-
 /// configurable, which is a later phase of the same spec; this is the
-/// default that phase will make adjustable, not a final answer.
-const DEFAULT_TRIAL_DAYS: i64 = 14;
+/// default that phase will make adjustable, not a final answer. Every
+/// tenant gets this; the platform owner's own organization is exempt
+/// from trial/status checks entirely (`tenant_gate::check`), not given
+/// a longer trial.
+const DEFAULT_TRIAL_HOURS: i64 = 48;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -309,7 +312,7 @@ async fn approve_organization(
         sqlx::query_scalar("select id from subscription_plans where code = 'TRIAL'")
             .fetch_one(&mut *tx)
             .await?;
-    let trial_end = Utc::now() + Duration::days(DEFAULT_TRIAL_DAYS);
+    let trial_end = Utc::now() + Duration::hours(DEFAULT_TRIAL_HOURS);
     sqlx::query(
         r#"insert into organization_subscriptions (organization_id, plan_id, status, current_period_start, current_period_end)
            values ($1, $2, 'trialing', now(), $3)
