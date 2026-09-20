@@ -6,7 +6,8 @@ use leptos_router::hooks::use_params_map;
 use uuid::Uuid;
 
 use crate::api::{lead_stage_meta, ApiClient, ApiError, LeadStage, UpdateLeadInput};
-use crate::auth::{use_api, use_currency};
+use crate::auth::{has_permission, use_api, use_auth, use_currency};
+use domain::PERM_CUSTOMERS_LEADS_UPDATE;
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
 use crate::format::{format_money, format_payment_mode};
 
@@ -72,6 +73,8 @@ pub fn CustomerDetail() -> impl IntoView {
     let currency = use_currency();
     let params = use_params_map();
     let customer_id = move || -> Option<Uuid> { params.read().get("id").and_then(|id| Uuid::parse_str(&id).ok()) };
+    let auth = use_auth();
+    let can_update_lead = has_permission(auth, PERM_CUSTOMERS_LEADS_UPDATE);
 
     let save_error = RwSignal::new(None::<String>);
     let saving = RwSignal::new(false);
@@ -176,10 +179,13 @@ pub fn CustomerDetail() -> impl IntoView {
                                                 ></textarea>
                                             </div>
 
+                                            {(!can_update_lead).then(|| view! {
+                                                <p class="meta">"You don't have permission to update the pipeline stage — ask an admin."</p>
+                                            })}
                                             <button
                                                 type="button"
                                                 class="btn btn-primary"
-                                                disabled=move || saving.get()
+                                                disabled=move || saving.get() || !can_update_lead
                                                 on:click=move |_| {
                                                     let follow_up = NaiveDate::parse_from_str(&follow_up_signal.get(), "%Y-%m-%d").ok();
                                                     let notes = Some(notes_signal.get()).filter(|s| !s.trim().is_empty());

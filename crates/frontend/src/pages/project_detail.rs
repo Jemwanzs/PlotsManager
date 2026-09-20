@@ -11,11 +11,15 @@ use crate::api::{
     status_meta, CreatePlotInput, CreateQuotationInput, CreateSaleInput, PlotWithColor,
     UpdatePlotInput,
 };
-use crate::auth::{use_api, use_currency};
+use crate::auth::{has_permission, use_api, use_auth, use_currency};
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
 use crate::csv_import::{self, ParsedRow};
 use crate::format::format_money;
-use domain::{MapFeature, MapPolygons, PaymentMode, PlotStatus};
+use domain::{
+    MapFeature, MapPolygons, PaymentMode, PlotStatus, PERM_PLOTS_BULK_IMPORT, PERM_PLOTS_CREATE,
+    PERM_PLOTS_EDIT, PERM_PLOTS_MAP_EDIT_BOUNDARIES, PERM_PLOTS_MAP_LINK, PERM_PLOTS_MAP_UPLOAD,
+    PERM_PLOTS_TRANSACTIONS_CREATE, PERM_QUOTES_CREATE,
+};
 
 const ALL_STATUSES: &[PlotStatus] = &[
     PlotStatus::Available,
@@ -89,6 +93,12 @@ pub fn ProjectDetail() -> impl IntoView {
     let api = use_api();
     let currency = use_currency();
     let params = use_params_map();
+    let auth = use_auth();
+    let can_create_plot = has_permission(auth, PERM_PLOTS_CREATE);
+    let can_edit_plot = has_permission(auth, PERM_PLOTS_EDIT);
+    let can_bulk_import_plots = has_permission(auth, PERM_PLOTS_BULK_IMPORT);
+    let can_reserve = has_permission(auth, PERM_PLOTS_TRANSACTIONS_CREATE);
+    let can_create_quote = has_permission(auth, PERM_QUOTES_CREATE);
 
     let project_id = move || -> Option<Uuid> { params.read().get("id").and_then(|id| Uuid::parse_str(&id).ok()) };
 
@@ -135,24 +145,28 @@ pub fn ProjectDetail() -> impl IntoView {
                                         <p>{p.location.clone()} " · " {p.code.clone()}</p>
                                     </div>
                                     <div style="display:flex; gap: var(--space-2);">
-                                        <button
-                                            class="btn btn-secondary"
-                                            on:click=move |_| {
-                                                show_bulk_import.update(|v| *v = !*v);
-                                                show_add_plot.set(false);
-                                            }
-                                        >
-                                            {move || if show_bulk_import.get() { "Cancel" } else { "Bulk import" }}
-                                        </button>
-                                        <button
-                                            class="btn btn-secondary"
-                                            on:click=move |_| {
-                                                show_add_plot.update(|v| *v = !*v);
-                                                show_bulk_import.set(false);
-                                            }
-                                        >
-                                            {move || if show_add_plot.get() { "Cancel" } else { "+ Add plot" }}
-                                        </button>
+                                        {can_bulk_import_plots.then(|| view! {
+                                            <button
+                                                class="btn btn-secondary"
+                                                on:click=move |_| {
+                                                    show_bulk_import.update(|v| *v = !*v);
+                                                    show_add_plot.set(false);
+                                                }
+                                            >
+                                                {move || if show_bulk_import.get() { "Cancel" } else { "Bulk import" }}
+                                            </button>
+                                        })}
+                                        {can_create_plot.then(|| view! {
+                                            <button
+                                                class="btn btn-secondary"
+                                                on:click=move |_| {
+                                                    show_add_plot.update(|v| *v = !*v);
+                                                    show_bulk_import.set(false);
+                                                }
+                                            >
+                                                {move || if show_add_plot.get() { "Cancel" } else { "+ Add plot" }}
+                                            </button>
+                                        })}
                                     </div>
                                 </div>
 
@@ -309,14 +323,16 @@ pub fn ProjectDetail() -> impl IntoView {
                             <p>"Dimensions: " {dimensions_text}</p>
                             {pwc.plot.title_number.clone().map(|t| view! { <p>"Title: " {t}</p> })}
 
-                            <button
-                                type="button"
-                                class="btn btn-secondary"
-                                style="margin-bottom: var(--space-3);"
-                                on:click=move |_| show_edit_form.update(|v| *v = !*v)
-                            >
-                                {move || if show_edit_form.get() { "Cancel edit" } else { "Edit plot" }}
-                            </button>
+                            {can_edit_plot.then(|| view! {
+                                <button
+                                    type="button"
+                                    class="btn btn-secondary"
+                                    style="margin-bottom: var(--space-3);"
+                                    on:click=move |_| show_edit_form.update(|v| *v = !*v)
+                                >
+                                    {move || if show_edit_form.get() { "Cancel edit" } else { "Edit plot" }}
+                                </button>
+                            })}
 
                             <Show when=move || show_edit_form.get()>
                                 <EditPlotForm
@@ -329,28 +345,30 @@ pub fn ProjectDetail() -> impl IntoView {
                                 />
                             </Show>
 
-                            <Show when=move || startable>
-                                <div class="filter-tabs">
-                                    <button
-                                        type="button"
-                                        class="filter-tab"
-                                        class:active=move || !show_quote_form.get()
-                                        on:click=move |_| show_quote_form.set(false)
-                                    >
-                                        "Reserve now"
-                                    </button>
-                                    <button
-                                        type="button"
-                                        class="filter-tab"
-                                        class:active=move || show_quote_form.get()
-                                        on:click=move |_| show_quote_form.set(true)
-                                    >
-                                        "Send a quotation"
-                                    </button>
-                                </div>
+                            <Show when=move || startable && (can_reserve || can_create_quote)>
+                                <Show when=move || can_reserve && can_create_quote>
+                                    <div class="filter-tabs">
+                                        <button
+                                            type="button"
+                                            class="filter-tab"
+                                            class:active=move || !show_quote_form.get()
+                                            on:click=move |_| show_quote_form.set(false)
+                                        >
+                                            "Reserve now"
+                                        </button>
+                                        <button
+                                            type="button"
+                                            class="filter-tab"
+                                            class:active=move || show_quote_form.get()
+                                            on:click=move |_| show_quote_form.set(true)
+                                        >
+                                            "Send a quotation"
+                                        </button>
+                                    </div>
+                                </Show>
 
                                 <Show
-                                    when=move || show_quote_form.get()
+                                    when=move || if can_reserve && can_create_quote { show_quote_form.get() } else { can_create_quote }
                                     fallback=move || view! {
                                         <ReserveForm
                                             plot_id=plot_id
@@ -1291,6 +1309,8 @@ fn ProjectMapSection(
 #[component]
 fn MapUploadForm(project_id: Uuid, on_uploaded: impl Fn() + Clone + 'static) -> impl IntoView {
     let api = use_api();
+    let auth = use_auth();
+    let can_upload = has_permission(auth, PERM_PLOTS_MAP_UPLOAD);
     let error = RwSignal::new(None::<String>);
     let uploading = RwSignal::new(false);
 
@@ -1326,12 +1346,18 @@ fn MapUploadForm(project_id: Uuid, on_uploaded: impl Fn() + Clone + 'static) -> 
             detail="Upload an image of this project's site plan, then draw each plot's boundary on top of it."
         />
         {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
-        <div class="field" style="max-width: 360px;">
-            <label for="map-image">
-                {move || if uploading.get() { "Uploading…" } else { "Site plan image" }}
-            </label>
-            <input id="map-image" type="file" accept="image/*" disabled=uploading on:change=on_change />
-        </div>
+        {if can_upload {
+            view! {
+                <div class="field" style="max-width: 360px;">
+                    <label for="map-image">
+                        {move || if uploading.get() { "Uploading…" } else { "Site plan image" }}
+                    </label>
+                    <input id="map-image" type="file" accept="image/*" disabled=uploading on:change=on_change />
+                </div>
+            }.into_any()
+        } else {
+            view! { <p class="meta">"You don't have permission to upload a site plan — ask an admin."</p> }.into_any()
+        }}
     }
 }
 
@@ -1356,6 +1382,9 @@ fn MapCanvas(
     refresh: RwSignal<u32>,
 ) -> impl IntoView {
     let api = use_api();
+    let auth = use_auth();
+    let can_edit_boundaries = has_permission(auth, PERM_PLOTS_MAP_EDIT_BOUNDARIES);
+    let can_link = has_permission(auth, PERM_PLOTS_MAP_LINK);
     let image_url = api.map_image_url(project_id);
 
     let img_dims = RwSignal::new((
@@ -1438,30 +1467,34 @@ fn MapCanvas(
                 }}
             </p>
             <div style="display:flex; gap: var(--space-2); align-items:center;">
-                <label class="btn btn-secondary" style="margin-bottom:0; cursor:pointer;">
-                    {move || if replacing.get() { "Replacing…" } else { "Replace image" }}
-                    <input
-                        type="file"
-                        accept="image/*"
-                        disabled=replacing
-                        style="display:none;"
-                        on:change=on_replace_change
-                    />
-                </label>
-                <button
-                    type="button"
-                    class="btn btn-secondary"
-                    on:click=move |_| {
-                        edit_mode.update(|v| *v = !*v);
-                        draft_points.set(Vec::new());
-                    }
-                >
-                    {move || if edit_mode.get() { "Done editing" } else { "Edit boundaries" }}
-                </button>
+                {can_edit_boundaries.then(|| view! {
+                    <label class="btn btn-secondary" style="margin-bottom:0; cursor:pointer;">
+                        {move || if replacing.get() { "Replacing…" } else { "Replace image" }}
+                        <input
+                            type="file"
+                            accept="image/*"
+                            disabled=replacing
+                            style="display:none;"
+                            on:change=on_replace_change
+                        />
+                    </label>
+                })}
+                {can_edit_boundaries.then(|| view! {
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        on:click=move |_| {
+                            edit_mode.update(|v| *v = !*v);
+                            draft_points.set(Vec::new());
+                        }
+                    >
+                        {move || if edit_mode.get() { "Done editing" } else { "Edit boundaries" }}
+                    </button>
+                })}
             </div>
         </div>
 
-        <Show when=move || edit_mode.get()>
+        <Show when=move || edit_mode.get() && can_edit_boundaries>
             {
                 // Fresh per-invocation clone: `<Show>`'s children run
                 // repeatedly as `edit_mode` toggles, but this outer
@@ -1663,6 +1696,9 @@ fn MapCanvas(
                             <h2 class="mt-0">{label_text}</h2>
                             <span class="meta">"Not yet linked to a plot"</span>
                         </div>
+                        {if !can_link {
+                            view! { <p class="meta">"You don't have permission to link plots to map shapes — ask an admin."</p> }.into_any()
+                        } else { view! {
                         <div class="filter-tabs">
                             <button
                                 type="button"
@@ -1711,6 +1747,7 @@ fn MapCanvas(
                                     .into_any()
                             }
                         }}
+                        }.into_any() }}
                         <button
                             class="btn btn-secondary"
                             style="margin-top: var(--space-3);"

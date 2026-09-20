@@ -2,12 +2,15 @@ use leptos::prelude::*;
 use leptos_router::components::A;
 
 use crate::api::ProjectSummary;
-use crate::auth::use_api;
+use crate::auth::{has_permission, use_api, use_auth};
 use crate::components::{EmptyState, ErrorAlert, LoadingState};
+use domain::PERM_PROJECTS_CREATE;
 
 #[component]
 pub fn ProjectsList() -> impl IntoView {
     let api = use_api();
+    let auth = use_auth();
+    let can_create = has_permission(auth, PERM_PROJECTS_CREATE);
     let search = RwSignal::new(String::new());
 
     let projects = LocalResource::new(move || {
@@ -21,7 +24,7 @@ pub fn ProjectsList() -> impl IntoView {
                 <h1>"Projects"</h1>
                 <p>"Every land project your organisation is selling, with live inventory."</p>
             </div>
-            <A href="/projects/new" attr:class="btn btn-primary">"+ New project"</A>
+            {can_create.then(|| view! { <A href="/projects/new" attr:class="btn btn-primary">"+ New project"</A> })}
         </div>
 
         <input

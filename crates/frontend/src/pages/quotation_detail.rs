@@ -5,10 +5,10 @@ use leptos_router::hooks::use_params_map;
 use uuid::Uuid;
 
 use crate::api::ApiError;
-use crate::auth::{use_api, use_currency};
+use crate::auth::{has_permission, use_api, use_auth, use_currency};
 use crate::components::{ErrorAlert, LoadingState, StatusBadge};
 use crate::format::{format_money, format_payment_mode};
-use domain::QuotationStatus;
+use domain::{QuotationStatus, PERM_QUOTES_ACCEPT, PERM_QUOTES_REJECT, PERM_QUOTES_SEND};
 
 /// Free functions taking owned parameters, not closures captured from
 /// the component's top level — see the identical note in
@@ -43,6 +43,10 @@ pub fn QuotationDetailPage() -> impl IntoView {
     let currency = use_currency();
     let params = use_params_map();
     let quotation_id = move || -> Option<Uuid> { params.read().get("id").and_then(|id| Uuid::parse_str(&id).ok()) };
+    let auth = use_auth();
+    let can_send = has_permission(auth, PERM_QUOTES_SEND);
+    let can_accept = has_permission(auth, PERM_QUOTES_ACCEPT);
+    let can_reject = has_permission(auth, PERM_QUOTES_REJECT);
 
     let working = RwSignal::new(false);
     let action_error = RwSignal::new(None::<String>);
@@ -107,7 +111,7 @@ pub fn QuotationDetailPage() -> impl IntoView {
                                     {d.quotation.notes.clone().map(|n| view! { <p><strong>"Notes: "</strong>{n}</p> })}
 
                                     <div style="display:flex; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-4)">
-                                        {(d.quotation.status == QuotationStatus::Draft && !d.is_expired).then(|| {
+                                        {(d.quotation.status == QuotationStatus::Draft && !d.is_expired && can_send).then(|| {
                                             let api = api_for_actions.clone();
                                             view! {
                                                 <button
@@ -122,7 +126,7 @@ pub fn QuotationDetailPage() -> impl IntoView {
                                                 </button>
                                             }
                                         })}
-                                        {(d.quotation.status == QuotationStatus::Sent && !d.is_expired).then(|| {
+                                        {(d.quotation.status == QuotationStatus::Sent && !d.is_expired && can_accept).then(|| {
                                             let api = api_for_actions.clone();
                                             view! {
                                                 <button
@@ -137,7 +141,7 @@ pub fn QuotationDetailPage() -> impl IntoView {
                                                 </button>
                                             }
                                         })}
-                                        {(d.quotation.status == QuotationStatus::Sent).then(|| {
+                                        {(d.quotation.status == QuotationStatus::Sent && can_reject).then(|| {
                                             let api = api_for_actions.clone();
                                             view! {
                                                 <button

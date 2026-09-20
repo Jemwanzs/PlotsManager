@@ -5,9 +5,10 @@ use leptos_router::components::A;
 use leptos_router::hooks::use_query_map;
 
 use crate::api::{lead_stage_meta, CreateCustomerInput, CustomerSummary, LeadStage};
-use crate::auth::use_api;
+use crate::auth::{has_permission, use_api, use_auth};
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
 use crate::csv_import::{self, ParsedRow};
+use domain::{PERM_CUSTOMERS_BULK_IMPORT, PERM_CUSTOMERS_CREATE};
 
 #[derive(Clone, Copy, PartialEq)]
 enum PipelineFilter {
@@ -44,6 +45,9 @@ impl PipelineFilter {
 #[component]
 pub fn CustomersList() -> impl IntoView {
     let api = use_api();
+    let auth = use_auth();
+    let can_create = has_permission(auth, PERM_CUSTOMERS_CREATE);
+    let can_bulk_import = has_permission(auth, PERM_CUSTOMERS_BULK_IMPORT);
     let search = RwSignal::new(String::new());
     let filter = RwSignal::new(PipelineFilter::All);
 
@@ -75,17 +79,19 @@ pub fn CustomersList() -> impl IntoView {
                 <p>"Everyone who has expressed interest in, reserved, or bought a plot."</p>
             </div>
             <div style="display:flex; gap: var(--space-2);">
-                <button
-                    class="btn btn-secondary"
-                    on:click=move |_| show_bulk_import.update(|v| *v = !*v)
-                >
-                    {move || if show_bulk_import.get() { "Cancel" } else { "Bulk import" }}
-                </button>
-                <A href="/customers/new" attr:class="btn btn-primary">"+ New customer"</A>
+                {can_bulk_import.then(|| view! {
+                    <button
+                        class="btn btn-secondary"
+                        on:click=move |_| show_bulk_import.update(|v| *v = !*v)
+                    >
+                        {move || if show_bulk_import.get() { "Cancel" } else { "Bulk import" }}
+                    </button>
+                })}
+                {can_create.then(|| view! { <A href="/customers/new" attr:class="btn btn-primary">"+ New customer"</A> })}
             </div>
         </div>
 
-        <Show when=move || show_bulk_import.get()>
+        <Show when=move || show_bulk_import.get() && can_bulk_import>
             <BulkCustomerImport on_imported=move || customers.refetch() />
         </Show>
 
