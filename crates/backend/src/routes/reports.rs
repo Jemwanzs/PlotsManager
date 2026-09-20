@@ -10,7 +10,8 @@ use axum::{extract::State, Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
 use domain::{
     AgentPerformanceReport, AgentPerformanceRow, InventoryReport, PlotStatus, PlotStatusCount,
-    ProjectInventoryRow, SalesReport, SalesReportRow,
+    ProjectInventoryRow, SalesReport, SalesReportRow, PERM_REPORTS_AGENT_PERFORMANCE,
+    PERM_REPORTS_INVENTORY, PERM_REPORTS_SALES,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -55,6 +56,8 @@ async fn sales_report(
     auth: AuthUser,
     Query(params): Query<SalesReportQuery>,
 ) -> Result<Json<SalesReport>, AppError> {
+    auth.require_permission(PERM_REPORTS_SALES)?;
+
     let rows: Vec<SalesReportSqlRow> = sqlx::query_as(
         r#"
         select ps.id as sale_id, ps.created_at, p.id as project_id, p.name as project_name,
@@ -117,6 +120,8 @@ async fn inventory_report(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<InventoryReport>, AppError> {
+    auth.require_permission(PERM_REPORTS_INVENTORY)?;
+
     let rows: Vec<InventorySqlRow> = sqlx::query_as(
         r#"
         select p.id as project_id, p.name as project_name, pl.status,
@@ -183,6 +188,8 @@ async fn agent_performance_report(
     auth: AuthUser,
     Query(params): Query<AgentReportQuery>,
 ) -> Result<Json<AgentPerformanceReport>, AppError> {
+    auth.require_permission(PERM_REPORTS_AGENT_PERFORMANCE)?;
+
     let rows: Vec<AgentPerformanceSqlRow> = sqlx::query_as(
         r#"
         with sales_agg as (

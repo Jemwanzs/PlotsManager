@@ -3,9 +3,10 @@ use leptos::prelude::*;
 use leptos_router::hooks::use_query_map;
 use uuid::Uuid;
 
-use crate::auth::{use_api, use_currency};
+use crate::auth::{has_permission, use_api, use_auth, use_currency};
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatCard, StatusBadge};
 use crate::format::{format_money, format_payment_mode};
+use domain::{PERM_REPORTS_AGENT_PERFORMANCE, PERM_REPORTS_INVENTORY, PERM_REPORTS_SALES};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -26,6 +27,20 @@ impl Tab {
 
 #[component]
 pub fn Reports() -> impl IntoView {
+    let auth = use_auth();
+    let can_sales = has_permission(auth, PERM_REPORTS_SALES);
+    let can_inventory = has_permission(auth, PERM_REPORTS_INVENTORY);
+    let can_agents = has_permission(auth, PERM_REPORTS_AGENT_PERFORMANCE);
+    let available_tabs: Vec<Tab> = [
+        (Tab::Sales, can_sales),
+        (Tab::Inventory, can_inventory),
+        (Tab::Agents, can_agents),
+    ]
+    .into_iter()
+    .filter_map(|(t, allowed)| allowed.then_some(t))
+    .collect();
+    let default_tab = available_tabs.first().copied();
+
     // `/reports?tab=inventory` / `?tab=agents` (the sidebar's Reports
     // sub-items) select a tab; still switchable afterward like any other
     // in-page filter. Re-derived on every query change (not just read
@@ -33,20 +48,28 @@ pub fn Reports() -> impl IntoView {
     // already on this page changes the query string but not the route
     // itself, so leptos_router reuses this same component instance
     // rather than remounting it; without this Effect, `tab` would only
-    // ever reflect whichever sub-item was clicked *first*.
+    // ever reflect whichever sub-item was clicked *first*. Falls back to
+    // whichever tab the role can actually see (not always Sales) so a
+    // role without reports:sales doesn't land on a page implying they
+    // have no reports at all.
     let query = use_query_map();
-    let tab = RwSignal::new(match query.get_untracked().get("tab").as_deref() {
-        Some("inventory") => Tab::Inventory,
-        Some("agents") => Tab::Agents,
-        _ => Tab::Sales,
-    });
-    Effect::new(move |_| {
-        let t = match query.get().get("tab").as_deref() {
+    let resolve_tab = move |raw: Option<String>| -> Option<Tab> {
+        let requested = match raw.as_deref() {
             Some("inventory") => Tab::Inventory,
             Some("agents") => Tab::Agents,
-            _ => Tab::Sales,
+            Some("sales") => Tab::Sales,
+            _ => return default_tab,
         };
-        tab.set(t);
+        let allowed = match requested {
+            Tab::Sales => can_sales,
+            Tab::Inventory => can_inventory,
+            Tab::Agents => can_agents,
+        };
+        if allowed { Some(requested) } else { default_tab }
+    };
+    let tab: RwSignal<Option<Tab>> = RwSignal::new(resolve_tab(query.get_untracked().get("tab")));
+    Effect::new(move |_| {
+        tab.set(resolve_tab(query.get().get("tab")));
     });
 
     view! {
@@ -57,28 +80,40 @@ pub fn Reports() -> impl IntoView {
             </div>
         </div>
 
-        <div class="filter-tabs">
-            {[Tab::Sales, Tab::Inventory, Tab::Agents]
-                .into_iter()
-                .map(|t| {
-                    view! {
-                        <button
-                            type="button"
-                            class="filter-tab"
-                            class:active=move || tab.get() == t
-                            on:click=move |_| tab.set(t)
-                        >
-                            {t.label()}
-                        </button>
-                    }
-                })
-                .collect_view()}
-        </div>
+        {if available_tabs.is_empty() {
+            view! {
+                <EmptyState
+                    icon="\u{1F512}"
+                    title="No reports available"
+                    detail="You don't have permission to view any reports yet — ask an admin."
+                />
+            }.into_any()
+        } else {
+            view! {
+                <div class="filter-tabs">
+                    {available_tabs.into_iter()
+                        .map(|t| {
+                            view! {
+                                <button
+                                    type="button"
+                                    class="filter-tab"
+                                    class:active=move || tab.get() == Some(t)
+                                    on:click=move |_| tab.set(Some(t))
+                                >
+                                    {t.label()}
+                                </button>
+                            }
+                        })
+                        .collect_view()}
+                </div>
 
-        {move || match tab.get() {
-            Tab::Sales => view! { <SalesReportTab /> }.into_any(),
-            Tab::Inventory => view! { <InventoryReportTab /> }.into_any(),
-            Tab::Agents => view! { <AgentReportTab /> }.into_any(),
+                {move || match tab.get() {
+                    Some(Tab::Sales) => view! { <SalesReportTab /> }.into_any(),
+                    Some(Tab::Inventory) => view! { <InventoryReportTab /> }.into_any(),
+                    Some(Tab::Agents) => view! { <AgentReportTab /> }.into_any(),
+                    None => ().into_any(),
+                }}
+            }.into_any()
         }}
     }
 }
