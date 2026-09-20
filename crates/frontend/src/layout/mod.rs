@@ -210,6 +210,27 @@ pub fn AppShell(children: Children) -> impl IntoView {
     let navigate = use_navigate();
     let location = use_location();
     let show_more = RwSignal::new(false);
+    let show_user_menu = RwSignal::new(false);
+
+    // No server-side session to revoke on a self-initiated logout — the
+    // JWT just isn't persisted anywhere once this clears it (see
+    // `AuthSignal`'s own doc comment: no localStorage yet). Admin-forced
+    // revocation (password reset, "Revoke sessions") is the separate
+    // `session_valid_after` mechanism on the backend.
+    let navigate_for_logout = navigate.clone();
+    let logout = move |_: leptos::ev::MouseEvent| {
+        auth.set(None);
+        show_user_menu.set(false);
+        show_more.set(false);
+        navigate_for_logout("/login", Default::default());
+    };
+    // Two separate clones so each `<Show>` block's own auto-generated
+    // `move` closure captures its own copy — a shared `logout` would
+    // get moved into the first block whole, the same pitfall noted on
+    // `on_changed_for_edit`/`on_changed_for_reset` elsewhere in this
+    // codebase (e.g. `pages/users_access.rs`).
+    let logout_for_desktop_menu = logout.clone();
+    let logout_for_mobile_sheet = logout.clone();
 
     // Single-open accordion: which sidebar module (by its `label`, a
     // stable `&'static str`) is currently expanded. Re-derived from the
@@ -386,10 +407,37 @@ pub fn AppShell(children: Children) -> impl IntoView {
                     >
                         {move || view! { <Icon name=theme_icon() /> }}
                     </button>
-                    <span>{full_name}</span>
-                    <span class="avatar">{initials}</span>
+                    <button
+                        type="button"
+                        class="user-menu-trigger"
+                        aria-haspopup="true"
+                        aria-expanded=move || show_user_menu.get().to_string()
+                        on:click=move |_| show_user_menu.update(|v| *v = !*v)
+                    >
+                        <span>{full_name}</span>
+                        <span class="avatar">{initials}</span>
+                    </button>
                 </div>
             </header>
+
+            // Desktop-only (see `.user-menu`'s `@media` rule) — on mobile,
+            // logout lives in the "More" sheet below instead, since this
+            // topbar is visible at every width but the user asked for
+            // logout specifically in the top-right on larger screens and
+            // grouped into "More" on phones, not duplicated in both.
+            <Show when=move || show_user_menu.get()>
+                <div class="user-menu-backdrop" on:click=move |_| show_user_menu.set(false)></div>
+                <div class="user-menu">
+                    <div class="user-menu-header">
+                        <span class="avatar">{initials}</span>
+                        <span>{full_name}</span>
+                    </div>
+                    <button type="button" class="user-menu-logout" on:click=logout_for_desktop_menu.clone()>
+                        <span class="icon"><Icon name=IconName::Logout /></span>
+                        <span>"Log out"</span>
+                    </button>
+                </div>
+            </Show>
 
             <main class="main-content">{children()}</main>
 
@@ -460,6 +508,10 @@ pub fn AppShell(children: Children) -> impl IntoView {
                                 })
                                 .collect_view()
                         }}
+                        <button type="button" class="nav-sheet-logout" on:click=logout_for_mobile_sheet.clone()>
+                            <span class="icon"><Icon name=IconName::Logout /></span>
+                            <span>"Log out"</span>
+                        </button>
                     </div>
                 </div>
             </Show>
