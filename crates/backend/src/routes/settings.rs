@@ -3,18 +3,22 @@
 //! projects. See `database/migrations/0010_organization_settings.sql`
 //! and `domain::organization` for the shared shapes/formatting.
 //!
-//! No role check beyond "signed in, in this org" yet — there's no real
-//! permission system wired to `AuthUser` until Phase 2 (roles/
-//! role_assignments exist in the schema but nothing reads them today).
-//! Every org member can view and edit settings for now; tightening this
-//! to admins-only is exactly what Phase 2 adds, not a gap introduced
-//! here.
+//! Viewing settings (`get_settings`, `next_number`) stays open to any
+//! signed-in org member — everyone needs to know the org's currency,
+//! and generating the next auto-number is an ordinary part of
+//! creating a plot/project, not an admin action. Changing settings
+//! (`update_settings`) is gated by `PERM_SETTINGS_MANAGE_ORGANIZATION`
+//! — previously every org member could edit currency/timezone/
+//! numbering for the whole tenant; `database/migrations/
+//! 0016_permission_enforcement_backfill.sql` grants this to every
+//! pre-existing role so nobody's access regresses when this shipped.
 
 use axum::extract::{Path, Query, State};
 use axum::{routing::get, routing::post, Json, Router};
 use domain::{
     format_sequence_number, GeneratedNumber, NumberingConfig, NumberingConfigInput,
     NumberingEntityType, OrganizationSettings, UpdateOrganizationSettingsInput,
+    PERM_SETTINGS_MANAGE_ORGANIZATION,
 };
 use serde::Deserialize;
 use uuid::Uuid;
@@ -160,6 +164,8 @@ async fn update_settings(
     auth: AuthUser,
     Json(input): Json<UpdateOrganizationSettingsInput>,
 ) -> Result<Json<OrganizationSettings>, AppError> {
+    auth.require_permission(PERM_SETTINGS_MANAGE_ORGANIZATION)?;
+
     let currency = input.currency.trim().to_uppercase();
     if currency.len() < 2 || currency.len() > 5 || !currency.chars().all(|c| c.is_ascii_alphabetic()) {
         return Err(AppError::bad_request(

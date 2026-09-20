@@ -98,6 +98,10 @@ async fn login(
     )
     .map_err(|e| AppError::Internal(e.into()))?;
 
+    let permissions = crate::extractors::fetch_permissions(&state.db, row.id)
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+
     // Access history for the platform-admin view
     // (routes/platform.rs) and the Users & Access "Last Login" column —
     // best-effort: a logging failure shouldn't block a legitimate login.
@@ -126,6 +130,7 @@ async fn login(
             is_platform_owner: row.is_platform_owner,
             created_at: row.created_at,
             must_change_password: row.must_change_password,
+            permissions: permissions.into_iter().collect(),
         },
     }))
 }

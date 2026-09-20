@@ -7,9 +7,10 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 use crate::api::{LoanAccountDetail, RecordPaymentInput};
-use crate::auth::{use_api, use_currency};
+use crate::auth::{has_permission, use_api, use_auth, use_currency};
 use crate::components::{ErrorAlert, LoadingState, StatCard, StatusBadge};
 use crate::format::{format_money, format_payment_status};
+use domain::PERM_PAYMENTS_RECORD;
 
 #[component]
 pub fn LoanAccountDetailPage() -> impl IntoView {
@@ -55,6 +56,8 @@ fn LoanAccountContent(
     on_payment_recorded: impl Fn() + Clone + 'static,
 ) -> impl IntoView {
     let currency = use_currency();
+    let auth = use_auth();
+    let can_record = has_permission(auth, PERM_PAYMENTS_RECORD);
     let account = detail.account.clone();
     let project_href = format!("/projects/{}", detail.project_id);
     let customer_href = format!("/customers/{}", detail.customer_id);
@@ -93,9 +96,17 @@ fn LoanAccountContent(
             />
         </div>
 
-        <div class="card">
-            <RecordPaymentForm loan_account_id=account.id on_recorded=on_payment_recorded />
-        </div>
+        {if can_record {
+            view! {
+                <div class="card">
+                    <RecordPaymentForm loan_account_id=account.id on_recorded=on_payment_recorded />
+                </div>
+            }.into_any()
+        } else {
+            view! {
+                <div class="alert alert-warning">"You don't have permission to record payments — ask an admin."</div>
+            }.into_any()
+        }}
 
         <h2 style="margin-top: var(--space-5)">"Payment history"</h2>
         {if detail.payments.is_empty() {

@@ -1,17 +1,19 @@
 //! Settings → Organization / System Configuration — general settings
 //! (currency, date format, time zone) and the auto-numbering engine for
 //! plots and projects (`GET`/`PUT /api/v1/settings`,
-//! `crates/backend/src/routes/settings.rs`). No role check yet: every
-//! signed-in org member can reach this page and save changes — see that
-//! route module's docs for why, and Phase 2 for what tightens it.
+//! `crates/backend/src/routes/settings.rs`). Viewing stays open to any
+//! signed-in org member; saving requires
+//! `settings:manage_organization` (backend-enforced — this page just
+//! disables the Save button for anyone who doesn't have it, so they
+//! find out before filling the form rather than from a 403 after).
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::hooks::use_location;
 
-use crate::auth::{use_api, use_currency};
+use crate::auth::{has_permission, use_api, use_auth, use_currency};
 use crate::components::{ErrorAlert, LoadingState};
-use domain::{NumberingConfigInput, OrganizationSettings, UpdateOrganizationSettingsInput};
+use domain::{NumberingConfigInput, OrganizationSettings, UpdateOrganizationSettingsInput, PERM_SETTINGS_MANAGE_ORGANIZATION};
 
 #[component]
 pub fn Settings() -> impl IntoView {
@@ -59,6 +61,8 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
     // pushes the new value into it so the rest of the app picks it up
     // immediately, without requiring a re-login.
     let global_currency = use_currency();
+    let auth = use_auth();
+    let can_manage = move || has_permission(auth, PERM_SETTINGS_MANAGE_ORGANIZATION);
 
     // `/settings#numbering` (the sidebar's "Numbering configuration" nav
     // sub-item) scrolls straight to that section instead of dropping the
@@ -112,7 +116,7 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
 
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
-        if submitting.get() {
+        if submitting.get() || !can_manage() {
             return;
         }
         error.set(None);
@@ -182,6 +186,9 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
 
     view! {
         <form on:submit=on_submit>
+            <Show when=move || !can_manage()>
+                <div class="alert alert-warning">"You don't have permission to change organization settings — ask an admin."</div>
+            </Show>
             {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
             {move || {
                 success.get().then(|| view! { <div class="alert alert-success">"Settings saved."</div> })
@@ -328,7 +335,7 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
                 </div>
             </div>
 
-            <button type="submit" class="btn btn-primary" disabled=submitting style="margin-top: var(--space-4);">
+            <button type="submit" class="btn btn-primary" disabled=move || submitting.get() || !can_manage() style="margin-top: var(--space-4);">
                 {move || if submitting.get() { "Saving…" } else { "Save settings" }}
             </button>
         </form>

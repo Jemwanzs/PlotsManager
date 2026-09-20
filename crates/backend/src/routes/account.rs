@@ -99,6 +99,10 @@ async fn change_password(
     )
     .map_err(|e| AppError::Internal(e.into()))?;
 
+    let permissions = crate::extractors::fetch_permissions(&state.db, row.id)
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+
     Ok(Json(AuthSession {
         token,
         user: User {
@@ -111,6 +115,7 @@ async fn change_password(
             is_platform_owner: row.is_platform_owner,
             created_at: row.created_at,
             must_change_password: false,
+            permissions: permissions.into_iter().collect(),
         },
     }))
 }

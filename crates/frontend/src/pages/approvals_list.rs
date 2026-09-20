@@ -3,10 +3,10 @@ use leptos::task::spawn_local;
 use leptos_router::hooks::use_query_map;
 
 use crate::api::{ApiClient, ApiError};
-use crate::auth::{use_api, use_currency};
+use crate::auth::{has_permission, use_api, use_auth, use_currency};
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
 use crate::format::{format_money, format_payment_mode};
-use domain::ApprovalStatus;
+use domain::{ApprovalStatus, PERM_APPROVE_TRANSACTIONS};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Filter {
@@ -73,6 +73,8 @@ fn decide(
 pub fn ApprovalsList() -> impl IntoView {
     let api = use_api();
     let currency = use_currency();
+    let auth = use_auth();
+    let can_decide = has_permission(auth, PERM_APPROVE_TRANSACTIONS);
 
     // `/approvals?tab=history` (the sidebar's "Approval history" nav
     // sub-item) selects the Decided tab; still switchable afterward like
@@ -189,7 +191,7 @@ pub fn ApprovalsList() -> impl IntoView {
                                                             </p>
                                                         })}
 
-                                                        {pending.then(|| {
+                                                        {(pending && can_decide).then(|| {
                                                             let api_approve = api.clone();
                                                             let api_reject = api.clone();
                                                             view! {

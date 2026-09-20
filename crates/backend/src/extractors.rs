@@ -11,6 +11,36 @@ use crate::auth::verify_session_token;
 use crate::error::AppError;
 use crate::state::AppState;
 
+/// The union of every `roles.permissions` array across a user's
+/// `role_assignments` — shared by this extractor (runs per request)
+/// and by `routes/auth.rs::login` / `routes/account.rs::change_password`
+/// (runs once, to populate `User.permissions` so the frontend can hide
+/// actions a role doesn't grant instead of only finding out from a
+/// 403 after clicking).
+pub async fn fetch_permissions(db: &sqlx::PgPool, user_id: Uuid) -> Result<HashSet<String>, sqlx::Error> {
+    let permission_rows: Vec<(serde_json::Value,)> = sqlx::query_as(
+        r#"select r.permissions
+           from role_assignments ra
+           join roles r on r.id = ra.role_id
+           where ra.user_id = $1"#,
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await?;
+
+    Ok(permission_rows
+        .into_iter()
+        .flat_map(|(perms,)| {
+            perms
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+        })
+        .collect())
+}
+
 /// The authenticated caller, extracted from a verified JWT
 /// (`crates/backend/src/auth.rs`). `organization_id` rides in the token
 /// itself, so every handler that uses this extractor gets it for free —
@@ -114,28 +144,9 @@ impl FromRequestParts<AppState> for AuthUser {
             }
         }
 
-        let permission_rows: Vec<(serde_json::Value,)> = sqlx::query_as(
-            r#"select r.permissions
-               from role_assignments ra
-               join roles r on r.id = ra.role_id
-               where ra.user_id = $1"#,
-        )
-        .bind(claims.sub)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|_| AppError::Unauthorized)?;
-
-        let permissions: HashSet<String> = permission_rows
-            .into_iter()
-            .flat_map(|(perms,)| {
-                perms
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-            })
-            .collect();
+        let permissions = fetch_permissions(&state.db, claims.sub)
+            .await
+            .map_err(|_| AppError::Unauthorized)?;
 
         Ok(AuthUser {
             user_id: claims.sub,

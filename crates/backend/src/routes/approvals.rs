@@ -12,6 +12,7 @@ use axum::{extract::State, Json, Router};
 use chrono::{DateTime, Utc};
 use domain::{
     ApprovalRequest, ApprovalRequestSummary, ApprovalStatus, DecideApprovalInput, PaymentMode,
+    PERM_APPROVE_TRANSACTIONS,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -258,6 +259,8 @@ async fn decide(
     to: ApprovalStatus,
     input: DecideApprovalInput,
 ) -> Result<Json<ApprovalRequestSummary>, AppError> {
+    auth.require_permission(PERM_APPROVE_TRANSACTIONS)?;
+
     let requested_by: Option<Uuid> = sqlx::query_scalar(
         "select requested_by from approval_requests where id = $1 and organization_id = $2 and status = 'pending'",
     )

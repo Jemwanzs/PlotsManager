@@ -2290,6 +2290,7 @@ fn seed() -> MockDb {
         is_platform_owner: false,
         must_change_password: false,
         created_at: Utc::now(),
+        permissions: vec!["*".to_string()],
     };
     let admin_role_id = Uuid::new_v4();
 

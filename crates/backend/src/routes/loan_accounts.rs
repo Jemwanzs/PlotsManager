@@ -2,7 +2,10 @@ use axum::extract::Path;
 use axum::routing::post;
 use axum::{extract::State, routing::get, Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
-use domain::{LoanAccountDetail, LoanAccountStatus, Payment, PlotLoanAccount, RecordPaymentInput};
+use domain::{
+    LoanAccountDetail, LoanAccountStatus, Payment, PlotLoanAccount, RecordPaymentInput,
+    PERM_PAYMENTS_RECORD,
+};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
@@ -154,6 +157,8 @@ async fn record_payment(
     Path(id): Path<Uuid>,
     Json(input): Json<RecordPaymentInput>,
 ) -> Result<Json<Payment>, AppError> {
+    auth.require_permission(PERM_PAYMENTS_RECORD)?;
+
     if input.amount <= Decimal::ZERO {
         return Err(AppError::bad_request("Enter an amount greater than zero."));
     }

@@ -28,6 +28,13 @@ pub struct User {
     /// to a mandatory change-password screen on login when this is
     /// true — see `crates/frontend/src/layout/mod.rs`'s `AppShell`.
     pub must_change_password: bool,
+    /// The union of every `roles.permissions` array across this user's
+    /// `role_assignments` — the same set `AuthUser::has_permission`
+    /// checks server-side (`crates/backend/src/extractors.rs`), sent
+    /// here so the frontend can hide an action a role doesn't grant
+    /// instead of only finding out from a 403 after clicking it.
+    /// `"*"` means every permission, same meaning as server-side.
+    pub permissions: Vec<String>,
 }
 
 /// Roles are organisation-defined records in the database (role name +

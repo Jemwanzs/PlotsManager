@@ -28,3 +28,18 @@ pub fn use_currency() -> CurrencySignal {
 pub fn use_api() -> ApiClient {
     use_context::<ApiClient>().expect("ApiClient not provided — is this inside <App/>?")
 }
+
+/// Mirrors `AuthUser::has_permission` (`crates/backend/src/
+/// extractors.rs`) on the frontend — the backend is still the actual
+/// enforcement, this is only so a role that can't do something never
+/// sees the button for it in the first place. Call inside a reactive
+/// closure (`move || has_permission(auth, "...")`) so it re-evaluates
+/// if the session changes.
+pub fn has_permission(auth: AuthSignal, permission: &str) -> bool {
+    auth.get()
+        .map(|s| {
+            s.user.is_platform_owner
+                || s.user.permissions.iter().any(|p| p == "*" || p == permission)
+        })
+        .unwrap_or(false)
+}
