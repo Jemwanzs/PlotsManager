@@ -183,8 +183,16 @@ pub(crate) async fn execute_sale(
         .await?;
     }
 
+    // A full-cash sale is paid in full at the moment it's recorded — no
+    // loan account, no follow-up payment step exists for it anywhere in
+    // this app (see `record_payment`'s own docs), so leaving it at
+    // `Reserved` left every cash sale permanently stuck looking
+    // unfinished. `Booked` for Lipa Pole Pole is correct as a starting
+    // point precisely because there *is* a follow-up: `record_payment`
+    // advances it to `Sold` once the loan account reaches `FullyPaid`
+    // (see the status-sync call at the end of that handler).
     let new_status = match params.payment_mode {
-        PaymentMode::FullCash => PlotStatus::Reserved,
+        PaymentMode::FullCash => PlotStatus::Sold,
         PaymentMode::LipaPolePoleInterestFree | PaymentMode::LipaPolePoleInterestBearing => {
             PlotStatus::Booked
         }
@@ -322,10 +330,12 @@ async fn insert_bulk_sale(
         _ => AppError::from(e),
     })?;
 
-    // A historical import records an outcome, not the start of
-    // today's workflow — `execute_sale` puts a brand-new cash sale in
-    // 'reserved' because nothing has been finalized yet; an imported
-    // one already has been.
+    // Matches `execute_sale`: a cash sale is paid in full the moment
+    // it's recorded, live or imported, so it always lands on `Sold`
+    // directly. A Lipa Pole Pole import additionally goes straight to
+    // `Sold` if the imported `amount_paid` already covers the full
+    // price — a live LPP sale can't start that way (no payment has
+    // happened yet), but a historical one might already be finished.
     let fully_paid = input.payment_mode == PaymentMode::FullCash || amount_paid >= input.agreed_price;
     let new_status = if fully_paid {
         PlotStatus::Sold

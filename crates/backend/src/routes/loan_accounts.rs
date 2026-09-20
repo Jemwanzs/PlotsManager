@@ -212,6 +212,31 @@ async fn record_payment(
         .execute(&mut *tx)
         .await?;
 
+    // The plot itself never advanced past `Booked` once this reached
+    // `FullyPaid` — nothing else in the app ever touched `plots.status`
+    // after the sale was first recorded, so a fully-repaid Lipa Pole
+    // Pole plot stayed looking "Booked" forever on every screen that
+    // reads plot status (list, map, customer, reports). Only advances
+    // forward: a plot already moved on to a later stage (transfer in
+    // progress/transferred/blocked/disputed/cancelled — none reachable
+    // today, but this guards against ever clobbering one) is left
+    // alone rather than pulled back to `Sold`.
+    if new_status == LoanAccountStatus::FullyPaid {
+        sqlx::query(
+            r#"
+            update plots set status = 'sold'
+            where id = (select pl.id from plots pl
+                        join plot_sales ps on ps.plot_id = pl.id
+                        join plot_loan_accounts pla on pla.sale_id = ps.id
+                        where pla.id = $1)
+              and status in ('booked', 'reserved', 'selected', 'temporarily_held', 'under_approval')
+            "#,
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
     tx.commit().await?;
 
     Ok(Json(payment_row.into_domain()?))
