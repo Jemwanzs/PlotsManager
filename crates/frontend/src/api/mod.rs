@@ -188,6 +188,13 @@ impl ApiClient {
         }
     }
 
+    pub async fn get_loan_statement(&self, id: Uuid) -> Result<domain::LoanStatement, ApiError> {
+        match self {
+            Self::Mock(api) => api.get_loan_statement(id).await,
+            Self::Http(api) => api.get_loan_statement(id).await,
+        }
+    }
+
     pub async fn list_platform_organizations(
         &self,
     ) -> Result<Vec<PlatformOrganizationSummary>, ApiError> {

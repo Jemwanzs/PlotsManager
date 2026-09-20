@@ -61,6 +61,7 @@ fn LoanAccountContent(
     let account = detail.account.clone();
     let project_href = format!("/projects/{}", detail.project_id);
     let customer_href = format!("/customers/{}", detail.customer_id);
+    let statement_href = format!("/loan-accounts/{}/statement", account.id);
 
     view! {
         <div class="page-header">
@@ -73,7 +74,10 @@ fn LoanAccountContent(
                     " · Plot " {detail.plot_number.clone()}
                 </p>
             </div>
-            <StatusBadge label=detail.status_label.clone() color=detail.status_color.clone() />
+            <div style="display:flex; gap: var(--space-2); align-items: center;">
+                <A href=statement_href attr:class="btn btn-secondary">"View Statement"</A>
+                <StatusBadge label=detail.status_label.clone() color=detail.status_color.clone() />
+            </div>
         </div>
 
         <div class="stat-grid">

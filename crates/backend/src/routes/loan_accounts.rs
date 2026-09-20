@@ -3,8 +3,8 @@ use axum::routing::post;
 use axum::{extract::State, routing::get, Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
 use domain::{
-    LoanAccountDetail, LoanAccountStatus, Payment, PlotLoanAccount, RecordPaymentInput,
-    PERM_PAYMENTS_RECORD,
+    LoanAccountDetail, LoanAccountStatus, LoanLedgerEntry, LoanStatement, Payment,
+    PlotLoanAccount, RecordPaymentInput, PERM_PAYMENTS_RECORD,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -18,6 +18,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/loan-accounts/:id", get(get_loan_account))
         .route("/api/v1/loan-accounts/:id/payments", post(record_payment))
+        .route("/api/v1/loan-accounts/:id/statement", get(get_loan_statement))
 }
 
 #[derive(sqlx::FromRow)]
@@ -189,6 +190,31 @@ async fn record_payment(
         LoanAccountStatus::ActivePartiallyPaid
     };
 
+    // Allocation waterfall: penalty -> interest -> principal (the
+    // order the enhancement spec calls for as the default, kept as a
+    // literal constant here rather than a config table until a real
+    // "make this configurable" phase exists to attach a UI to it).
+    // Outstanding interest/penalty are the running sums of every
+    // charge and waiver posted so far for this account — currently
+    // always zero, since nothing anywhere posts an interest or
+    // penalty charge yet, so every payment allocates entirely to
+    // principal until that phase ships. Written generically now so it
+    // needs no changes once charges exist.
+    let (interest_outstanding, penalty_outstanding): (Decimal, Decimal) = sqlx::query_as(
+        r#"select coalesce(sum(interest_delta), 0), coalesce(sum(penalty_delta), 0)
+           from loan_ledger_entries where loan_account_id = $1"#,
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let mut remaining = input.amount;
+    let penalty_paid = remaining.min(penalty_outstanding.max(Decimal::ZERO));
+    remaining -= penalty_paid;
+    let interest_paid = remaining.min(interest_outstanding.max(Decimal::ZERO));
+    remaining -= interest_paid;
+    let principal_paid = remaining;
+
     let payment_row: PaymentRow = sqlx::query_as(
         r#"
         insert into payments (loan_account_id, amount, payment_date, method, status, captured_by, verified_by)
@@ -211,6 +237,30 @@ async fn record_payment(
         .bind(id)
         .execute(&mut *tx)
         .await?;
+
+    sqlx::query(
+        r#"
+        insert into loan_ledger_entries
+            (loan_account_id, organization_id, entry_type, entry_date, gross_amount,
+             principal_delta, interest_delta, penalty_delta, balance_after,
+             method, external_reference, reference_payment_id, created_by)
+        values ($1, $2, 'payment', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        "#,
+    )
+    .bind(id)
+    .bind(auth.organization_id)
+    .bind(input.payment_date)
+    .bind(input.amount)
+    .bind(-principal_paid)
+    .bind(-interest_paid)
+    .bind(-penalty_paid)
+    .bind(new_outstanding)
+    .bind(&input.method)
+    .bind(&payment_row.external_reference)
+    .bind(payment_row.id)
+    .bind(auth.user_id)
+    .execute(&mut *tx)
+    .await?;
 
     // The plot itself never advanced past `Booked` once this reached
     // `FullyPaid` — nothing else in the app ever touched `plots.status`
@@ -240,4 +290,115 @@ async fn record_payment(
     tx.commit().await?;
 
     Ok(Json(payment_row.into_domain()?))
+}
+
+#[derive(sqlx::FromRow)]
+struct LedgerEntryRow {
+    id: Uuid,
+    loan_account_id: Uuid,
+    entry_type: String,
+    entry_date: NaiveDate,
+    gross_amount: Decimal,
+    principal_delta: Decimal,
+    interest_delta: Decimal,
+    penalty_delta: Decimal,
+    balance_after: Decimal,
+    method: Option<String>,
+    external_reference: Option<String>,
+    notes: Option<String>,
+    created_by_name: String,
+    created_at: DateTime<Utc>,
+}
+
+impl LedgerEntryRow {
+    fn into_domain(self) -> Result<LoanLedgerEntry, AppError> {
+        Ok(LoanLedgerEntry {
+            id: self.id,
+            loan_account_id: self.loan_account_id,
+            entry_type: from_pg("loan_ledger_entries.entry_type", &self.entry_type)?,
+            entry_date: self.entry_date,
+            gross_amount: self.gross_amount,
+            principal_delta: self.principal_delta,
+            interest_delta: self.interest_delta,
+            penalty_delta: self.penalty_delta,
+            balance_after: self.balance_after,
+            method: self.method,
+            external_reference: self.external_reference,
+            notes: self.notes,
+            created_by_name: self.created_by_name,
+            created_at: self.created_at,
+        })
+    }
+}
+
+/// The full running statement for one receivable account — header
+/// context plus every ledger entry in order, generated from the
+/// actual transaction ledger (`loan_ledger_entries`), never
+/// reconstructed from the account's current balance alone.
+async fn get_loan_statement(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<LoanStatement>, AppError> {
+    let row: Option<LoanAccountRow> = sqlx::query_as(LOAN_ACCOUNT_DETAIL_QUERY)
+        .bind(id)
+        .bind(auth.organization_id)
+        .fetch_optional(&state.db)
+        .await?;
+    let row = row.ok_or(AppError::NotFound)?;
+
+    let agreed_price: Decimal =
+        sqlx::query_scalar("select agreed_price from plot_sales where id = $1")
+            .bind(row.sale_id)
+            .fetch_one(&state.db)
+            .await?;
+
+    let entry_rows: Vec<LedgerEntryRow> = sqlx::query_as(
+        r#"
+        select le.id, le.loan_account_id, le.entry_type, le.entry_date, le.gross_amount,
+            le.principal_delta, le.interest_delta, le.penalty_delta, le.balance_after,
+            le.method, le.external_reference, le.notes, u.full_name as created_by_name,
+            le.created_at
+        from loan_ledger_entries le
+        join users u on u.id = le.created_by
+        where le.loan_account_id = $1
+        order by le.entry_date, le.created_at
+        "#,
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
+    let entries = entry_rows
+        .into_iter()
+        .map(LedgerEntryRow::into_domain)
+        .collect::<Result<Vec<_>, AppError>>()?;
+
+    let status: LoanAccountStatus = from_pg("plot_loan_accounts.status", &row.status)?;
+    let (label, color) = domain::loan_status_meta(status);
+
+    Ok(Json(LoanStatement {
+        account: PlotLoanAccount {
+            id: row.id,
+            account_number: row.account_number,
+            sale_id: row.sale_id,
+            principal: row.principal,
+            interest_rate: row.interest_rate,
+            deposit_required: row.deposit_required,
+            deposit_paid: row.deposit_paid,
+            instalment_amount: row.instalment_amount,
+            repayment_frequency_days: row.repayment_frequency_days,
+            start_date: row.start_date,
+            status,
+            amount_paid: row.amount_paid,
+            outstanding_balance: row.outstanding_balance,
+            days_in_arrears: row.days_in_arrears,
+        },
+        plot_number: row.plot_number,
+        project_name: row.project_name,
+        customer_name: row.customer_name,
+        agreed_price,
+        status_label: label.to_string(),
+        status_color: color.to_string(),
+        entries,
+    }))
 }

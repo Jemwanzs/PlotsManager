@@ -278,6 +278,10 @@ impl HttpApi {
         self.post(&path, &input).await
     }
 
+    pub async fn get_loan_statement(&self, id: Uuid) -> Result<domain::LoanStatement, ApiError> {
+        self.get(&format!("/api/v1/loan-accounts/{id}/statement")).await
+    }
+
     pub async fn list_platform_organizations(
         &self,
     ) -> Result<Vec<PlatformOrganizationSummary>, ApiError> {

@@ -110,3 +110,60 @@ pub struct Payment {
     pub verified_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
 }
+
+/// One row of a loan account's transaction ledger
+/// (`database/migrations/0020_loan_ledger.sql`) — every charge,
+/// payment, waiver and reversal, in the order they happened. The
+/// source of truth `LoanStatement` is built from; never reconstructed
+/// from the account's current balance (see that migration's own docs
+/// on why `payments` stays a separate, unchanged table underneath).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LedgerEntryType {
+    Payment,
+    ChargeInterest,
+    ChargePenalty,
+    WaiverInterest,
+    WaiverPenalty,
+    Reversal,
+    Adjustment,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoanLedgerEntry {
+    pub id: Uuid,
+    pub loan_account_id: Uuid,
+    pub entry_type: LedgerEntryType,
+    pub entry_date: NaiveDate,
+    pub gross_amount: Decimal,
+    /// Signed: negative reduces that component's outstanding (a
+    /// payment or a waiver), positive increases it (a charge). Always
+    /// sums to this entry's net effect on `balance_after` relative to
+    /// the entry before it.
+    pub principal_delta: Decimal,
+    pub interest_delta: Decimal,
+    pub penalty_delta: Decimal,
+    pub balance_after: Decimal,
+    pub method: Option<String>,
+    pub external_reference: Option<String>,
+    pub notes: Option<String>,
+    pub created_by_name: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// `GET /api/v1/loan-accounts/:id/statement` — the full running
+/// statement for one receivable account: header context plus every
+/// ledger entry in order. `Date Range | View | Download PDF | Export
+/// Excel` (the filter/export affordances) are frontend concerns over
+/// this same data, not separate backend concepts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoanStatement {
+    pub account: PlotLoanAccount,
+    pub plot_number: String,
+    pub project_name: String,
+    pub customer_name: String,
+    pub agreed_price: Decimal,
+    pub status_label: String,
+    pub status_color: String,
+    pub entries: Vec<LoanLedgerEntry>,
+}

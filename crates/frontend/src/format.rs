@@ -1,4 +1,4 @@
-use domain::{PaymentMode, PaymentStatus};
+use domain::{LedgerEntryType, PaymentMode, PaymentStatus};
 use rust_decimal::Decimal;
 
 pub fn format_payment_mode(mode: PaymentMode) -> &'static str {
@@ -16,6 +16,18 @@ pub fn format_payment_status(status: PaymentStatus) -> &'static str {
         PaymentStatus::Posted => "Posted",
         PaymentStatus::Rejected => "Rejected",
         PaymentStatus::Reversed => "Reversed",
+    }
+}
+
+pub fn format_ledger_entry_type(entry_type: LedgerEntryType) -> &'static str {
+    match entry_type {
+        LedgerEntryType::Payment => "Payment",
+        LedgerEntryType::ChargeInterest => "Interest Charge",
+        LedgerEntryType::ChargePenalty => "Penalty Charge",
+        LedgerEntryType::WaiverInterest => "Interest Waiver",
+        LedgerEntryType::WaiverPenalty => "Penalty Waiver",
+        LedgerEntryType::Reversal => "Reversal",
+        LedgerEntryType::Adjustment => "Adjustment",
     }
 }
 

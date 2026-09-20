@@ -747,6 +747,88 @@ impl MockApi {
         })
     }
 
+    /// Synthesizes a statement from `payments` — the mock has no
+    /// separate ledger table, so every entry is a `payment` allocated
+    /// entirely to principal (matching reality today: nothing in this
+    /// app, real backend included, posts an interest/penalty charge
+    /// yet — see `database/migrations/0020_loan_ledger.sql`'s own
+    /// docs). Running balance recomputed the same way that
+    /// migration's backfill did: principal minus cumulative payments.
+    pub async fn get_loan_statement(&self, id: Uuid) -> Result<domain::LoanStatement, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+        let account = db
+            .loan_accounts
+            .iter()
+            .find(|la| la.id == id)
+            .cloned()
+            .ok_or(ApiError::NotFound)?;
+        let sale = db
+            .sales
+            .iter()
+            .find(|s| s.id == account.sale_id)
+            .ok_or(ApiError::NotFound)?;
+        let plot = db
+            .plots
+            .iter()
+            .find(|p| p.id == sale.plot_id)
+            .ok_or(ApiError::NotFound)?;
+        let project = db
+            .projects
+            .iter()
+            .find(|p| p.id == plot.project_id)
+            .ok_or(ApiError::NotFound)?;
+        let customer = db
+            .customers
+            .iter()
+            .find(|c| c.id == sale.customer_id)
+            .ok_or(ApiError::NotFound)?;
+        let (label, color) = loan_status_meta(account.status);
+
+        let mut payments: Vec<Payment> = db
+            .payments
+            .iter()
+            .filter(|p| p.loan_account_id == id)
+            .cloned()
+            .collect();
+        payments.sort_by(|a, b| (a.payment_date, a.created_at).cmp(&(b.payment_date, b.created_at)));
+
+        let mut running = account.principal;
+        let entries = payments
+            .into_iter()
+            .map(|p| {
+                running = (running - p.amount).max(Decimal::ZERO);
+                domain::LoanLedgerEntry {
+                    id: p.id,
+                    loan_account_id: id,
+                    entry_type: domain::LedgerEntryType::Payment,
+                    entry_date: p.payment_date,
+                    gross_amount: p.amount,
+                    principal_delta: -p.amount,
+                    interest_delta: Decimal::ZERO,
+                    penalty_delta: Decimal::ZERO,
+                    balance_after: running,
+                    method: Some(p.method.clone()),
+                    external_reference: p.external_reference.clone(),
+                    notes: None,
+                    created_by_name: db.demo_user.full_name.clone(),
+                    created_at: p.created_at,
+                }
+            })
+            .collect();
+
+        Ok(domain::LoanStatement {
+            account,
+            plot_number: plot.plot_number.clone(),
+            project_name: project.name.clone(),
+            customer_name: customer.full_name.clone(),
+            agreed_price: sale.agreed_price,
+            status_label: label.to_string(),
+            status_color: color.to_string(),
+            entries,
+        })
+    }
+
     /// Finance → Loan Accounts: every receivable across every project,
     /// org-wide — the list `get_loan_account` above has no equivalent
     /// for, since until the Finance module nothing needed one.
