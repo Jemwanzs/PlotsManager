@@ -20,6 +20,46 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/sales/bulk", post(bulk_create_sales))
 }
 
+/// The static repayment plan behind a Plot Loan Account — a deposit
+/// (instalment 0) plus 12 equal instalments, `repayment_frequency_days`
+/// apart starting at `start_date`. Matches exactly what
+/// 0022_repayment_schedule.sql backfilled for every account that
+/// predates this table being populated, so a new account and a
+/// backfilled one are computed by the same views (`loan_account_
+/// schedule_summary` etc.) with no special-casing either way. Interest
+/// isn't amortized in here — it's layered on separately via manual
+/// charges (`routes/loan_accounts.rs::post_charge`) — so every row's
+/// `interest_due` stays 0.
+async fn insert_repayment_schedule<'e, E: sqlx::PgExecutor<'e>>(
+    db: E,
+    loan_account_id: Uuid,
+    deposit_required: Decimal,
+    instalment_amount: Decimal,
+    repayment_frequency_days: i32,
+    start_date: chrono::NaiveDate,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        insert into repayment_schedule_entries
+            (loan_account_id, instalment_number, due_date, principal_due, interest_due, fees_due, total_due, amount_paid, status)
+        select $1, 0, $5, $2, 0, 0, $2, 0, 'upcoming'
+        where $2 > 0
+        union all
+        select $1, gs.n, $5 + ($4 * gs.n) * interval '1 day', $3, 0, 0, $3, 0, 'upcoming'
+        from generate_series(1, 12) as gs(n)
+        where $3 > 0
+        "#,
+    )
+    .bind(loan_account_id)
+    .bind(deposit_required)
+    .bind(instalment_amount)
+    .bind(repayment_frequency_days)
+    .bind(start_date)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
 /// Reserves a plot for a customer — the first step of the sales workflow
 /// (docs/07). Mirrors `frontend::api::mock::MockApi::create_sale` exactly
 /// (same 10% deposit / 12-instalment Plot Loan Account default for Lipa
@@ -165,12 +205,13 @@ pub(crate) async fn execute_sale(
             _ => None,
         };
 
-        sqlx::query(
+        let (loan_account_id, start_date): (Uuid, chrono::NaiveDate) = sqlx::query_as(
             r#"
             insert into plot_loan_accounts
                 (account_number, sale_id, principal, interest_rate, deposit_required, deposit_paid,
                  instalment_amount, repayment_frequency_days, start_date, status, amount_paid, outstanding_balance)
             values ($1, $2, $3, $4, $5, 0, $6, 30, current_date, 'approved_awaiting_deposit', 0, $3)
+            returning id, start_date
             "#,
         )
         .bind(&account_number)
@@ -179,8 +220,11 @@ pub(crate) async fn execute_sale(
         .bind(interest_rate)
         .bind(deposit_required)
         .bind(instalment_amount)
-        .execute(&mut **tx)
+        .fetch_one(&mut **tx)
         .await?;
+
+        insert_repayment_schedule(&mut **tx, loan_account_id, deposit_required, instalment_amount, 30, start_date)
+            .await?;
     }
 
     // A full-cash sale is paid in full at the moment it's recorded — no
@@ -367,12 +411,13 @@ async fn insert_bulk_sale(
             LoanAccountStatus::ApprovedAwaitingDeposit
         };
 
-        sqlx::query(
+        let loan_account_id: Uuid = sqlx::query_scalar(
             r#"
             insert into plot_loan_accounts
                 (account_number, sale_id, principal, interest_rate, deposit_required, deposit_paid,
                  instalment_amount, repayment_frequency_days, start_date, status, amount_paid, outstanding_balance)
             values ($1, $2, $3, $4, $5, $6, $7, 30, $8, $9, $10, $11)
+            returning id
             "#,
         )
         .bind(&account_number)
@@ -386,8 +431,11 @@ async fn insert_bulk_sale(
         .bind(to_pg(&status))
         .bind(amount_paid)
         .bind(outstanding_balance)
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await?;
+
+        insert_repayment_schedule(&mut *tx, loan_account_id, deposit_required, instalment_amount, 30, input.sale_date)
+            .await?;
     }
 
     sqlx::query("update plots set status = $1, assigned_customer_id = $2 where id = $3")

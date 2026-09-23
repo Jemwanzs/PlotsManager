@@ -170,13 +170,35 @@ impl MockApi {
             .collect();
         let active_loan_book: Decimal = active_loan_plots.iter().map(|p| p.asking_price).sum();
 
-        // No real arrears data exists yet (no plot_loan_accounts wired to
-        // the mock) — split the active book 70/30 so the dashboard reads
-        // realistically instead of showing an all-or-nothing split.
-        let performing_count = (active_loan_plots.len() as u32 * 7).div_euclid(10);
-        let non_performing_count = active_loan_plots.len() as u32 - performing_count;
-        let performing_amount = active_loan_book * Decimal::new(7, 1);
-        let non_performing_amount = active_loan_book - performing_amount;
+        // Mirrors the backend's dashboard.rs: performing/non-performing
+        // keyed off the live schedule (`with_live_schedule`'s
+        // `days_in_arrears`), not a status flag nothing here ever sets
+        // to `InArrears` either.
+        let scheduled_accounts: Vec<PlotLoanAccount> =
+            db.loan_accounts.iter().cloned().map(with_live_schedule).collect();
+        let active_accounts: Vec<&PlotLoanAccount> = scheduled_accounts
+            .iter()
+            .filter(|a| {
+                matches!(
+                    a.status,
+                    LoanAccountStatus::ActiveCurrent
+                        | LoanAccountStatus::ActivePartiallyPaid
+                        | LoanAccountStatus::InGracePeriod
+                )
+            })
+            .collect();
+        let performing_count = active_accounts.iter().filter(|a| a.days_in_arrears == 0).count() as u32;
+        let performing_amount: Decimal = active_accounts
+            .iter()
+            .filter(|a| a.days_in_arrears == 0)
+            .map(|a| a.outstanding_balance)
+            .sum();
+        let non_performing_count = active_accounts.iter().filter(|a| a.days_in_arrears > 0).count() as u32;
+        let non_performing_amount: Decimal = active_accounts
+            .iter()
+            .filter(|a| a.days_in_arrears > 0)
+            .map(|a| a.outstanding_balance)
+            .sum();
 
         Ok(DashboardSummary {
             total_customers: db.customers.len() as u32,
@@ -522,7 +544,7 @@ impl MockApi {
             .max_by_key(|s| s.created_at)
             .and_then(|s| {
                 let customer = db.customers.iter().find(|c| c.id == s.customer_id)?;
-                let loan_account = db.loan_accounts.iter().find(|l| l.sale_id == s.id).cloned();
+                let loan_account = db.loan_accounts.iter().find(|l| l.sale_id == s.id).cloned().map(with_live_schedule);
                 let (loan_status_label, loan_status_color) = match &loan_account {
                     Some(l) => {
                         let (label, color) = domain::loan_status_meta(l.status);
@@ -708,6 +730,7 @@ impl MockApi {
             .iter()
             .find(|la| la.id == id)
             .cloned()
+            .map(with_live_schedule)
             .ok_or(ApiError::NotFound)?;
         let sale = db
             .sales
@@ -767,6 +790,7 @@ impl MockApi {
             .iter()
             .find(|la| la.id == id)
             .cloned()
+            .map(with_live_schedule)
             .ok_or(ApiError::NotFound)?;
         let sale = db
             .sales
@@ -947,7 +971,7 @@ impl MockApi {
                 let customer = db.customers.iter().find(|c| c.id == sale.customer_id)?;
                 let (label, color) = loan_status_meta(account.status);
                 Some(domain::LoanAccountSummary {
-                    account: account.clone(),
+                    account: with_live_schedule(account.clone()),
                     plot_id: plot.id,
                     plot_number: plot.plot_number.clone(),
                     project_id: project.id,
@@ -2478,7 +2502,7 @@ fn new_loan_account(sale: &PlotSale, seq: usize, start_date: NaiveDate) -> PlotL
         _ => None,
     };
 
-    PlotLoanAccount {
+    with_live_schedule(PlotLoanAccount {
         id: Uuid::new_v4(),
         account_number: format!("PLA-{seq:04}"),
         sale_id: sale.id,
@@ -2493,7 +2517,53 @@ fn new_loan_account(sale: &PlotSale, seq: usize, start_date: NaiveDate) -> PlotL
         amount_paid: Decimal::ZERO,
         outstanding_balance: sale.agreed_price,
         days_in_arrears: 0,
+        next_instalment_due_date: None,
+        next_instalment_amount: None,
+    })
+}
+
+/// Mock-side equivalent of the backend's `loan_account_schedule_summary`
+/// view (`0022_repayment_schedule.sql`) — same deposit-then-12-instalments
+/// plan, same "allocate `amount_paid` oldest-due-first" logic, same
+/// 7-day grace period, recomputed fresh from the account's current
+/// `amount_paid` every time this is called (never trusted as
+/// stored/stale state) so it can't drift from what the real backend
+/// would compute for the same numbers.
+fn with_live_schedule(mut account: PlotLoanAccount) -> PlotLoanAccount {
+    const GRACE_DAYS: i64 = 7;
+    let today = Utc::now().date_naive();
+
+    let mut entries: Vec<(NaiveDate, Decimal)> = Vec::new();
+    if account.deposit_required > Decimal::ZERO {
+        entries.push((account.start_date, account.deposit_required));
     }
+    if account.instalment_amount > Decimal::ZERO {
+        for n in 1..=12i64 {
+            let due = account.start_date + chrono::Duration::days(account.repayment_frequency_days as i64 * n);
+            entries.push((due, account.instalment_amount));
+        }
+    }
+
+    let mut remaining_paid = account.amount_paid;
+    let mut next_due: Option<(NaiveDate, Decimal)> = None;
+    let mut oldest_overdue: Option<NaiveDate> = None;
+    for (due_date, total_due) in entries {
+        let paid_amount = remaining_paid.min(total_due).max(Decimal::ZERO);
+        remaining_paid = (remaining_paid - paid_amount).max(Decimal::ZERO);
+        if paid_amount < total_due {
+            if next_due.is_none() {
+                next_due = Some((due_date, total_due));
+            }
+            if oldest_overdue.is_none() && due_date <= today - chrono::Duration::days(GRACE_DAYS) {
+                oldest_overdue = Some(due_date);
+            }
+        }
+    }
+
+    account.days_in_arrears = oldest_overdue.map(|d| (today - d).num_days() as i32).unwrap_or(0);
+    account.next_instalment_due_date = next_due.map(|(d, _)| d);
+    account.next_instalment_amount = next_due.map(|(_, a)| a);
+    account
 }
 
 async fn settle(millis: u32) {

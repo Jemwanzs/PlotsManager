@@ -502,6 +502,8 @@ struct PlotCommercialRow {
     amount_paid: Option<Decimal>,
     outstanding_balance: Option<Decimal>,
     days_in_arrears: Option<i32>,
+    next_instalment_due_date: Option<chrono::NaiveDate>,
+    next_instalment_amount: Option<Decimal>,
 }
 
 /// The full commercial position behind one plot — reservation/sale,
@@ -526,13 +528,15 @@ async fn get_plot_commercial_summary(
             pla.id as loan_id, pla.account_number, pla.sale_id, pla.principal, pla.interest_rate,
             pla.deposit_required, pla.deposit_paid, pla.instalment_amount, pla.repayment_frequency_days,
             pla.start_date, pla.status as loan_status, pla.amount_paid, pla.outstanding_balance,
-            pla.days_in_arrears
+            (current_date - lass.oldest_overdue_due_date) as days_in_arrears,
+            lass.next_instalment_due_date, lass.next_instalment_amount
         from plots pl
         left join plot_sales ps on ps.id = (
             select id from plot_sales where plot_id = pl.id order by created_at desc limit 1
         )
         left join customers c on c.id = ps.customer_id
         left join plot_loan_accounts pla on pla.sale_id = ps.id
+        left join loan_account_schedule_summary lass on lass.loan_account_id = pla.id
         where pl.id = $1 and pl.project_id = $2
         "#,
     )
@@ -551,12 +555,12 @@ async fn get_plot_commercial_summary(
             let loan_account = match (
                 row.loan_id, row.account_number, row.sale_id, row.principal, row.deposit_required,
                 row.deposit_paid, row.instalment_amount, row.repayment_frequency_days, row.start_date,
-                row.loan_status.clone(), row.amount_paid, row.outstanding_balance, row.days_in_arrears,
+                row.loan_status.clone(), row.amount_paid, row.outstanding_balance,
             ) {
                 (
                     Some(id), Some(account_number), Some(sale_id), Some(principal), Some(deposit_required),
                     Some(deposit_paid), Some(instalment_amount), Some(repayment_frequency_days), Some(start_date),
-                    Some(loan_status_raw), Some(amount_paid), Some(outstanding_balance), Some(days_in_arrears),
+                    Some(loan_status_raw), Some(amount_paid), Some(outstanding_balance),
                 ) => Some(PlotLoanAccount {
                     id,
                     account_number,
@@ -571,7 +575,9 @@ async fn get_plot_commercial_summary(
                     status: from_pg("plot_loan_accounts.status", &loan_status_raw)?,
                     amount_paid,
                     outstanding_balance,
-                    days_in_arrears,
+                    days_in_arrears: row.days_in_arrears.unwrap_or(0),
+                    next_instalment_due_date: row.next_instalment_due_date,
+                    next_instalment_amount: row.next_instalment_amount,
                 }),
                 _ => None,
             };

@@ -37,6 +37,8 @@ struct LoanAccountSummaryRow {
     amount_paid: Decimal,
     outstanding_balance: Decimal,
     days_in_arrears: i32,
+    next_instalment_due_date: Option<NaiveDate>,
+    next_instalment_amount: Option<Decimal>,
     plot_id: Uuid,
     plot_number: String,
     project_id: Uuid,
@@ -53,7 +55,9 @@ async fn list_loan_accounts(
         r#"
         select pla.id, pla.account_number, pla.sale_id, pla.principal, pla.interest_rate,
             pla.deposit_required, pla.deposit_paid, pla.instalment_amount, pla.repayment_frequency_days,
-            pla.start_date, pla.status, pla.amount_paid, pla.outstanding_balance, pla.days_in_arrears,
+            pla.start_date, pla.status, pla.amount_paid, pla.outstanding_balance,
+            coalesce((current_date - lass.oldest_overdue_due_date), 0) as days_in_arrears,
+            lass.next_instalment_due_date, lass.next_instalment_amount,
             pl.id as plot_id, pl.plot_number, pr.id as project_id, pr.name as project_name,
             c.id as customer_id, c.full_name as customer_name
         from plot_loan_accounts pla
@@ -61,6 +65,7 @@ async fn list_loan_accounts(
         join plots pl on pl.id = ps.plot_id
         join projects pr on pr.id = pl.project_id
         join customers c on c.id = ps.customer_id
+        left join loan_account_schedule_summary lass on lass.loan_account_id = pla.id
         where ps.organization_id = $1
         order by pla.outstanding_balance desc, pla.start_date desc
         "#,
@@ -90,6 +95,8 @@ async fn list_loan_accounts(
                     amount_paid: r.amount_paid,
                     outstanding_balance: r.outstanding_balance,
                     days_in_arrears: r.days_in_arrears,
+                    next_instalment_due_date: r.next_instalment_due_date,
+                    next_instalment_amount: r.next_instalment_amount,
                 },
                 plot_id: r.plot_id,
                 plot_number: r.plot_number,

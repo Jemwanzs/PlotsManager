@@ -29,11 +29,16 @@ struct DashboardRow {
     non_performing_amount: Decimal,
 }
 
-/// Performing/non-performing is computed from real `plot_loan_accounts`
-/// status, unlike `frontend::api::mock`'s synthetic 70/30 split (which
-/// exists there only because the mock previously had no loan-account
-/// statuses to aggregate over — the two should be reconciled once the
-/// frontend is wired to this endpoint).
+/// Performing/non-performing used to key off `plot_loan_accounts.status`
+/// values (`in_arrears`, `defaulted`, ...) that nothing in this codebase
+/// ever actually sets — `record_payment` only ever moves an account to
+/// `active_partially_paid` or `fully_paid`, so every account looked
+/// "performing" forever regardless of real payment history. It's keyed
+/// off `loan_account_schedule_summary` instead now (see
+/// 0022_repayment_schedule.sql): an account is non-performing exactly
+/// when it has a schedule instalment overdue past the grace period,
+/// recomputed fresh on every read rather than relying on a status flag
+/// nothing keeps in sync.
 async fn dashboard(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -46,8 +51,10 @@ async fn dashboard(
             where p.organization_id = $1
         ),
         org_loan_accounts as (
-            select pla.* from plot_loan_accounts pla
+            select pla.*, lass.oldest_overdue_due_date
+            from plot_loan_accounts pla
             join plot_sales ps on ps.id = pla.sale_id
+            left join loan_account_schedule_summary lass on lass.loan_account_id = pla.id
             where ps.organization_id = $1
         )
         select
@@ -58,10 +65,10 @@ async fn dashboard(
             (select coalesce(sum(asking_price), 0) from org_plots where status in ('sold', 'booked')) as total_sales_value,
             (select count(*) from org_plots where status in ('booked', 'under_approval')) as active_loans_count,
             (select coalesce(sum(asking_price), 0) from org_plots where status in ('booked', 'under_approval')) as active_loan_book,
-            (select count(*) from org_loan_accounts where status in ('active_current', 'active_partially_paid', 'in_grace_period')) as performing_count,
-            (select coalesce(sum(outstanding_balance), 0) from org_loan_accounts where status in ('active_current', 'active_partially_paid', 'in_grace_period')) as performing_amount,
-            (select count(*) from org_loan_accounts where status in ('in_arrears', 'defaulted', 'repossessed_or_reallocated')) as non_performing_count,
-            (select coalesce(sum(outstanding_balance), 0) from org_loan_accounts where status in ('in_arrears', 'defaulted', 'repossessed_or_reallocated')) as non_performing_amount
+            (select count(*) from org_loan_accounts where status in ('active_current', 'active_partially_paid', 'in_grace_period') and oldest_overdue_due_date is null) as performing_count,
+            (select coalesce(sum(outstanding_balance), 0) from org_loan_accounts where status in ('active_current', 'active_partially_paid', 'in_grace_period') and oldest_overdue_due_date is null) as performing_amount,
+            (select count(*) from org_loan_accounts where status in ('active_current', 'active_partially_paid', 'in_grace_period', 'in_arrears', 'defaulted', 'repossessed_or_reallocated') and oldest_overdue_due_date is not null) as non_performing_count,
+            (select coalesce(sum(outstanding_balance), 0) from org_loan_accounts where status in ('active_current', 'active_partially_paid', 'in_grace_period', 'in_arrears', 'defaulted', 'repossessed_or_reallocated') and oldest_overdue_due_date is not null) as non_performing_amount
         "#,
     )
     .bind(auth.organization_id)

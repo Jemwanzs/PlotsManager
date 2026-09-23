@@ -1034,6 +1034,15 @@ fn PlotCommercialPosition(project_id: Uuid, plot_id: Uuid) -> impl IntoView {
                                                             <span class="meta">"Interest"</span>
                                                             <p class="mt-0">{interest_text}</p>
                                                         </div>
+                                                        {loan.next_instalment_due_date.map(|due| {
+                                                            let amount = loan.next_instalment_amount.unwrap_or_default();
+                                                            view! {
+                                                                <div>
+                                                                    <span class="meta">"Next Instalment"</span>
+                                                                    <p class="mt-0">{format_money(amount, &currency)} " due " {due.to_string()}</p>
+                                                                </div>
+                                                            }
+                                                        })}
                                                         {(loan.days_in_arrears > 0).then(|| view! {
                                                             <div>
                                                                 <span class="meta">"Days Overdue"</span>

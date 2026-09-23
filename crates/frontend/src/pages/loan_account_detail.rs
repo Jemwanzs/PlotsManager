@@ -99,6 +99,20 @@ fn LoanAccountContent(
                 value=format_money(account.outstanding_balance, &currency.get())
                 sub=account.interest_rate.map(|r| format!("{r}% interest")).unwrap_or_else(|| "Interest-free".to_string())
             />
+            {account.next_instalment_due_date.map(|due| {
+                view! {
+                    <StatCard
+                        label="Next instalment"
+                        value=format_money(account.next_instalment_amount.unwrap_or_default(), &currency.get())
+                        sub=format!("due {due}")
+                    />
+                }
+            })}
+            {(account.days_in_arrears > 0).then(|| {
+                view! {
+                    <StatCard label="Days overdue" value=account.days_in_arrears.to_string() />
+                }
+            })}
         </div>
 
         <div class="section-grid-2">

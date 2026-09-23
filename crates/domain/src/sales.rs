@@ -60,7 +60,13 @@ pub struct PlotLoanAccount {
     pub status: LoanAccountStatus,
     pub amount_paid: Decimal,
     pub outstanding_balance: Decimal,
+    /// Derived live from `repayment_schedule_entries` on every read
+    /// (never a stored, potentially-stale value) — age in days of the
+    /// oldest schedule instalment that's still short of its `total_due`
+    /// past the grace period. 0 when nothing's overdue.
     pub days_in_arrears: i32,
+    pub next_instalment_due_date: Option<NaiveDate>,
+    pub next_instalment_amount: Option<Decimal>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

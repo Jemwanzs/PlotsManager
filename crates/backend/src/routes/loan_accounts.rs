@@ -77,6 +77,8 @@ struct LoanAccountRow {
     amount_paid: Decimal,
     outstanding_balance: Decimal,
     days_in_arrears: i32,
+    next_instalment_due_date: Option<NaiveDate>,
+    next_instalment_amount: Option<Decimal>,
     // joined context
     plot_id: Uuid,
     plot_number: String,
@@ -89,7 +91,9 @@ struct LoanAccountRow {
 const LOAN_ACCOUNT_DETAIL_QUERY: &str = r#"
     select pla.id, pla.account_number, pla.sale_id, pla.principal, pla.interest_rate,
         pla.deposit_required, pla.deposit_paid, pla.instalment_amount, pla.repayment_frequency_days,
-        pla.start_date, pla.status, pla.amount_paid, pla.outstanding_balance, pla.days_in_arrears,
+        pla.start_date, pla.status, pla.amount_paid, pla.outstanding_balance,
+        coalesce((current_date - lass.oldest_overdue_due_date), 0) as days_in_arrears,
+        lass.next_instalment_due_date, lass.next_instalment_amount,
         pl.id as plot_id, pl.plot_number, pr.id as project_id, pr.name as project_name,
         c.id as customer_id, c.full_name as customer_name
     from plot_loan_accounts pla
@@ -97,6 +101,7 @@ const LOAN_ACCOUNT_DETAIL_QUERY: &str = r#"
     join plots pl on pl.id = ps.plot_id
     join projects pr on pr.id = pl.project_id
     join customers c on c.id = ps.customer_id
+    left join loan_account_schedule_summary lass on lass.loan_account_id = pla.id
     where pla.id = $1 and ps.organization_id = $2
 "#;
 
@@ -174,6 +179,8 @@ async fn get_loan_account(
             amount_paid: row.amount_paid,
             outstanding_balance: row.outstanding_balance,
             days_in_arrears: row.days_in_arrears,
+            next_instalment_due_date: row.next_instalment_due_date,
+            next_instalment_amount: row.next_instalment_amount,
         },
         plot_id: row.plot_id,
         plot_number: row.plot_number,
@@ -411,6 +418,8 @@ async fn get_loan_statement(
             amount_paid: row.amount_paid,
             outstanding_balance: row.outstanding_balance,
             days_in_arrears: row.days_in_arrears,
+            next_instalment_due_date: row.next_instalment_due_date,
+            next_instalment_amount: row.next_instalment_amount,
         },
         plot_number: row.plot_number,
         project_name: row.project_name,
