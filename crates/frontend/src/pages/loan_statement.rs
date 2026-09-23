@@ -111,7 +111,7 @@ fn StatementContent(
                 <h1>"Statement — " {statement.account.account_number.clone()}</h1>
                 <p>{statement.plot_number.clone()} " · " {statement.project_name.clone()}</p>
             </div>
-            <A href=account_href attr:class="btn btn-secondary">"Back to account"</A>
+            <A href=account_href attr:class="btn btn-secondary no-print">"Back to account"</A>
         </div>
 
         <div class="card form-card" style="max-width: none; margin-bottom: var(--space-4);">
@@ -131,7 +131,7 @@ fn StatementContent(
             </div>
         </div>
 
-        <div class="card" style="margin-bottom: var(--space-4);">
+        <div class="card no-print" style="margin-bottom: var(--space-4);">
             <div style="display:flex; gap: var(--space-3); flex-wrap: wrap; align-items: flex-end;">
                 <div class="field" style="margin-bottom: 0;">
                     <label for="stmt-from">"From"</label>
@@ -142,6 +142,9 @@ fn StatementContent(
                     <input id="stmt-to" type="date" prop:value=to_filter on:change=move |ev| to_filter.set(event_target_value(&ev)) />
                 </div>
                 <a href=csv_href download=csv_filename class="btn btn-secondary" style="display:inline-block;">"Export CSV"</a>
+                <button type="button" class="btn btn-secondary" on:click=move |_| { let _ = web_sys::window().and_then(|w| w.print().ok()); }>
+                    "Download PDF"
+                </button>
             </div>
         </div>
 
@@ -157,7 +160,7 @@ fn StatementContent(
                             <th>"Interest Paid"</th>
                             <th>"Penalty Paid"</th>
                             <th>"Balance"</th>
-                            {can_reverse.then(|| view! { <th>"Actions"</th> })}
+                            {can_reverse.then(|| view! { <th class="no-print">"Actions"</th> })}
                         </tr>
                     </thead>
                     <tbody>
@@ -180,7 +183,7 @@ fn StatementContent(
                                         <td>{component_display(e.penalty_delta, &currency)}</td>
                                         <td>{format_money(e.balance_after, &currency)}</td>
                                         {can_reverse.then(|| view! {
-                                            <td>
+                                            <td class="no-print">
                                                 {reversible.then(|| view! {
                                                     <ReverseButton loan_account_id=loan_account_id entry_id=e.id on_reversed=on_reversed.clone() />
                                                 })}

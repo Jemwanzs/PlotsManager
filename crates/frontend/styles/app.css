@@ -1708,3 +1708,23 @@ a {
   color: var(--color-text);
   white-space: nowrap;
 }
+
+/* "Download PDF" on the statement page (loan_statement.rs) triggers
+   the browser's native print — this scopes it to a clean printable
+   statement rather than the whole app shell. Any element the app
+   doesn't want in a printout (nav chrome, filter controls, the
+   Actions column) carries `.no-print`. */
+@media print {
+  .sidebar,
+  .topbar,
+  .bottom-nav,
+  .nav-sheet,
+  .nav-sheet-backdrop,
+  .no-print {
+    display: none !important;
+  }
+  .main-content {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+}
