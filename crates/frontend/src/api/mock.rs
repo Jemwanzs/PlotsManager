@@ -967,6 +967,18 @@ impl MockApi {
         Ok(summaries)
     }
 
+    pub async fn receivables_breakdown(&self) -> Result<domain::FinanceReceivablesBreakdown, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+        let (interest_outstanding, penalty_outstanding) = db
+            .charges
+            .iter()
+            .fold((Decimal::ZERO, Decimal::ZERO), |(interest, penalty), c| {
+                (interest + c.interest_delta, penalty + c.penalty_delta)
+            });
+        Ok(domain::FinanceReceivablesBreakdown { interest_outstanding, penalty_outstanding })
+    }
+
     pub async fn list_roles(&self) -> Result<Vec<domain::Role>, ApiError> {
         settle(150).await;
         let db = self.db.lock().unwrap();

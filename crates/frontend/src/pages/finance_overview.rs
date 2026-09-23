@@ -12,7 +12,7 @@ use rust_decimal::Decimal;
 use crate::auth::{use_api, use_currency};
 use crate::components::{ErrorAlert, LoadingState, StatCard, StatusBadge};
 use crate::format::{format_amount, format_money};
-use domain::{DashboardSummary, LoanAccountStatus, LoanAccountSummary};
+use domain::{DashboardSummary, FinanceReceivablesBreakdown, LoanAccountStatus, LoanAccountSummary};
 
 #[component]
 pub fn FinanceOverview() -> impl IntoView {
@@ -33,6 +33,13 @@ pub fn FinanceOverview() -> impl IntoView {
             async move { api.list_loan_accounts().await }
         }
     });
+    let breakdown = LocalResource::new({
+        let api = api.clone();
+        move || {
+            let api = api.clone();
+            async move { api.receivables_breakdown().await }
+        }
+    });
 
     view! {
         <div class="page-header">
@@ -47,14 +54,18 @@ pub fn FinanceOverview() -> impl IntoView {
             {move || {
                 let summary = summary.get().map(|w| w.take());
                 let accounts = accounts.get().map(|w| w.take());
-                match (summary, accounts) {
-                    (Some(Ok(s)), Some(Ok(a))) => {
-                        view! { <FinanceOverviewContent summary=s accounts=a /> }.into_any()
+                let breakdown = breakdown.get().map(|w| w.take());
+                match (summary, accounts, breakdown) {
+                    (Some(Ok(s)), Some(Ok(a)), Some(Ok(b))) => {
+                        view! { <FinanceOverviewContent summary=s accounts=a breakdown=b /> }.into_any()
                     }
-                    (Some(Err(e)), _) => {
+                    (Some(Err(e)), _, _) => {
                         view! { <ErrorAlert message=format!("Couldn't load finance data: {e}") /> }.into_any()
                     }
-                    (_, Some(Err(e))) => {
+                    (_, Some(Err(e)), _) => {
+                        view! { <ErrorAlert message=format!("Couldn't load finance data: {e}") /> }.into_any()
+                    }
+                    (_, _, Some(Err(e))) => {
                         view! { <ErrorAlert message=format!("Couldn't load finance data: {e}") /> }.into_any()
                     }
                     _ => view! { <LoadingState label="Loading finance data…" /> }.into_any(),
@@ -65,13 +76,20 @@ pub fn FinanceOverview() -> impl IntoView {
 }
 
 #[component]
-fn FinanceOverviewContent(summary: DashboardSummary, accounts: Vec<LoanAccountSummary>) -> impl IntoView {
+fn FinanceOverviewContent(
+    summary: DashboardSummary,
+    accounts: Vec<LoanAccountSummary>,
+    breakdown: FinanceReceivablesBreakdown,
+) -> impl IntoView {
     let currency = use_currency();
     let fully_paid = accounts
         .iter()
         .filter(|a| a.account.status == LoanAccountStatus::FullyPaid)
         .count();
     let total_outstanding: Decimal = accounts.iter().map(|a| a.account.outstanding_balance).sum();
+    let interest_outstanding = breakdown.interest_outstanding.max(Decimal::ZERO);
+    let penalty_outstanding = breakdown.penalty_outstanding.max(Decimal::ZERO);
+    let principal_outstanding = (total_outstanding - interest_outstanding - penalty_outstanding).max(Decimal::ZERO);
 
     let mut top_accounts = accounts.clone();
     top_accounts.sort_by(|a, b| b.account.outstanding_balance.cmp(&a.account.outstanding_balance));
@@ -80,14 +98,17 @@ fn FinanceOverviewContent(summary: DashboardSummary, accounts: Vec<LoanAccountSu
     view! {
         <div class="stat-grid">
             <StatCard
+                label="Total receivables"
+                value=format_amount(total_outstanding)
+                sub=format!("{} receivables", accounts.len())
+            />
+            <StatCard label="Principal outstanding" value=format_amount(principal_outstanding) />
+            <StatCard label="Interest outstanding" value=format_amount(interest_outstanding) />
+            <StatCard label="Penalties outstanding" value=format_amount(penalty_outstanding) />
+            <StatCard
                 label="Active loan book"
                 value=format_amount(summary.active_loan_book)
                 sub=format!("{} accounts", summary.active_loans_count)
-            />
-            <StatCard
-                label="Outstanding balance"
-                value=format_amount(total_outstanding)
-                sub=format!("{} receivables", accounts.len())
             />
             <StatCard
                 label="Performing"

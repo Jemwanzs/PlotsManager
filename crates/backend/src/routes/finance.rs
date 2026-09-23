@@ -6,7 +6,7 @@
 
 use axum::{extract::State, routing::get, Json, Router};
 use chrono::NaiveDate;
-use domain::{LoanAccountStatus, LoanAccountSummary, PlotLoanAccount};
+use domain::{FinanceReceivablesBreakdown, LoanAccountStatus, LoanAccountSummary, PlotLoanAccount};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
@@ -16,7 +16,9 @@ use crate::pg_enum::from_pg;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/api/v1/finance/loan-accounts", get(list_loan_accounts))
+    Router::new()
+        .route("/api/v1/finance/loan-accounts", get(list_loan_accounts))
+        .route("/api/v1/finance/receivables-breakdown", get(receivables_breakdown))
 }
 
 #[derive(sqlx::FromRow)]
@@ -102,4 +104,40 @@ async fn list_loan_accounts(
         .collect::<Result<Vec<_>, AppError>>()?;
 
     Ok(Json(summaries))
+}
+
+#[derive(sqlx::FromRow)]
+struct ReceivablesBreakdownRow {
+    interest_outstanding: Decimal,
+    penalty_outstanding: Decimal,
+}
+
+/// Sums every ledger entry's `interest_delta`/`penalty_delta` across the
+/// whole org — the net outstanding for each component, since a payment
+/// or waiver's delta is negative and a charge's is positive. Mirrors
+/// `outstanding_components` in `routes/loan_accounts.rs`, which does the
+/// same sum scoped to one account.
+async fn receivables_breakdown(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<FinanceReceivablesBreakdown>, AppError> {
+    let row: ReceivablesBreakdownRow = sqlx::query_as(
+        r#"
+        select
+            coalesce(sum(le.interest_delta), 0) as interest_outstanding,
+            coalesce(sum(le.penalty_delta), 0) as penalty_outstanding
+        from loan_ledger_entries le
+        join plot_loan_accounts pla on pla.id = le.loan_account_id
+        join plot_sales ps on ps.id = pla.sale_id
+        where ps.organization_id = $1
+        "#,
+    )
+    .bind(auth.organization_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(FinanceReceivablesBreakdown {
+        interest_outstanding: row.interest_outstanding,
+        penalty_outstanding: row.penalty_outstanding,
+    }))
 }

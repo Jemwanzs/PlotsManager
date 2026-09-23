@@ -28,7 +28,7 @@ use domain::{
     BulkImportResult, BulkSaleRow, ChangePasswordInput, CreateBranchInput, CreateCustomerInput,
     CreatePlotInput, CreateProjectInput, CreateQuotationInput, CreateRoleInput, CreateSaleInput,
     CreateUserInput, CustomerDetail, CustomerSummary, DashboardAnalytics, DashboardSummary,
-    DecideApprovalInput, GeneratedNumber, InventoryReport, LinkPlotInput, LoanAccountDetail,
+    DecideApprovalInput, FinanceReceivablesBreakdown, GeneratedNumber, InventoryReport, LinkPlotInput, LoanAccountDetail,
     LoanAccountSummary, LoginInput, MapPolygons, OrganizationSettings, PermissionDef,
     PlatformOrganizationDetail, PlatformOrganizationSummary, PlotCommercialSummary, PlotWithColor,
     ProjectMapSummary, ProjectSummary,
@@ -582,6 +582,10 @@ impl HttpApi {
 
     pub async fn list_loan_accounts(&self) -> Result<Vec<LoanAccountSummary>, ApiError> {
         self.get("/api/v1/finance/loan-accounts").await
+    }
+
+    pub async fn receivables_breakdown(&self) -> Result<FinanceReceivablesBreakdown, ApiError> {
+        self.get("/api/v1/finance/receivables-breakdown").await
     }
 
     pub async fn list_roles(&self) -> Result<Vec<Role>, ApiError> {

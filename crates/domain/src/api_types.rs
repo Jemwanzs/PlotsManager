@@ -70,6 +70,19 @@ pub struct LoanAccountSummary {
     pub status_color: String,
 }
 
+/// `GET /api/v1/finance/receivables-breakdown` — org-wide interest and
+/// penalty outstanding, summed straight from `loan_ledger_entries`
+/// (the same source `outstanding_components` reads per-account in
+/// `routes/loan_accounts.rs`, just aggregated across every account).
+/// Principal outstanding isn't included here: it's `total_outstanding
+/// - interest_outstanding - penalty_outstanding`, and the caller
+/// already has `total_outstanding` from summing the loan-accounts list.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct FinanceReceivablesBreakdown {
+    pub interest_outstanding: Decimal,
+    pub penalty_outstanding: Decimal,
+}
+
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ApiError {
     #[error("{0}")]

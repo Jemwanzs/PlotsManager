@@ -501,6 +501,13 @@ impl ApiClient {
         }
     }
 
+    pub async fn receivables_breakdown(&self) -> Result<domain::FinanceReceivablesBreakdown, ApiError> {
+        match self {
+            Self::Mock(api) => api.receivables_breakdown().await,
+            Self::Http(api) => api.receivables_breakdown().await,
+        }
+    }
+
     pub async fn list_roles(&self) -> Result<Vec<domain::Role>, ApiError> {
         match self {
             Self::Mock(api) => api.list_roles().await,
