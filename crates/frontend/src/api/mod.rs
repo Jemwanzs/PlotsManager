@@ -216,6 +216,28 @@ impl ApiClient {
         }
     }
 
+    pub async fn post_waiver(
+        &self,
+        input: domain::PostWaiverInput,
+    ) -> Result<domain::LoanLedgerEntry, ApiError> {
+        match self {
+            Self::Mock(api) => api.post_waiver(input).await,
+            Self::Http(api) => api.post_waiver(input).await,
+        }
+    }
+
+    pub async fn reverse_entry(
+        &self,
+        loan_account_id: Uuid,
+        entry_id: Uuid,
+        reason: String,
+    ) -> Result<domain::LoanLedgerEntry, ApiError> {
+        match self {
+            Self::Mock(api) => api.reverse_entry(loan_account_id, entry_id, reason).await,
+            Self::Http(api) => api.reverse_entry(loan_account_id, entry_id, reason).await,
+        }
+    }
+
     pub async fn list_platform_organizations(
         &self,
     ) -> Result<Vec<PlatformOrganizationSummary>, ApiError> {

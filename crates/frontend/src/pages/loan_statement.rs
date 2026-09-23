@@ -12,10 +12,11 @@ use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
 use uuid::Uuid;
 
-use crate::auth::use_api;
+use crate::auth::{has_permission, use_api, use_auth};
 use crate::components::{ErrorAlert, LoadingState};
 use crate::format::{format_ledger_entry_type, format_money};
-use domain::LoanLedgerEntry;
+use crate::pages::loan_account_detail::ReverseButton;
+use domain::{LedgerEntryType, LoanLedgerEntry, PERM_FINANCE_REVERSE};
 
 #[component]
 pub fn LoanStatementPage() -> impl IntoView {
@@ -23,7 +24,13 @@ pub fn LoanStatementPage() -> impl IntoView {
     let params = use_params_map();
     let loan_account_id = move || -> Option<Uuid> { params.read().get("id").and_then(|id| Uuid::parse_str(&id).ok()) };
 
+    // Same "bump a signal the LocalResource reads" refresh pattern as
+    // LoanAccountDetailPage — a Reverse action here needs the statement
+    // to refetch afterward.
+    let refresh = RwSignal::new(0u32);
+
     let statement = LocalResource::new(move || {
+        refresh.get();
         let api = api.clone();
         async move {
             match loan_account_id() {
@@ -41,7 +48,7 @@ pub fn LoanStatementPage() -> impl IntoView {
                     .map(|wrapped| wrapped.take())
                     .flatten()
                     .map(|result| match result {
-                        Ok(s) => view! { <StatementContent statement=s /> }.into_any(),
+                        Ok(s) => view! { <StatementContent statement=s on_reversed=move || refresh.update(|n| *n += 1) /> }.into_any(),
                         Err(e) => view! { <ErrorAlert message=format!("Couldn't load this statement: {e}") /> }.into_any(),
                     })
             }}
@@ -50,8 +57,17 @@ pub fn LoanStatementPage() -> impl IntoView {
 }
 
 #[component]
-fn StatementContent(statement: domain::LoanStatement) -> impl IntoView {
+fn StatementContent(
+    statement: domain::LoanStatement,
+    // Send + Sync: captured inside the table's reactive `{move || ...}`
+    // closure below (needed since it recomputes on filter changes) —
+    // see ReverseButton's own doc comment for why that requires it.
+    on_reversed: impl Fn() + Clone + Send + Sync + 'static,
+) -> impl IntoView {
     let currency = crate::auth::use_currency();
+    let auth = use_auth();
+    let can_reverse = has_permission(auth, PERM_FINANCE_REVERSE);
+    let loan_account_id = statement.account.id;
     let from_filter = RwSignal::new(String::new());
     let to_filter = RwSignal::new(String::new());
 
@@ -141,12 +157,19 @@ fn StatementContent(statement: domain::LoanStatement) -> impl IntoView {
                             <th>"Interest Paid"</th>
                             <th>"Penalty Paid"</th>
                             <th>"Balance"</th>
+                            {can_reverse.then(|| view! { <th>"Actions"</th> })}
                         </tr>
                     </thead>
                     <tbody>
                         {move || {
                             let currency = currency.get();
+                            let on_reversed = on_reversed.clone();
                             filtered_entries().into_iter().map(|e| {
+                                let reversible = matches!(
+                                    e.entry_type,
+                                    LedgerEntryType::Payment | LedgerEntryType::ChargeInterest | LedgerEntryType::ChargePenalty
+                                );
+                                let on_reversed = on_reversed.clone();
                                 view! {
                                     <tr>
                                         <td>{e.entry_date.to_string()}</td>
@@ -156,6 +179,13 @@ fn StatementContent(statement: domain::LoanStatement) -> impl IntoView {
                                         <td>{component_display(e.interest_delta, &currency)}</td>
                                         <td>{component_display(e.penalty_delta, &currency)}</td>
                                         <td>{format_money(e.balance_after, &currency)}</td>
+                                        {can_reverse.then(|| view! {
+                                            <td>
+                                                {reversible.then(|| view! {
+                                                    <ReverseButton loan_account_id=loan_account_id entry_id=e.id on_reversed=on_reversed.clone() />
+                                                })}
+                                            </td>
+                                        })}
                                     </tr>
                                 }
                             }).collect_view()

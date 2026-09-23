@@ -4,8 +4,9 @@ use axum::{extract::State, routing::get, Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
 use domain::{
     ChargeType, LoanAccountDetail, LoanAccountStatus, LoanLedgerEntry, LoanStatement, Payment,
-    PaymentAllocationPreview, PlotLoanAccount, PostChargeInput, RecordPaymentInput,
-    PERM_FINANCE_POST_CHARGES, PERM_PAYMENTS_RECORD,
+    PaymentAllocationPreview, PlotLoanAccount, PostChargeInput, PostWaiverInput,
+    RecordPaymentInput, ReverseEntryInput, WaiverType, PERM_FINANCE_POST_CHARGES,
+    PERM_FINANCE_REVERSE, PERM_PAYMENTS_RECORD,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -21,6 +22,11 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/loan-accounts/:id/payments", post(record_payment))
         .route("/api/v1/loan-accounts/:id/statement", get(get_loan_statement))
         .route("/api/v1/loan-accounts/:id/charges", post(post_charge))
+        .route("/api/v1/loan-accounts/:id/waivers", post(post_waiver))
+        .route(
+            "/api/v1/loan-accounts/:id/ledger-entries/:entry_id/reverse",
+            post(reverse_entry),
+        )
         .route(
             "/api/v1/loan-accounts/:id/allocation-preview",
             get(preview_allocation),
@@ -586,6 +592,366 @@ async fn post_charge(
     .bind(serde_json::json!({
         "charge_type": input.charge_type,
         "amount": input.amount,
+        "reason": reason,
+    }))
+    .execute(&state.db)
+    .await;
+
+    let created_by_name: String = sqlx::query_scalar("select full_name from users where id = $1")
+        .bind(auth.user_id)
+        .fetch_one(&state.db)
+        .await?;
+
+    Ok(Json(LoanLedgerEntry {
+        id: entry_row.id,
+        loan_account_id: entry_row.loan_account_id,
+        entry_type: from_pg("loan_ledger_entries.entry_type", &entry_row.entry_type)?,
+        entry_date: entry_row.entry_date,
+        gross_amount: entry_row.gross_amount,
+        principal_delta: entry_row.principal_delta,
+        interest_delta: entry_row.interest_delta,
+        penalty_delta: entry_row.penalty_delta,
+        balance_after: entry_row.balance_after,
+        method: None,
+        external_reference: None,
+        notes: entry_row.notes,
+        created_by_name,
+        created_at: entry_row.created_at,
+    }))
+}
+
+/// Forgives some or all of a receivable's currently-outstanding
+/// interest or penalty — a business decision, not tied to any one
+/// past charge entry (see `WaiverType`'s own doc comment). Mirrors
+/// `post_charge` almost exactly, just subtracting instead of adding,
+/// with one extra guard: can't waive more than what's actually
+/// outstanding for that component.
+async fn post_waiver(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(input): Json<PostWaiverInput>,
+) -> Result<Json<LoanLedgerEntry>, AppError> {
+    auth.require_permission(PERM_FINANCE_REVERSE)?;
+
+    if input.loan_account_id != id {
+        return Err(AppError::bad_request("Loan account id mismatch."));
+    }
+    if input.amount <= Decimal::ZERO {
+        return Err(AppError::bad_request("Enter an amount greater than zero."));
+    }
+    let reason = input.reason.trim();
+    if reason.is_empty() {
+        return Err(AppError::bad_request("Enter a reason for this waiver."));
+    }
+
+    let mut tx = state.db.begin().await?;
+
+    let outstanding_balance: Option<Decimal> = sqlx::query_scalar(
+        r#"select pla.outstanding_balance from plot_loan_accounts pla
+           join plot_sales ps on ps.id = pla.sale_id
+           where pla.id = $1 and ps.organization_id = $2
+           for update of pla"#,
+    )
+    .bind(id)
+    .bind(auth.organization_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let outstanding_balance = outstanding_balance.ok_or(AppError::NotFound)?;
+
+    let (interest_outstanding, penalty_outstanding) = outstanding_components(&mut *tx, id).await?;
+    let component_outstanding = match input.waiver_type {
+        WaiverType::Interest => interest_outstanding,
+        WaiverType::Penalty => penalty_outstanding,
+    };
+    if input.amount > component_outstanding {
+        return Err(AppError::bad_request(format!(
+            "Cannot waive more than the outstanding {} balance.",
+            match input.waiver_type {
+                WaiverType::Interest => "interest",
+                WaiverType::Penalty => "penalty",
+            }
+        )));
+    }
+
+    let new_balance = outstanding_balance - input.amount;
+    let (entry_type, interest_delta, penalty_delta) = match input.waiver_type {
+        WaiverType::Interest => ("waiver_interest", -input.amount, Decimal::ZERO),
+        WaiverType::Penalty => ("waiver_penalty", Decimal::ZERO, -input.amount),
+    };
+
+    #[derive(sqlx::FromRow)]
+    struct NewWaiverRow {
+        id: Uuid,
+        loan_account_id: Uuid,
+        entry_type: String,
+        entry_date: NaiveDate,
+        gross_amount: Decimal,
+        principal_delta: Decimal,
+        interest_delta: Decimal,
+        penalty_delta: Decimal,
+        balance_after: Decimal,
+        notes: Option<String>,
+        created_at: DateTime<Utc>,
+    }
+
+    let entry_row: NewWaiverRow = sqlx::query_as(
+        r#"
+        insert into loan_ledger_entries
+            (loan_account_id, organization_id, entry_type, entry_date, gross_amount,
+             principal_delta, interest_delta, penalty_delta, balance_after, notes, created_by)
+        values ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9, $10)
+        returning id, loan_account_id, entry_type, entry_date, gross_amount, principal_delta,
+            interest_delta, penalty_delta, balance_after, notes, created_at
+        "#,
+    )
+    .bind(id)
+    .bind(auth.organization_id)
+    .bind(entry_type)
+    .bind(input.waiver_date)
+    .bind(input.amount)
+    .bind(interest_delta)
+    .bind(penalty_delta)
+    .bind(new_balance)
+    .bind(reason)
+    .bind(auth.user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"update plot_loan_accounts set outstanding_balance = $1,
+               status = case when $1 <= 0 then 'fully_paid' else status end
+           where id = $2"#,
+    )
+    .bind(new_balance)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    if new_balance <= Decimal::ZERO {
+        sqlx::query(
+            r#"
+            update plots set status = 'sold'
+            where id = (select pl.id from plots pl
+                        join plot_sales ps on ps.plot_id = pl.id
+                        join plot_loan_accounts pla on pla.sale_id = ps.id
+                        where pla.id = $1)
+              and status in ('booked', 'reserved', 'selected', 'temporarily_held', 'under_approval')
+            "#,
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+
+    let _ = sqlx::query(
+        r#"insert into audit_log (organization_id, actor_id, entity_type, entity_id, action, after_state)
+           values ($1, $2, 'loan_ledger_entry', $3, 'waiver_posted', $4)"#,
+    )
+    .bind(auth.organization_id)
+    .bind(auth.user_id)
+    .bind(entry_row.id)
+    .bind(serde_json::json!({
+        "waiver_type": input.waiver_type,
+        "amount": input.amount,
+        "reason": reason,
+    }))
+    .execute(&state.db)
+    .await;
+
+    let created_by_name: String = sqlx::query_scalar("select full_name from users where id = $1")
+        .bind(auth.user_id)
+        .fetch_one(&state.db)
+        .await?;
+
+    Ok(Json(LoanLedgerEntry {
+        id: entry_row.id,
+        loan_account_id: entry_row.loan_account_id,
+        entry_type: from_pg("loan_ledger_entries.entry_type", &entry_row.entry_type)?,
+        entry_date: entry_row.entry_date,
+        gross_amount: entry_row.gross_amount,
+        principal_delta: entry_row.principal_delta,
+        interest_delta: entry_row.interest_delta,
+        penalty_delta: entry_row.penalty_delta,
+        balance_after: entry_row.balance_after,
+        method: None,
+        external_reference: None,
+        notes: entry_row.notes,
+        created_by_name,
+        created_at: entry_row.created_at,
+    }))
+}
+
+/// Undoes one specific past ledger entry — a payment or charge entered
+/// in error — rather than forgiving current balance (see
+/// `ReverseEntryInput`'s doc comment for the distinction from a
+/// waiver). Reversing a payment also flips its `payments` row to
+/// `Reversed` so the pre-existing Payment History UI reflects it, not
+/// just the ledger/statement.
+async fn reverse_entry(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((id, entry_id)): Path<(Uuid, Uuid)>,
+    Json(input): Json<ReverseEntryInput>,
+) -> Result<Json<LoanLedgerEntry>, AppError> {
+    auth.require_permission(PERM_FINANCE_REVERSE)?;
+
+    let reason = input.reason.trim();
+    if reason.is_empty() {
+        return Err(AppError::bad_request("Enter a reason for this reversal."));
+    }
+
+    let mut tx = state.db.begin().await?;
+
+    let outstanding_balance: Option<Decimal> = sqlx::query_scalar(
+        r#"select pla.outstanding_balance from plot_loan_accounts pla
+           join plot_sales ps on ps.id = pla.sale_id
+           where pla.id = $1 and ps.organization_id = $2
+           for update of pla"#,
+    )
+    .bind(id)
+    .bind(auth.organization_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let outstanding_balance = outstanding_balance.ok_or(AppError::NotFound)?;
+
+    #[derive(sqlx::FromRow)]
+    struct OriginalEntryRow {
+        entry_type: String,
+        gross_amount: Decimal,
+        principal_delta: Decimal,
+        interest_delta: Decimal,
+        penalty_delta: Decimal,
+        reference_payment_id: Option<Uuid>,
+    }
+
+    let original: Option<OriginalEntryRow> = sqlx::query_as(
+        r#"select entry_type, gross_amount, principal_delta, interest_delta, penalty_delta, reference_payment_id
+           from loan_ledger_entries where id = $1 and loan_account_id = $2"#,
+    )
+    .bind(entry_id)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let original = original.ok_or(AppError::NotFound)?;
+
+    if !matches!(original.entry_type.as_str(), "payment" | "charge_interest" | "charge_penalty") {
+        return Err(AppError::bad_request(
+            "Only a payment or a charge can be reversed.",
+        ));
+    }
+
+    let already_reversed: bool = sqlx::query_scalar(
+        "select exists(select 1 from loan_ledger_entries where reversal_of_entry_id = $1)",
+    )
+    .bind(entry_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if already_reversed {
+        return Err(AppError::bad_request("This entry has already been reversed."));
+    }
+
+    let principal_delta = -original.principal_delta;
+    let interest_delta = -original.interest_delta;
+    let penalty_delta = -original.penalty_delta;
+    let new_balance = outstanding_balance - (original.principal_delta + original.interest_delta + original.penalty_delta);
+
+    #[derive(sqlx::FromRow)]
+    struct NewReversalRow {
+        id: Uuid,
+        loan_account_id: Uuid,
+        entry_type: String,
+        entry_date: NaiveDate,
+        gross_amount: Decimal,
+        principal_delta: Decimal,
+        interest_delta: Decimal,
+        penalty_delta: Decimal,
+        balance_after: Decimal,
+        notes: Option<String>,
+        created_at: DateTime<Utc>,
+    }
+
+    let entry_row: NewReversalRow = sqlx::query_as(
+        r#"
+        insert into loan_ledger_entries
+            (loan_account_id, organization_id, entry_type, entry_date, gross_amount,
+             principal_delta, interest_delta, penalty_delta, balance_after, notes,
+             reference_payment_id, reversal_of_entry_id, created_by)
+        values ($1, $2, 'reversal', current_date, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        returning id, loan_account_id, entry_type, entry_date, gross_amount, principal_delta,
+            interest_delta, penalty_delta, balance_after, notes, created_at
+        "#,
+    )
+    .bind(id)
+    .bind(auth.organization_id)
+    .bind(original.gross_amount)
+    .bind(principal_delta)
+    .bind(interest_delta)
+    .bind(penalty_delta)
+    .bind(new_balance)
+    .bind(reason)
+    .bind(original.reference_payment_id)
+    .bind(entry_id)
+    .bind(auth.user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if original.entry_type == "payment" {
+        if let Some(payment_id) = original.reference_payment_id {
+            sqlx::query("update payments set status = 'reversed' where id = $1")
+                .bind(payment_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+
+    sqlx::query(
+        r#"update plot_loan_accounts set outstanding_balance = $1,
+               status = case
+                   when $1 <= 0 then 'fully_paid'
+                   when status = 'fully_paid' then 'active_partially_paid'
+                   else status
+               end
+           where id = $2"#,
+    )
+    .bind(new_balance)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    if new_balance <= Decimal::ZERO {
+        sqlx::query(
+            r#"
+            update plots set status = 'sold'
+            where id = (select pl.id from plots pl
+                        join plot_sales ps on ps.plot_id = pl.id
+                        join plot_loan_accounts pla on pla.sale_id = ps.id
+                        where pla.id = $1)
+              and status in ('booked', 'reserved', 'selected', 'temporarily_held', 'under_approval')
+            "#,
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+
+    let _ = sqlx::query(
+        r#"insert into audit_log (organization_id, actor_id, entity_type, entity_id, action, before_state, after_state)
+           values ($1, $2, 'loan_ledger_entry', $3, 'entry_reversed', $4, $5)"#,
+    )
+    .bind(auth.organization_id)
+    .bind(auth.user_id)
+    .bind(entry_id)
+    .bind(serde_json::json!({
+        "entry_type": original.entry_type,
+        "gross_amount": original.gross_amount,
+    }))
+    .bind(serde_json::json!({
+        "reversal_entry_id": entry_row.id,
         "reason": reason,
     }))
     .execute(&state.db)

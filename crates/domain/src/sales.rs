@@ -211,3 +211,33 @@ pub struct PaymentAllocationPreview {
     pub principal_paid: Decimal,
     pub new_balance: Decimal,
 }
+
+/// Forgiving some or all of the interest/penalty a receivable has
+/// accrued — a business decision (goodwill, negotiated settlement),
+/// not error-correction. Distinct from reversing an entry: a waiver
+/// isn't tied to any one past `charge_interest`/`charge_penalty`
+/// entry, since accrued interest/penalty can come from several.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaiverType {
+    Interest,
+    Penalty,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostWaiverInput {
+    pub loan_account_id: Uuid,
+    pub waiver_type: WaiverType,
+    pub amount: Decimal,
+    pub waiver_date: NaiveDate,
+    pub reason: String,
+}
+
+/// `POST /api/v1/loan-accounts/:id/ledger-entries/:entry_id/reverse` —
+/// undoes one specific past entry (a payment entered in error, or a
+/// charge that shouldn't have been posted), not a forgiveness of
+/// current balance. See `WaiverType`'s doc comment for the distinction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReverseEntryInput {
+    pub reason: String,
+}

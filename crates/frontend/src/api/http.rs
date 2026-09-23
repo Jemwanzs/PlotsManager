@@ -31,9 +31,9 @@ use domain::{
     DecideApprovalInput, FinanceReceivablesBreakdown, GeneratedNumber, InventoryReport, LinkPlotInput, LoanAccountDetail,
     LoanAccountSummary, LoginInput, MapPolygons, OrganizationSettings, PermissionDef,
     PlatformOrganizationDetail, PlatformOrganizationSummary, PlotCommercialSummary, PlotWithColor,
-    ProjectMapSummary, ProjectSummary,
+    PostWaiverInput, ProjectMapSummary, ProjectSummary,
     QuotationDetail, QuotationSummary, RecordPaymentInput, RejectOrganizationInput,
-    ResetPasswordInput, Role, SalesReport, SignupInput, SignupResult, TenantUser, TermsVersion,
+    ResetPasswordInput, ReverseEntryInput, Role, SalesReport, SignupInput, SignupResult, TenantUser, TermsVersion,
     UpdateBranchInput, UpdateLeadInput, UpdateMapPolygonsInput, UpdateOrganizationSettingsInput,
     UpdatePlotInput, UpdateRoleInput, UpdateUserInput,
 };
@@ -296,6 +296,24 @@ impl HttpApi {
     ) -> Result<domain::LoanLedgerEntry, ApiError> {
         let path = format!("/api/v1/loan-accounts/{}/charges", input.loan_account_id);
         self.post(&path, &input).await
+    }
+
+    pub async fn post_waiver(
+        &self,
+        input: PostWaiverInput,
+    ) -> Result<domain::LoanLedgerEntry, ApiError> {
+        let path = format!("/api/v1/loan-accounts/{}/waivers", input.loan_account_id);
+        self.post(&path, &input).await
+    }
+
+    pub async fn reverse_entry(
+        &self,
+        loan_account_id: Uuid,
+        entry_id: Uuid,
+        reason: String,
+    ) -> Result<domain::LoanLedgerEntry, ApiError> {
+        let path = format!("/api/v1/loan-accounts/{loan_account_id}/ledger-entries/{entry_id}/reverse");
+        self.post(&path, &ReverseEntryInput { reason }).await
     }
 
     pub async fn list_platform_organizations(

@@ -10,7 +10,10 @@ use crate::api::{LoanAccountDetail, RecordPaymentInput};
 use crate::auth::{has_permission, use_api, use_auth, use_currency};
 use crate::components::{ErrorAlert, LoadingState, StatCard, StatusBadge};
 use crate::format::{format_money, format_payment_status};
-use domain::{ChargeType, PostChargeInput, PERM_FINANCE_POST_CHARGES, PERM_PAYMENTS_RECORD};
+use domain::{
+    ChargeType, PostChargeInput, PostWaiverInput, WaiverType, PERM_FINANCE_POST_CHARGES,
+    PERM_FINANCE_REVERSE, PERM_PAYMENTS_RECORD,
+};
 
 #[component]
 pub fn LoanAccountDetailPage() -> impl IntoView {
@@ -59,6 +62,7 @@ fn LoanAccountContent(
     let auth = use_auth();
     let can_record = has_permission(auth, PERM_PAYMENTS_RECORD);
     let can_post_charges = has_permission(auth, PERM_FINANCE_POST_CHARGES);
+    let can_reverse = has_permission(auth, PERM_FINANCE_REVERSE);
     let account = detail.account.clone();
     let project_href = format!("/projects/{}", detail.project_id);
     let customer_href = format!("/customers/{}", detail.customer_id);
@@ -132,9 +136,19 @@ fn LoanAccountContent(
                     <PostChargeForm loan_account_id=account.id on_posted=on_payment_recorded.clone() />
                 </div>
             })}
+            {can_reverse.then(|| view! {
+                <div class="card">
+                    <WaiveForm loan_account_id=account.id on_waived=on_payment_recorded.clone() />
+                </div>
+            })}
         </div>
 
         <h2 style="margin-top: var(--space-5)">"Payment history"</h2>
+        <p class="text-muted" style="margin-top: calc(var(--space-2) * -1);">
+            "To reverse a payment or charge, use the ledger entries on the "
+            <A href=format!("/loan-accounts/{}/statement", account.id)>"Statement"</A>
+            " page."
+        </p>
         {if detail.payments.is_empty() {
             view! { <p class="text-muted">"No payments recorded yet."</p> }.into_any()
         } else {
@@ -163,6 +177,83 @@ fn LoanAccountContent(
                 </div>
             }
                 .into_any()
+        }}
+    }
+}
+
+#[component]
+pub(crate) fn ReverseButton(
+    loan_account_id: Uuid,
+    entry_id: Uuid,
+    // `Send + Sync` here (not just the usual `Fn() + Clone + 'static`
+    // other on_recorded/on_posted callbacks in this file use) because
+    // this component gets used inside a reactive `{move || ...}}`
+    // template closure on the Statement page — Leptos's `ReactiveFunction`/
+    // `IntoRender` bounds require that even in a single-threaded WASM
+    // app, same reason `ApiClient` needs `Arc<Mutex<_>>` (see its own
+    // doc comment).
+    on_reversed: impl Fn() + Clone + Send + Sync + 'static,
+) -> impl IntoView {
+    let api = use_api();
+    let open = RwSignal::new(false);
+    let reason = RwSignal::new(String::new());
+    let error = RwSignal::new(None::<String>);
+    let submitting = RwSignal::new(false);
+
+    let confirm = move |_: leptos::ev::MouseEvent| {
+        if submitting.get() {
+            return;
+        }
+        let reason_value = reason.get().trim().to_string();
+        if reason_value.is_empty() {
+            error.set(Some("Enter a reason.".to_string()));
+            return;
+        }
+        error.set(None);
+        submitting.set(true);
+        let api = api.clone();
+        let on_reversed = on_reversed.clone();
+        spawn_local(async move {
+            let result = api.reverse_entry(loan_account_id, entry_id, reason_value).await;
+            match result {
+                Ok(_) => {
+                    open.set(false);
+                    reason.set(String::new());
+                    on_reversed();
+                }
+                Err(e) => error.set(Some(format!("{e}"))),
+            }
+            submitting.set(false);
+        });
+    };
+
+    view! {
+        {move || {
+            if open.get() {
+                let confirm = confirm.clone();
+                view! {
+                    <div style="display:flex; flex-direction:column; gap: var(--space-2);">
+                        <div style="display:flex; gap: var(--space-2); align-items:center;">
+                            <input
+                                type="text"
+                                placeholder="Reason"
+                                style="max-width: 160px;"
+                                prop:value=reason
+                                on:input=move |ev| reason.set(event_target_value(&ev))
+                            />
+                            <button class="btn btn-danger" on:click=confirm disabled=submitting>
+                                {move || if submitting.get() { "…" } else { "Confirm" }}
+                            </button>
+                            <button class="btn btn-secondary" on:click=move |_| open.set(false)>"Cancel"</button>
+                        </div>
+                        {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+                    </div>
+                }.into_any()
+            } else {
+                view! {
+                    <button class="btn btn-secondary" on:click=move |_| open.set(true)>"Reverse"</button>
+                }.into_any()
+            }
         }}
     }
 }
@@ -420,6 +511,133 @@ fn PostChargeForm(loan_account_id: Uuid, on_posted: impl Fn() + Clone + 'static)
 
             <button type="submit" class="btn btn-secondary" disabled=submitting>
                 {move || if submitting.get() { "Posting…" } else { "Post charge" }}
+            </button>
+        </form>
+    }
+}
+
+#[component]
+fn WaiveForm(loan_account_id: Uuid, on_waived: impl Fn() + Clone + 'static) -> impl IntoView {
+    let api = use_api();
+
+    let waiver_type = RwSignal::new("interest".to_string());
+    let amount = RwSignal::new(String::new());
+    let waiver_date = RwSignal::new(String::new());
+    let reason = RwSignal::new(String::new());
+    let error = RwSignal::new(None::<String>);
+    let submitting = RwSignal::new(false);
+
+    let on_submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        if submitting.get() {
+            return;
+        }
+        error.set(None);
+
+        let Ok(parsed_amount) = Decimal::from_str(amount.get().trim()) else {
+            error.set(Some("Enter a valid amount.".to_string()));
+            return;
+        };
+        if parsed_amount <= Decimal::ZERO {
+            error.set(Some("Amount must be greater than zero.".to_string()));
+            return;
+        }
+        let reason_value = reason.get().trim().to_string();
+        if reason_value.is_empty() {
+            error.set(Some("Enter a reason for this waiver.".to_string()));
+            return;
+        }
+        let parsed_date = if waiver_date.get().is_empty() {
+            chrono::Local::now().date_naive()
+        } else {
+            match chrono::NaiveDate::parse_from_str(waiver_date.get().trim(), "%Y-%m-%d") {
+                Ok(d) => d,
+                Err(_) => {
+                    error.set(Some("Enter a valid date (YYYY-MM-DD).".to_string()));
+                    return;
+                }
+            }
+        };
+        let waiver_type_value = if waiver_type.get() == "penalty" {
+            WaiverType::Penalty
+        } else {
+            WaiverType::Interest
+        };
+
+        submitting.set(true);
+        let api = api.clone();
+        let on_waived = on_waived.clone();
+        spawn_local(async move {
+            let result = api
+                .post_waiver(PostWaiverInput {
+                    loan_account_id,
+                    waiver_type: waiver_type_value,
+                    amount: parsed_amount,
+                    waiver_date: parsed_date,
+                    reason: reason_value,
+                })
+                .await;
+            match result {
+                Ok(_) => {
+                    amount.set(String::new());
+                    waiver_date.set(String::new());
+                    reason.set(String::new());
+                    on_waived();
+                }
+                Err(e) => error.set(Some(format!("{e}"))),
+            }
+            submitting.set(false);
+        });
+    };
+
+    view! {
+        <form on:submit=on_submit>
+            <h3 class="mt-0">"Waive interest or penalty"</h3>
+            {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+
+            <div class="field">
+                <label for="waiver-type">"Waive"</label>
+                <select id="waiver-type" prop:value=waiver_type on:change=move |ev| waiver_type.set(event_target_value(&ev))>
+                    <option value="interest">"Interest"</option>
+                    <option value="penalty">"Penalty"</option>
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="waiver-amount">"Amount"</label>
+                <input
+                    id="waiver-amount"
+                    type="text"
+                    inputmode="numeric"
+                    required
+                    prop:value=amount
+                    on:input=move |ev| amount.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label for="waiver-date">"Date (defaults to today)"</label>
+                <input
+                    id="waiver-date"
+                    type="date"
+                    prop:value=waiver_date
+                    on:input=move |ev| waiver_date.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label for="waiver-reason">"Reason"</label>
+                <input
+                    id="waiver-reason"
+                    type="text"
+                    required
+                    prop:value=reason
+                    on:input=move |ev| reason.set(event_target_value(&ev))
+                />
+            </div>
+
+            <button type="submit" class="btn btn-secondary" disabled=submitting>
+                {move || if submitting.get() { "Waiving…" } else { "Waive" }}
             </button>
         </form>
     }

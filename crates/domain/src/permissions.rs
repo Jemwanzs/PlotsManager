@@ -124,6 +124,13 @@ pub const PERM_PAYMENTS_RECORD: &str = "payments:record";
 /// customer owes rather than reduces it; a role trusted to record
 /// what customers paid isn't automatically trusted to add charges.
 pub const PERM_FINANCE_POST_CHARGES: &str = "finance:post_charges";
+/// Reversing a payment/charge or waiving outstanding interest/penalty
+/// (`routes/loan_accounts.rs::reverse_entry`/`post_waiver`) — the
+/// undo/forgive counterpart to `payments:record`/`finance:post_charges`,
+/// kept as its own key rather than folded into either since a role
+/// trusted to record or charge isn't automatically trusted to reverse
+/// or forgive what's already posted.
+pub const PERM_FINANCE_REVERSE: &str = "finance:reverse";
 
 // ---------------------------------------------------------------
 // Reports
@@ -214,6 +221,7 @@ const REGISTRY: &[StaticPermissionDef] = &[
     StaticPermissionDef { key: PERM_FINANCE_VIEW, label: "View loan accounts", module: "Finance", feature: "Loan accounts", sensitive: false },
     StaticPermissionDef { key: PERM_PAYMENTS_RECORD, label: "Record a payment", module: "Finance", feature: "Payments", sensitive: true },
     StaticPermissionDef { key: PERM_FINANCE_POST_CHARGES, label: "Post interest/penalty charges", module: "Finance", feature: "Payments", sensitive: true },
+    StaticPermissionDef { key: PERM_FINANCE_REVERSE, label: "Reverse payments/charges, waive interest/penalty", module: "Finance", feature: "Payments", sensitive: true },
 
     StaticPermissionDef { key: PERM_REPORTS_SALES, label: "View sales report", module: "Reports", feature: "Reports", sensitive: false },
     StaticPermissionDef { key: PERM_REPORTS_INVENTORY, label: "View inventory report", module: "Reports", feature: "Reports", sensitive: false },

@@ -7,7 +7,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{Datelike, NaiveDate, TimeZone, Utc};
 use domain::{
@@ -48,6 +48,11 @@ struct MockDb {
     /// still synthesized fresh from `payments` in `get_loan_statement`,
     /// matching the real backend's approach).
     charges: Vec<domain::LoanLedgerEntry>,
+    /// Original ledger entry ids (a payment's or a charge's) that have
+    /// already been reversed — `LoanLedgerEntry` (the wire type) has no
+    /// `reversal_of_entry_id` field of its own, so this stands in for
+    /// that check the real backend runs against `loan_ledger_entries`.
+    reversed_entry_ids: HashSet<Uuid>,
     quotations: Vec<Quotation>,
     approval_requests: Vec<ApprovalRequest>,
     project_maps: HashMap<Uuid, MockProjectMap>,
@@ -952,6 +957,144 @@ impl MockApi {
             created_at: Utc::now(),
         };
         db.charges.push(entry.clone());
+        Ok(entry)
+    }
+
+    pub async fn post_waiver(
+        &self,
+        input: domain::PostWaiverInput,
+    ) -> Result<domain::LoanLedgerEntry, ApiError> {
+        settle(200).await;
+        if input.amount <= Decimal::ZERO {
+            return Err(ApiError::InvalidCredentials("Enter an amount greater than zero.".to_string()));
+        }
+        let reason = input.reason.trim().to_string();
+        if reason.is_empty() {
+            return Err(ApiError::InvalidCredentials("Enter a reason for this waiver.".to_string()));
+        }
+
+        let mut db = self.db.lock().unwrap();
+        let (interest_outstanding, penalty_outstanding) = self.outstanding_components(&db, input.loan_account_id);
+        let component_outstanding = match input.waiver_type {
+            domain::WaiverType::Interest => interest_outstanding,
+            domain::WaiverType::Penalty => penalty_outstanding,
+        };
+        if input.amount > component_outstanding {
+            return Err(ApiError::InvalidCredentials(format!(
+                "Cannot waive more than the outstanding {} balance.",
+                match input.waiver_type {
+                    domain::WaiverType::Interest => "interest",
+                    domain::WaiverType::Penalty => "penalty",
+                }
+            )));
+        }
+
+        let account = db
+            .loan_accounts
+            .iter_mut()
+            .find(|la| la.id == input.loan_account_id)
+            .ok_or(ApiError::NotFound)?;
+        account.outstanding_balance -= input.amount;
+        if account.outstanding_balance <= Decimal::ZERO {
+            account.status = domain::LoanAccountStatus::FullyPaid;
+        }
+        let new_balance = account.outstanding_balance;
+
+        let (entry_type, interest_delta, penalty_delta) = match input.waiver_type {
+            domain::WaiverType::Interest => (domain::LedgerEntryType::WaiverInterest, -input.amount, Decimal::ZERO),
+            domain::WaiverType::Penalty => (domain::LedgerEntryType::WaiverPenalty, Decimal::ZERO, -input.amount),
+        };
+        let entry = domain::LoanLedgerEntry {
+            id: Uuid::new_v4(),
+            loan_account_id: input.loan_account_id,
+            entry_type,
+            entry_date: input.waiver_date,
+            gross_amount: input.amount,
+            principal_delta: Decimal::ZERO,
+            interest_delta,
+            penalty_delta,
+            balance_after: new_balance,
+            method: None,
+            external_reference: None,
+            notes: Some(reason),
+            created_by_name: db.demo_user.full_name.clone(),
+            created_at: Utc::now(),
+        };
+        db.charges.push(entry.clone());
+        Ok(entry)
+    }
+
+    pub async fn reverse_entry(
+        &self,
+        loan_account_id: Uuid,
+        entry_id: Uuid,
+        reason: String,
+    ) -> Result<domain::LoanLedgerEntry, ApiError> {
+        settle(200).await;
+        let reason = reason.trim().to_string();
+        if reason.is_empty() {
+            return Err(ApiError::InvalidCredentials("Enter a reason for this reversal.".to_string()));
+        }
+
+        let mut db = self.db.lock().unwrap();
+        if db.reversed_entry_ids.contains(&entry_id) {
+            return Err(ApiError::InvalidCredentials("This entry has already been reversed.".to_string()));
+        }
+
+        let original = if let Some(p) = db.payments.iter().find(|p| p.id == entry_id && p.loan_account_id == loan_account_id).cloned() {
+            (domain::LedgerEntryType::Payment, p.amount, -p.amount, Decimal::ZERO, Decimal::ZERO, Some(p.id))
+        } else if let Some(c) = db
+            .charges
+            .iter()
+            .find(|c| c.id == entry_id && c.loan_account_id == loan_account_id && matches!(c.entry_type, domain::LedgerEntryType::ChargeInterest | domain::LedgerEntryType::ChargePenalty))
+            .cloned()
+        {
+            (c.entry_type, c.gross_amount, c.principal_delta, c.interest_delta, c.penalty_delta, None)
+        } else {
+            return Err(ApiError::NotFound);
+        };
+        let (entry_type, gross_amount, orig_principal, orig_interest, orig_penalty, payment_id) = original;
+        let _ = entry_type;
+
+        let account = db
+            .loan_accounts
+            .iter_mut()
+            .find(|la| la.id == loan_account_id)
+            .ok_or(ApiError::NotFound)?;
+        let new_balance = account.outstanding_balance - (orig_principal + orig_interest + orig_penalty);
+        account.outstanding_balance = new_balance;
+        account.status = if new_balance <= Decimal::ZERO {
+            domain::LoanAccountStatus::FullyPaid
+        } else if account.status == domain::LoanAccountStatus::FullyPaid {
+            domain::LoanAccountStatus::ActivePartiallyPaid
+        } else {
+            account.status
+        };
+
+        if let Some(payment_id) = payment_id {
+            if let Some(p) = db.payments.iter_mut().find(|p| p.id == payment_id) {
+                p.status = PaymentStatus::Reversed;
+            }
+        }
+
+        let entry = domain::LoanLedgerEntry {
+            id: Uuid::new_v4(),
+            loan_account_id,
+            entry_type: domain::LedgerEntryType::Reversal,
+            entry_date: Utc::now().date_naive(),
+            gross_amount,
+            principal_delta: -orig_principal,
+            interest_delta: -orig_interest,
+            penalty_delta: -orig_penalty,
+            balance_after: new_balance,
+            method: None,
+            external_reference: None,
+            notes: Some(reason),
+            created_by_name: db.demo_user.full_name.clone(),
+            created_at: Utc::now(),
+        };
+        db.charges.push(entry.clone());
+        db.reversed_entry_ids.insert(entry_id);
         Ok(entry)
     }
 
@@ -2844,6 +2987,7 @@ fn seed() -> MockDb {
         loan_accounts,
         payments,
         charges: Vec::new(),
+        reversed_entry_ids: HashSet::new(),
         quotations: Vec::new(),
         approval_requests: Vec::new(),
         project_maps: HashMap::new(),
