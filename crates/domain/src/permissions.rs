@@ -113,10 +113,17 @@ pub const PERM_APPROVALS_VIEW: &str = "approvals:view";
 pub const PERM_APPROVE_TRANSACTIONS: &str = "approvals:approve";
 
 // ---------------------------------------------------------------
-// Finance — loan accounts (read) and recording a payment against one.
+// Finance — loan accounts (read), recording a payment, and posting a
+// manual interest/penalty charge against one.
 // ---------------------------------------------------------------
 pub const PERM_FINANCE_VIEW: &str = "finance:view";
 pub const PERM_PAYMENTS_RECORD: &str = "payments:record";
+/// Posting a manual interest or penalty charge
+/// (`crates/backend/src/routes/loan_accounts.rs::post_charge`) —
+/// distinct from `payments:record` since it *increases* what a
+/// customer owes rather than reduces it; a role trusted to record
+/// what customers paid isn't automatically trusted to add charges.
+pub const PERM_FINANCE_POST_CHARGES: &str = "finance:post_charges";
 
 // ---------------------------------------------------------------
 // Reports
@@ -206,6 +213,7 @@ const REGISTRY: &[StaticPermissionDef] = &[
 
     StaticPermissionDef { key: PERM_FINANCE_VIEW, label: "View loan accounts", module: "Finance", feature: "Loan accounts", sensitive: false },
     StaticPermissionDef { key: PERM_PAYMENTS_RECORD, label: "Record a payment", module: "Finance", feature: "Payments", sensitive: true },
+    StaticPermissionDef { key: PERM_FINANCE_POST_CHARGES, label: "Post interest/penalty charges", module: "Finance", feature: "Payments", sensitive: true },
 
     StaticPermissionDef { key: PERM_REPORTS_SALES, label: "View sales report", module: "Reports", feature: "Reports", sensitive: false },
     StaticPermissionDef { key: PERM_REPORTS_INVENTORY, label: "View inventory report", module: "Reports", feature: "Reports", sensitive: false },

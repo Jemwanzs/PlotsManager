@@ -10,7 +10,7 @@ use crate::api::{LoanAccountDetail, RecordPaymentInput};
 use crate::auth::{has_permission, use_api, use_auth, use_currency};
 use crate::components::{ErrorAlert, LoadingState, StatCard, StatusBadge};
 use crate::format::{format_money, format_payment_status};
-use domain::PERM_PAYMENTS_RECORD;
+use domain::{ChargeType, PostChargeInput, PERM_FINANCE_POST_CHARGES, PERM_PAYMENTS_RECORD};
 
 #[component]
 pub fn LoanAccountDetailPage() -> impl IntoView {
@@ -58,6 +58,7 @@ fn LoanAccountContent(
     let currency = use_currency();
     let auth = use_auth();
     let can_record = has_permission(auth, PERM_PAYMENTS_RECORD);
+    let can_post_charges = has_permission(auth, PERM_FINANCE_POST_CHARGES);
     let account = detail.account.clone();
     let project_href = format!("/projects/{}", detail.project_id);
     let customer_href = format!("/customers/{}", detail.customer_id);
@@ -100,17 +101,24 @@ fn LoanAccountContent(
             />
         </div>
 
-        {if can_record {
-            view! {
+        <div class="section-grid-2">
+            {if can_record {
+                view! {
+                    <div class="card">
+                        <RecordPaymentForm loan_account_id=account.id on_recorded=on_payment_recorded.clone() />
+                    </div>
+                }.into_any()
+            } else {
+                view! {
+                    <div class="alert alert-warning">"You don't have permission to record payments — ask an admin."</div>
+                }.into_any()
+            }}
+            {can_post_charges.then(|| view! {
                 <div class="card">
-                    <RecordPaymentForm loan_account_id=account.id on_recorded=on_payment_recorded />
+                    <PostChargeForm loan_account_id=account.id on_posted=on_payment_recorded.clone() />
                 </div>
-            }.into_any()
-        } else {
-            view! {
-                <div class="alert alert-warning">"You don't have permission to record payments — ask an admin."</div>
-            }.into_any()
-        }}
+            })}
+        </div>
 
         <h2 style="margin-top: var(--space-5)">"Payment history"</h2>
         {if detail.payments.is_empty() {
@@ -155,6 +163,22 @@ fn RecordPaymentForm(loan_account_id: Uuid, on_recorded: impl Fn() + Clone + 'st
     let date = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
     let submitting = RwSignal::new(false);
+
+    // Recomputes the allocation preview whenever the amount changes —
+    // same penalty -> interest -> principal waterfall
+    // `record_payment` itself applies server-side, so what's shown
+    // here is guaranteed to match what actually gets posted.
+    let api_for_preview = api.clone();
+    let preview = LocalResource::new(move || {
+        let api = api_for_preview.clone();
+        let parsed = Decimal::from_str(amount.get().trim()).ok().filter(|a| *a > Decimal::ZERO);
+        async move {
+            match parsed {
+                Some(a) => Some(api.preview_allocation(loan_account_id, a).await),
+                None => None,
+            }
+        }
+    });
 
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
@@ -241,8 +265,147 @@ fn RecordPaymentForm(loan_account_id: Uuid, on_recorded: impl Fn() + Clone + 'st
                 />
             </div>
 
+            {move || {
+                preview.get().map(|wrapped| wrapped.take()).flatten().and_then(|r| r.ok()).map(|p| view! {
+                    <div class="alert alert-info" style="display:flex; flex-direction:column; gap: var(--space-1);">
+                        <strong>"Allocation preview"</strong>
+                        <span>"Penalty: " {format_money(p.penalty_paid, &currency.get())}</span>
+                        <span>"Interest: " {format_money(p.interest_paid, &currency.get())}</span>
+                        <span>"Principal: " {format_money(p.principal_paid, &currency.get())}</span>
+                        <span>"New balance: " <strong>{format_money(p.new_balance, &currency.get())}</strong></span>
+                    </div>
+                })
+            }}
+
             <button type="submit" class="btn btn-primary" disabled=submitting>
                 {move || if submitting.get() { "Recording…" } else { "Record payment" }}
+            </button>
+        </form>
+    }
+}
+
+#[component]
+fn PostChargeForm(loan_account_id: Uuid, on_posted: impl Fn() + Clone + 'static) -> impl IntoView {
+    let api = use_api();
+
+    let charge_type = RwSignal::new("interest".to_string());
+    let amount = RwSignal::new(String::new());
+    let charge_date = RwSignal::new(String::new());
+    let reason = RwSignal::new(String::new());
+    let error = RwSignal::new(None::<String>);
+    let submitting = RwSignal::new(false);
+
+    let on_submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        if submitting.get() {
+            return;
+        }
+        error.set(None);
+
+        let Ok(parsed_amount) = Decimal::from_str(amount.get().trim()) else {
+            error.set(Some("Enter a valid amount.".to_string()));
+            return;
+        };
+        if parsed_amount <= Decimal::ZERO {
+            error.set(Some("Amount must be greater than zero.".to_string()));
+            return;
+        }
+        let reason_value = reason.get().trim().to_string();
+        if reason_value.is_empty() {
+            error.set(Some("Enter a reason for this charge.".to_string()));
+            return;
+        }
+        let parsed_date = if charge_date.get().is_empty() {
+            chrono::Local::now().date_naive()
+        } else {
+            match chrono::NaiveDate::parse_from_str(charge_date.get().trim(), "%Y-%m-%d") {
+                Ok(d) => d,
+                Err(_) => {
+                    error.set(Some("Enter a valid date (YYYY-MM-DD).".to_string()));
+                    return;
+                }
+            }
+        };
+        let charge_type_value = if charge_type.get() == "penalty" {
+            ChargeType::Penalty
+        } else {
+            ChargeType::Interest
+        };
+
+        submitting.set(true);
+        let api = api.clone();
+        let on_posted = on_posted.clone();
+        spawn_local(async move {
+            let result = api
+                .post_charge(PostChargeInput {
+                    loan_account_id,
+                    charge_type: charge_type_value,
+                    amount: parsed_amount,
+                    charge_date: parsed_date,
+                    reason: reason_value,
+                })
+                .await;
+            match result {
+                Ok(_) => {
+                    amount.set(String::new());
+                    charge_date.set(String::new());
+                    reason.set(String::new());
+                    on_posted();
+                }
+                Err(e) => error.set(Some(format!("{e}"))),
+            }
+            submitting.set(false);
+        });
+    };
+
+    view! {
+        <form on:submit=on_submit>
+            <h3 class="mt-0">"Post a manual charge"</h3>
+            {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+
+            <div class="field">
+                <label for="charge-type">"Charge type"</label>
+                <select id="charge-type" prop:value=charge_type on:change=move |ev| charge_type.set(event_target_value(&ev))>
+                    <option value="interest">"Interest"</option>
+                    <option value="penalty">"Penalty"</option>
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="charge-amount">"Amount"</label>
+                <input
+                    id="charge-amount"
+                    type="text"
+                    inputmode="numeric"
+                    required
+                    prop:value=amount
+                    on:input=move |ev| amount.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label for="charge-date">"Date (defaults to today)"</label>
+                <input
+                    id="charge-date"
+                    type="date"
+                    prop:value=charge_date
+                    on:input=move |ev| charge_date.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label for="charge-reason">"Reason"</label>
+                <input
+                    id="charge-reason"
+                    type="text"
+                    required
+                    prop:value=reason
+                    on:input=move |ev| reason.set(event_target_value(&ev))
+                />
+            </div>
+
+            <button type="submit" class="btn btn-secondary" disabled=submitting>
+                {move || if submitting.get() { "Posting…" } else { "Post charge" }}
             </button>
         </form>
     }

@@ -195,6 +195,27 @@ impl ApiClient {
         }
     }
 
+    pub async fn preview_allocation(
+        &self,
+        id: Uuid,
+        amount: rust_decimal::Decimal,
+    ) -> Result<domain::PaymentAllocationPreview, ApiError> {
+        match self {
+            Self::Mock(api) => api.preview_allocation(id, amount).await,
+            Self::Http(api) => api.preview_allocation(id, amount).await,
+        }
+    }
+
+    pub async fn post_charge(
+        &self,
+        input: domain::PostChargeInput,
+    ) -> Result<domain::LoanLedgerEntry, ApiError> {
+        match self {
+            Self::Mock(api) => api.post_charge(input).await,
+            Self::Http(api) => api.post_charge(input).await,
+        }
+    }
+
     pub async fn list_platform_organizations(
         &self,
     ) -> Result<Vec<PlatformOrganizationSummary>, ApiError> {

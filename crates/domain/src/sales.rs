@@ -167,3 +167,41 @@ pub struct LoanStatement {
     pub status_color: String,
     pub entries: Vec<LoanLedgerEntry>,
 }
+
+/// A manual interest or penalty charge against a receivable account
+/// (`POST /api/v1/loan-accounts/:id/charges`) — the mechanic sections
+/// 7/8 of the finance enhancement need (an account can actually owe
+/// more than its principal). Automatic/scheduled charging (a
+/// configured rate applied on a recurring basis) needs a job
+/// scheduler this app doesn't have yet; this is the manual fallback
+/// the spec itself calls for in the meantime, not a stand-in pretending
+/// to be the automatic version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChargeType {
+    Interest,
+    Penalty,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostChargeInput {
+    pub loan_account_id: Uuid,
+    pub charge_type: ChargeType,
+    pub amount: Decimal,
+    pub charge_date: NaiveDate,
+    pub reason: String,
+}
+
+/// `GET /api/v1/loan-accounts/:id/allocation-preview?amount=X` — what
+/// a payment of this size *would* clear, before it's posted. Same
+/// penalty -> interest -> principal waterfall `record_payment` itself
+/// applies; a read-only preview over it, not a separate calculation
+/// that could drift from what actually gets posted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaymentAllocationPreview {
+    pub amount: Decimal,
+    pub penalty_paid: Decimal,
+    pub interest_paid: Decimal,
+    pub principal_paid: Decimal,
+    pub new_balance: Decimal,
+}

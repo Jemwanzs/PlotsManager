@@ -1,10 +1,11 @@
-use axum::extract::Path;
+use axum::extract::{Path, Query};
 use axum::routing::post;
 use axum::{extract::State, routing::get, Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
 use domain::{
-    LoanAccountDetail, LoanAccountStatus, LoanLedgerEntry, LoanStatement, Payment,
-    PlotLoanAccount, RecordPaymentInput, PERM_PAYMENTS_RECORD,
+    ChargeType, LoanAccountDetail, LoanAccountStatus, LoanLedgerEntry, LoanStatement, Payment,
+    PaymentAllocationPreview, PlotLoanAccount, PostChargeInput, RecordPaymentInput,
+    PERM_FINANCE_POST_CHARGES, PERM_PAYMENTS_RECORD,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -19,6 +20,45 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/loan-accounts/:id", get(get_loan_account))
         .route("/api/v1/loan-accounts/:id/payments", post(record_payment))
         .route("/api/v1/loan-accounts/:id/statement", get(get_loan_statement))
+        .route("/api/v1/loan-accounts/:id/charges", post(post_charge))
+        .route(
+            "/api/v1/loan-accounts/:id/allocation-preview",
+            get(preview_allocation),
+        )
+}
+
+/// Penalty -> interest -> principal, the spec's default waterfall
+/// order (a literal constant here rather than a config table until a
+/// real "make this configurable" phase exists to attach a UI to it).
+/// Shared by `record_payment` (which actually posts the result) and
+/// `preview_allocation` (which only shows what it *would* be) so the
+/// two can never drift apart.
+fn allocate_waterfall(
+    amount: Decimal,
+    interest_outstanding: Decimal,
+    penalty_outstanding: Decimal,
+) -> (Decimal, Decimal, Decimal) {
+    let mut remaining = amount;
+    let penalty_paid = remaining.min(penalty_outstanding.max(Decimal::ZERO));
+    remaining -= penalty_paid;
+    let interest_paid = remaining.min(interest_outstanding.max(Decimal::ZERO));
+    remaining -= interest_paid;
+    let principal_paid = remaining;
+    (penalty_paid, interest_paid, principal_paid)
+}
+
+async fn outstanding_components<'e, E: sqlx::PgExecutor<'e>>(
+    db: E,
+    loan_account_id: Uuid,
+) -> Result<(Decimal, Decimal), AppError> {
+    let (interest_outstanding, penalty_outstanding): (Decimal, Decimal) = sqlx::query_as(
+        r#"select coalesce(sum(interest_delta), 0), coalesce(sum(penalty_delta), 0)
+           from loan_ledger_entries where loan_account_id = $1"#,
+    )
+    .bind(loan_account_id)
+    .fetch_one(db)
+    .await?;
+    Ok((interest_outstanding, penalty_outstanding))
 }
 
 #[derive(sqlx::FromRow)]
@@ -190,30 +230,9 @@ async fn record_payment(
         LoanAccountStatus::ActivePartiallyPaid
     };
 
-    // Allocation waterfall: penalty -> interest -> principal (the
-    // order the enhancement spec calls for as the default, kept as a
-    // literal constant here rather than a config table until a real
-    // "make this configurable" phase exists to attach a UI to it).
-    // Outstanding interest/penalty are the running sums of every
-    // charge and waiver posted so far for this account — currently
-    // always zero, since nothing anywhere posts an interest or
-    // penalty charge yet, so every payment allocates entirely to
-    // principal until that phase ships. Written generically now so it
-    // needs no changes once charges exist.
-    let (interest_outstanding, penalty_outstanding): (Decimal, Decimal) = sqlx::query_as(
-        r#"select coalesce(sum(interest_delta), 0), coalesce(sum(penalty_delta), 0)
-           from loan_ledger_entries where loan_account_id = $1"#,
-    )
-    .bind(id)
-    .fetch_one(&mut *tx)
-    .await?;
-
-    let mut remaining = input.amount;
-    let penalty_paid = remaining.min(penalty_outstanding.max(Decimal::ZERO));
-    remaining -= penalty_paid;
-    let interest_paid = remaining.min(interest_outstanding.max(Decimal::ZERO));
-    remaining -= interest_paid;
-    let principal_paid = remaining;
+    let (interest_outstanding, penalty_outstanding) = outstanding_components(&mut *tx, id).await?;
+    let (penalty_paid, interest_paid, principal_paid) =
+        allocate_waterfall(input.amount, interest_outstanding, penalty_outstanding);
 
     let payment_row: PaymentRow = sqlx::query_as(
         r#"
@@ -400,5 +419,188 @@ async fn get_loan_statement(
         status_label: label.to_string(),
         status_color: color.to_string(),
         entries,
+    }))
+}
+
+#[derive(serde::Deserialize)]
+struct AllocationPreviewQuery {
+    amount: Decimal,
+}
+
+/// What a payment of this size *would* clear, without posting
+/// anything — same waterfall `record_payment` actually applies
+/// (`allocate_waterfall`, shared by both), so what a user previews
+/// before clicking "Record Payment" is guaranteed to match what
+/// actually gets posted.
+async fn preview_allocation(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Query(params): Query<AllocationPreviewQuery>,
+) -> Result<Json<PaymentAllocationPreview>, AppError> {
+    if params.amount <= Decimal::ZERO {
+        return Err(AppError::bad_request("Enter an amount greater than zero."));
+    }
+
+    let outstanding_balance: Option<Decimal> = sqlx::query_scalar(
+        r#"select pla.outstanding_balance from plot_loan_accounts pla
+           join plot_sales ps on ps.id = pla.sale_id
+           where pla.id = $1 and ps.organization_id = $2"#,
+    )
+    .bind(id)
+    .bind(auth.organization_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let outstanding_balance = outstanding_balance.ok_or(AppError::NotFound)?;
+
+    let (interest_outstanding, penalty_outstanding) = outstanding_components(&state.db, id).await?;
+    let (penalty_paid, interest_paid, principal_paid) =
+        allocate_waterfall(params.amount, interest_outstanding, penalty_outstanding);
+    let new_balance = (outstanding_balance - params.amount).max(Decimal::ZERO);
+
+    Ok(Json(PaymentAllocationPreview {
+        amount: params.amount,
+        penalty_paid,
+        interest_paid,
+        principal_paid,
+        new_balance,
+    }))
+}
+
+/// Posts a manual interest or penalty charge — the mechanic that
+/// makes `loan_ledger_entries`' `charge_interest`/`charge_penalty`
+/// entry types (and therefore the allocation waterfall's penalty/
+/// interest-first behaviour) actually reachable; nothing else in this
+/// app posts one. Increases the account's `outstanding_balance` by
+/// the charge amount and, if the account had already reached
+/// `FullyPaid` (a late penalty charged after the principal was
+/// cleared), reopens it to `ActivePartiallyPaid` — a nonzero balance
+/// can't coexist with a "fully paid" status. Does **not** touch the
+/// plot's own status: a charge is a financial matter after the sale,
+/// not a reversal of the sale itself.
+async fn post_charge(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(input): Json<PostChargeInput>,
+) -> Result<Json<LoanLedgerEntry>, AppError> {
+    auth.require_permission(PERM_FINANCE_POST_CHARGES)?;
+
+    if input.loan_account_id != id {
+        return Err(AppError::bad_request("Loan account id mismatch."));
+    }
+    if input.amount <= Decimal::ZERO {
+        return Err(AppError::bad_request("Enter an amount greater than zero."));
+    }
+    let reason = input.reason.trim();
+    if reason.is_empty() {
+        return Err(AppError::bad_request("Enter a reason for this charge."));
+    }
+
+    let mut tx = state.db.begin().await?;
+
+    let outstanding_balance: Option<Decimal> = sqlx::query_scalar(
+        r#"select pla.outstanding_balance from plot_loan_accounts pla
+           join plot_sales ps on ps.id = pla.sale_id
+           where pla.id = $1 and ps.organization_id = $2
+           for update of pla"#,
+    )
+    .bind(id)
+    .bind(auth.organization_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let outstanding_balance = outstanding_balance.ok_or(AppError::NotFound)?;
+    let new_balance = outstanding_balance + input.amount;
+
+    let (entry_type, interest_delta, penalty_delta) = match input.charge_type {
+        ChargeType::Interest => ("charge_interest", input.amount, Decimal::ZERO),
+        ChargeType::Penalty => ("charge_penalty", Decimal::ZERO, input.amount),
+    };
+
+    #[derive(sqlx::FromRow)]
+    struct NewChargeRow {
+        id: Uuid,
+        loan_account_id: Uuid,
+        entry_type: String,
+        entry_date: NaiveDate,
+        gross_amount: Decimal,
+        principal_delta: Decimal,
+        interest_delta: Decimal,
+        penalty_delta: Decimal,
+        balance_after: Decimal,
+        notes: Option<String>,
+        created_at: DateTime<Utc>,
+    }
+
+    let entry_row: NewChargeRow = sqlx::query_as(
+        r#"
+        insert into loan_ledger_entries
+            (loan_account_id, organization_id, entry_type, entry_date, gross_amount,
+             principal_delta, interest_delta, penalty_delta, balance_after, notes, created_by)
+        values ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9, $10)
+        returning id, loan_account_id, entry_type, entry_date, gross_amount, principal_delta,
+            interest_delta, penalty_delta, balance_after, notes, created_at
+        "#,
+    )
+    .bind(id)
+    .bind(auth.organization_id)
+    .bind(entry_type)
+    .bind(input.charge_date)
+    .bind(input.amount)
+    .bind(interest_delta)
+    .bind(penalty_delta)
+    .bind(new_balance)
+    .bind(reason)
+    .bind(auth.user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"update plot_loan_accounts set outstanding_balance = $1,
+               status = case when status = 'fully_paid' then 'active_partially_paid' else status end
+           where id = $2"#,
+    )
+    .bind(new_balance)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    let _ = sqlx::query(
+        r#"insert into audit_log (organization_id, actor_id, entity_type, entity_id, action, after_state)
+           values ($1, $2, 'loan_ledger_entry', $3, 'charge_posted', $4)"#,
+    )
+    .bind(auth.organization_id)
+    .bind(auth.user_id)
+    .bind(entry_row.id)
+    .bind(serde_json::json!({
+        "charge_type": input.charge_type,
+        "amount": input.amount,
+        "reason": reason,
+    }))
+    .execute(&state.db)
+    .await;
+
+    let created_by_name: String = sqlx::query_scalar("select full_name from users where id = $1")
+        .bind(auth.user_id)
+        .fetch_one(&state.db)
+        .await?;
+
+    Ok(Json(LoanLedgerEntry {
+        id: entry_row.id,
+        loan_account_id: entry_row.loan_account_id,
+        entry_type: from_pg("loan_ledger_entries.entry_type", &entry_row.entry_type)?,
+        entry_date: entry_row.entry_date,
+        gross_amount: entry_row.gross_amount,
+        principal_delta: entry_row.principal_delta,
+        interest_delta: entry_row.interest_delta,
+        penalty_delta: entry_row.penalty_delta,
+        balance_after: entry_row.balance_after,
+        method: None,
+        external_reference: None,
+        notes: entry_row.notes,
+        created_by_name,
+        created_at: entry_row.created_at,
     }))
 }

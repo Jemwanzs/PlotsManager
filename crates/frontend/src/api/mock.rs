@@ -42,6 +42,12 @@ struct MockDb {
     sales: Vec<PlotSale>,
     loan_accounts: Vec<PlotLoanAccount>,
     payments: Vec<Payment>,
+    /// Manual interest/penalty charges posted via `post_charge` — the
+    /// mock has no real ledger table, so this stands in for
+    /// `loan_ledger_entries`'s charge rows specifically (payments are
+    /// still synthesized fresh from `payments` in `get_loan_statement`,
+    /// matching the real backend's approach).
+    charges: Vec<domain::LoanLedgerEntry>,
     quotations: Vec<Quotation>,
     approval_requests: Vec<ApprovalRequest>,
     project_maps: HashMap<Uuid, MockProjectMap>,
@@ -747,13 +753,12 @@ impl MockApi {
         })
     }
 
-    /// Synthesizes a statement from `payments` — the mock has no
-    /// separate ledger table, so every entry is a `payment` allocated
-    /// entirely to principal (matching reality today: nothing in this
-    /// app, real backend included, posts an interest/penalty charge
-    /// yet — see `database/migrations/0020_loan_ledger.sql`'s own
-    /// docs). Running balance recomputed the same way that
-    /// migration's backfill did: principal minus cumulative payments.
+    /// Synthesizes a statement from `payments` plus any manually
+    /// posted `charges` (the mock has no separate ledger table) —
+    /// merged chronologically with a recomputed running balance:
+    /// principal, minus every payment's full amount (still entirely
+    /// principal — nothing charges interest by default), plus every
+    /// posted charge.
     pub async fn get_loan_statement(&self, id: Uuid) -> Result<domain::LoanStatement, ApiError> {
         settle(150).await;
         let db = self.db.lock().unwrap();
@@ -794,10 +799,10 @@ impl MockApi {
         payments.sort_by(|a, b| (a.payment_date, a.created_at).cmp(&(b.payment_date, b.created_at)));
 
         let mut running = account.principal;
-        let entries = payments
+        let mut entries: Vec<domain::LoanLedgerEntry> = payments
             .into_iter()
             .map(|p| {
-                running = (running - p.amount).max(Decimal::ZERO);
+                running += -p.amount;
                 domain::LoanLedgerEntry {
                     id: p.id,
                     loan_account_id: id,
@@ -816,6 +821,20 @@ impl MockApi {
                 }
             })
             .collect();
+        for charge in db.charges.iter().filter(|c| c.loan_account_id == id) {
+            running += charge.interest_delta + charge.penalty_delta;
+            let mut charge = charge.clone();
+            charge.balance_after = running;
+            entries.push(charge);
+        }
+        entries.sort_by(|a, b| (a.entry_date, a.created_at).cmp(&(b.entry_date, b.created_at)));
+        // Recompute the running balance in final chronological order —
+        // the two passes above computed it per-source, not interleaved.
+        let mut running = account.principal;
+        for entry in entries.iter_mut() {
+            running += entry.principal_delta + entry.interest_delta + entry.penalty_delta;
+            entry.balance_after = running.max(Decimal::ZERO);
+        }
 
         Ok(domain::LoanStatement {
             account,
@@ -827,6 +846,89 @@ impl MockApi {
             status_color: color.to_string(),
             entries,
         })
+    }
+
+    fn outstanding_components(&self, db: &MockDb, loan_account_id: Uuid) -> (Decimal, Decimal) {
+        db.charges
+            .iter()
+            .filter(|c| c.loan_account_id == loan_account_id)
+            .fold((Decimal::ZERO, Decimal::ZERO), |(interest, penalty), c| {
+                (interest + c.interest_delta, penalty + c.penalty_delta)
+            })
+    }
+
+    pub async fn preview_allocation(
+        &self,
+        id: Uuid,
+        amount: Decimal,
+    ) -> Result<domain::PaymentAllocationPreview, ApiError> {
+        settle(100).await;
+        if amount <= Decimal::ZERO {
+            return Err(ApiError::InvalidCredentials("Enter an amount greater than zero.".to_string()));
+        }
+        let db = self.db.lock().unwrap();
+        let account = db.loan_accounts.iter().find(|la| la.id == id).ok_or(ApiError::NotFound)?;
+        let outstanding_balance = account.outstanding_balance;
+        let (interest_outstanding, penalty_outstanding) = self.outstanding_components(&db, id);
+
+        let mut remaining = amount;
+        let penalty_paid = remaining.min(penalty_outstanding.max(Decimal::ZERO));
+        remaining -= penalty_paid;
+        let interest_paid = remaining.min(interest_outstanding.max(Decimal::ZERO));
+        remaining -= interest_paid;
+        let principal_paid = remaining;
+        let new_balance = (outstanding_balance - amount).max(Decimal::ZERO);
+
+        Ok(domain::PaymentAllocationPreview { amount, penalty_paid, interest_paid, principal_paid, new_balance })
+    }
+
+    pub async fn post_charge(
+        &self,
+        input: domain::PostChargeInput,
+    ) -> Result<domain::LoanLedgerEntry, ApiError> {
+        settle(200).await;
+        if input.amount <= Decimal::ZERO {
+            return Err(ApiError::InvalidCredentials("Enter an amount greater than zero.".to_string()));
+        }
+        let reason = input.reason.trim().to_string();
+        if reason.is_empty() {
+            return Err(ApiError::InvalidCredentials("Enter a reason for this charge.".to_string()));
+        }
+
+        let mut db = self.db.lock().unwrap();
+        let account = db
+            .loan_accounts
+            .iter_mut()
+            .find(|la| la.id == input.loan_account_id)
+            .ok_or(ApiError::NotFound)?;
+        account.outstanding_balance += input.amount;
+        if account.status == domain::LoanAccountStatus::FullyPaid {
+            account.status = domain::LoanAccountStatus::ActivePartiallyPaid;
+        }
+        let new_balance = account.outstanding_balance;
+
+        let (entry_type, interest_delta, penalty_delta) = match input.charge_type {
+            domain::ChargeType::Interest => (domain::LedgerEntryType::ChargeInterest, input.amount, Decimal::ZERO),
+            domain::ChargeType::Penalty => (domain::LedgerEntryType::ChargePenalty, Decimal::ZERO, input.amount),
+        };
+        let entry = domain::LoanLedgerEntry {
+            id: Uuid::new_v4(),
+            loan_account_id: input.loan_account_id,
+            entry_type,
+            entry_date: input.charge_date,
+            gross_amount: input.amount,
+            principal_delta: Decimal::ZERO,
+            interest_delta,
+            penalty_delta,
+            balance_after: new_balance,
+            method: None,
+            external_reference: None,
+            notes: Some(reason),
+            created_by_name: db.demo_user.full_name.clone(),
+            created_at: Utc::now(),
+        };
+        db.charges.push(entry.clone());
+        Ok(entry)
     }
 
     /// Finance → Loan Accounts: every receivable across every project,
@@ -2659,6 +2761,7 @@ fn seed() -> MockDb {
         sales,
         loan_accounts,
         payments,
+        charges: Vec::new(),
         quotations: Vec::new(),
         approval_requests: Vec::new(),
         project_maps: HashMap::new(),

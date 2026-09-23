@@ -282,6 +282,22 @@ impl HttpApi {
         self.get(&format!("/api/v1/loan-accounts/{id}/statement")).await
     }
 
+    pub async fn preview_allocation(
+        &self,
+        id: Uuid,
+        amount: rust_decimal::Decimal,
+    ) -> Result<domain::PaymentAllocationPreview, ApiError> {
+        self.get(&format!("/api/v1/loan-accounts/{id}/allocation-preview?amount={amount}")).await
+    }
+
+    pub async fn post_charge(
+        &self,
+        input: domain::PostChargeInput,
+    ) -> Result<domain::LoanLedgerEntry, ApiError> {
+        let path = format!("/api/v1/loan-accounts/{}/charges", input.loan_account_id);
+        self.post(&path, &input).await
+    }
+
     pub async fn list_platform_organizations(
         &self,
     ) -> Result<Vec<PlatformOrganizationSummary>, ApiError> {
