@@ -160,6 +160,17 @@ impl ApiClient {
         }
     }
 
+    pub async fn update_customer(
+        &self,
+        id: Uuid,
+        input: domain::UpdateCustomerInput,
+    ) -> Result<domain::Customer, ApiError> {
+        match self {
+            Self::Mock(api) => api.update_customer(id, input).await,
+            Self::Http(api) => api.update_customer(id, input).await,
+        }
+    }
+
     pub async fn update_lead(&self, id: Uuid, input: UpdateLeadInput) -> Result<domain::Customer, ApiError> {
         match self {
             Self::Mock(api) => api.update_lead(id, input).await,

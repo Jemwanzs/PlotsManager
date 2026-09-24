@@ -34,7 +34,7 @@ use domain::{
     PostWaiverInput, ProjectMapSummary, ProjectSummary,
     QuotationDetail, QuotationSummary, RecordPaymentInput, RejectOrganizationInput,
     ResetPasswordInput, ReverseEntryInput, Role, SalesReport, SignupInput, SignupResult, TenantUser, TermsVersion,
-    UpdateBranchInput, UpdateLeadInput, UpdateMapPolygonsInput, UpdateOrganizationSettingsInput,
+    UpdateBranchInput, UpdateCustomerInput, UpdateLeadInput, UpdateMapPolygonsInput, UpdateOrganizationSettingsInput,
     UpdatePlotInput, UpdateRoleInput, UpdateUserInput,
 };
 
@@ -251,6 +251,14 @@ impl HttpApi {
         input: CreateCustomerInput,
     ) -> Result<domain::Customer, ApiError> {
         self.post("/api/v1/customers", &input).await
+    }
+
+    pub async fn update_customer(
+        &self,
+        id: Uuid,
+        input: UpdateCustomerInput,
+    ) -> Result<domain::Customer, ApiError> {
+        self.put(&format!("/api/v1/customers/{id}"), &input).await
     }
 
     pub async fn update_lead(

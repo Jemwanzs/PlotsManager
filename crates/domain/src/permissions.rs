@@ -92,6 +92,13 @@ pub const PERM_PLOTS_TRANSACTIONS_BULK_IMPORT: &str = "plots:transactions.bulk_i
 // ---------------------------------------------------------------
 pub const PERM_CUSTOMERS_VIEW: &str = "customers:view";
 pub const PERM_CUSTOMERS_CREATE: &str = "customers:create";
+/// Editing a customer's own profile fields (KYC details, next of kin,
+/// contact info) — new alongside `update_customer`, which didn't exist
+/// until now (a customer could be created and viewed, but never
+/// edited). Distinct from `customers:leads.update` (pipeline
+/// stage/notes/follow-up), which changes far more often and doesn't
+/// need the same gate.
+pub const PERM_CUSTOMERS_EDIT: &str = "customers:edit";
 pub const PERM_CUSTOMERS_BULK_IMPORT: &str = "customers:bulk_import";
 pub const PERM_CUSTOMERS_LEADS_UPDATE: &str = "customers:leads.update";
 
@@ -206,6 +213,7 @@ const REGISTRY: &[StaticPermissionDef] = &[
 
     StaticPermissionDef { key: PERM_CUSTOMERS_VIEW, label: "View customers", module: "Customers", feature: "Customer management", sensitive: false },
     StaticPermissionDef { key: PERM_CUSTOMERS_CREATE, label: "Create customers", module: "Customers", feature: "Customer management", sensitive: false },
+    StaticPermissionDef { key: PERM_CUSTOMERS_EDIT, label: "Edit customer profiles", module: "Customers", feature: "Customer management", sensitive: false },
     StaticPermissionDef { key: PERM_CUSTOMERS_BULK_IMPORT, label: "Bulk import customers", module: "Customers", feature: "Customer management", sensitive: true },
     StaticPermissionDef { key: PERM_CUSTOMERS_LEADS_UPDATE, label: "Update lead pipeline stage", module: "Customers", feature: "Leads", sensitive: false },
 

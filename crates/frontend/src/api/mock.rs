@@ -634,9 +634,72 @@ impl MockApi {
             next_follow_up_at: None,
             notes: None,
             created_at: Utc::now(),
+            title: None,
+            customer_type: domain::CustomerType::Individual,
+            kra_pin: None,
+            postal_address: None,
+            city: None,
+            physical_address: None,
+            legacy_customer_number: None,
+            next_of_kin_name: None,
+            next_of_kin_relationship: None,
+            next_of_kin_mobile: None,
+            next_of_kin_id_number: None,
+            next_of_kin_address: None,
         };
         db.customers.push(customer.clone());
         Ok(customer)
+    }
+
+    pub async fn update_customer(
+        &self,
+        id: Uuid,
+        input: domain::UpdateCustomerInput,
+    ) -> Result<Customer, ApiError> {
+        settle(300).await;
+        let mut db = self.db.lock().unwrap();
+
+        let full_name = input.full_name.trim().to_string();
+        if full_name.is_empty() {
+            return Err(ApiError::InvalidCredentials(
+                "Enter the customer's name.".to_string(),
+            ));
+        }
+        let id_number = input.id_number.filter(|s| !s.trim().is_empty());
+        if let Some(id_number) = &id_number {
+            let duplicate = db
+                .customers
+                .iter()
+                .any(|c| c.id != id && c.id_number.as_deref() == Some(id_number.as_str()));
+            if duplicate {
+                return Err(ApiError::InvalidCredentials(
+                    "That ID/passport number is already registered.".to_string(),
+                ));
+            }
+        }
+
+        let customer = db
+            .customers
+            .iter_mut()
+            .find(|c| c.id == id)
+            .ok_or(ApiError::NotFound)?;
+        customer.full_name = full_name;
+        customer.email = input.email.filter(|s| !s.trim().is_empty());
+        customer.phone = input.phone.filter(|s| !s.trim().is_empty());
+        customer.id_number = id_number;
+        customer.title = input.title.filter(|s| !s.trim().is_empty());
+        customer.customer_type = input.customer_type;
+        customer.kra_pin = input.kra_pin.filter(|s| !s.trim().is_empty());
+        customer.postal_address = input.postal_address.filter(|s| !s.trim().is_empty());
+        customer.city = input.city.filter(|s| !s.trim().is_empty());
+        customer.physical_address = input.physical_address.filter(|s| !s.trim().is_empty());
+        customer.legacy_customer_number = input.legacy_customer_number.filter(|s| !s.trim().is_empty());
+        customer.next_of_kin_name = input.next_of_kin_name.filter(|s| !s.trim().is_empty());
+        customer.next_of_kin_relationship = input.next_of_kin_relationship.filter(|s| !s.trim().is_empty());
+        customer.next_of_kin_mobile = input.next_of_kin_mobile.filter(|s| !s.trim().is_empty());
+        customer.next_of_kin_id_number = input.next_of_kin_id_number.filter(|s| !s.trim().is_empty());
+        customer.next_of_kin_address = input.next_of_kin_address.filter(|s| !s.trim().is_empty());
+        Ok(customer.clone())
     }
 
     pub async fn update_lead(&self, id: Uuid, input: UpdateLeadInput) -> Result<Customer, ApiError> {
@@ -2904,6 +2967,18 @@ fn seed() -> MockDb {
             next_follow_up_at: None,
             notes: None,
             created_at: Utc::now(),
+            title: None,
+            customer_type: domain::CustomerType::Individual,
+            kra_pin: None,
+            postal_address: None,
+            city: None,
+            physical_address: None,
+            legacy_customer_number: None,
+            next_of_kin_name: None,
+            next_of_kin_relationship: None,
+            next_of_kin_mobile: None,
+            next_of_kin_id_number: None,
+            next_of_kin_address: None,
         },
         Customer {
             id: Uuid::new_v4(),
@@ -2918,6 +2993,18 @@ fn seed() -> MockDb {
             next_follow_up_at: None,
             notes: None,
             created_at: Utc::now(),
+            title: None,
+            customer_type: domain::CustomerType::Individual,
+            kra_pin: None,
+            postal_address: None,
+            city: None,
+            physical_address: None,
+            legacy_customer_number: None,
+            next_of_kin_name: None,
+            next_of_kin_relationship: None,
+            next_of_kin_mobile: None,
+            next_of_kin_id_number: None,
+            next_of_kin_address: None,
         },
         Customer {
             id: Uuid::new_v4(),
@@ -2932,6 +3019,18 @@ fn seed() -> MockDb {
             next_follow_up_at: Some(Utc::now().date_naive() + chrono::Duration::days(3)),
             notes: Some("Interested in a corner plot at Riverside Meadows, budget ~1.2M.".to_string()),
             created_at: Utc::now(),
+            title: None,
+            customer_type: domain::CustomerType::Individual,
+            kra_pin: None,
+            postal_address: None,
+            city: None,
+            physical_address: None,
+            legacy_customer_number: None,
+            next_of_kin_name: None,
+            next_of_kin_relationship: None,
+            next_of_kin_mobile: None,
+            next_of_kin_id_number: None,
+            next_of_kin_address: None,
         },
     ];
 

@@ -4,8 +4,9 @@ use axum::{extract::State, routing::get, Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
 use domain::{
     BulkImportResult, BulkImportRowError, Customer, CustomerDetail, CustomerSaleView,
-    CustomerSummary, CreateCustomerInput, UpdateLeadInput, PERM_CUSTOMERS_BULK_IMPORT,
-    PERM_CUSTOMERS_CREATE, PERM_CUSTOMERS_LEADS_UPDATE,
+    CustomerSummary, CreateCustomerInput, UpdateCustomerInput, UpdateLeadInput,
+    PERM_CUSTOMERS_BULK_IMPORT, PERM_CUSTOMERS_CREATE, PERM_CUSTOMERS_EDIT,
+    PERM_CUSTOMERS_LEADS_UPDATE,
 };
 use uuid::Uuid;
 
@@ -18,7 +19,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/customers", get(list_customers).post(create_customer))
         .route("/api/v1/customers/bulk", post(bulk_create_customers))
-        .route("/api/v1/customers/:id", get(get_customer))
+        .route("/api/v1/customers/:id", get(get_customer).put(update_customer))
         .route("/api/v1/customers/:id/stage", post(update_lead))
 }
 
@@ -36,6 +37,18 @@ struct CustomerRow {
     next_follow_up_at: Option<NaiveDate>,
     notes: Option<String>,
     created_at: DateTime<Utc>,
+    title: Option<String>,
+    customer_type: String,
+    kra_pin: Option<String>,
+    postal_address: Option<String>,
+    city: Option<String>,
+    physical_address: Option<String>,
+    legacy_customer_number: Option<String>,
+    next_of_kin_name: Option<String>,
+    next_of_kin_relationship: Option<String>,
+    next_of_kin_mobile: Option<String>,
+    next_of_kin_id_number: Option<String>,
+    next_of_kin_address: Option<String>,
 }
 
 impl CustomerRow {
@@ -53,12 +66,26 @@ impl CustomerRow {
             next_follow_up_at: self.next_follow_up_at,
             notes: self.notes,
             created_at: self.created_at,
+            title: self.title,
+            customer_type: from_pg("customers.customer_type", &self.customer_type)?,
+            kra_pin: self.kra_pin,
+            postal_address: self.postal_address,
+            city: self.city,
+            physical_address: self.physical_address,
+            legacy_customer_number: self.legacy_customer_number,
+            next_of_kin_name: self.next_of_kin_name,
+            next_of_kin_relationship: self.next_of_kin_relationship,
+            next_of_kin_mobile: self.next_of_kin_mobile,
+            next_of_kin_id_number: self.next_of_kin_id_number,
+            next_of_kin_address: self.next_of_kin_address,
         })
     }
 }
 
 const CUSTOMER_COLUMNS: &str = "id, organization_id, full_name, email, phone, id_number, \
-    assigned_agent_id, stage, source, next_follow_up_at, notes, created_at";
+    assigned_agent_id, stage, source, next_follow_up_at, notes, created_at, title, customer_type, \
+    kra_pin, postal_address, city, physical_address, legacy_customer_number, next_of_kin_name, \
+    next_of_kin_relationship, next_of_kin_mobile, next_of_kin_id_number, next_of_kin_address";
 
 // Manually flattened rather than `#[sqlx(flatten)]` on a nested
 // `CustomerRow` — that attribute's support was uncertain against the
@@ -79,6 +106,18 @@ struct CustomerSummaryRow {
     next_follow_up_at: Option<NaiveDate>,
     notes: Option<String>,
     created_at: DateTime<Utc>,
+    title: Option<String>,
+    customer_type: String,
+    kra_pin: Option<String>,
+    postal_address: Option<String>,
+    city: Option<String>,
+    physical_address: Option<String>,
+    legacy_customer_number: Option<String>,
+    next_of_kin_name: Option<String>,
+    next_of_kin_relationship: Option<String>,
+    next_of_kin_mobile: Option<String>,
+    next_of_kin_id_number: Option<String>,
+    next_of_kin_address: Option<String>,
     plots_owned: i64,
 }
 
@@ -98,6 +137,18 @@ impl CustomerSummaryRow {
                 next_follow_up_at: self.next_follow_up_at,
                 notes: self.notes,
                 created_at: self.created_at,
+                title: self.title,
+                customer_type: from_pg("customers.customer_type", &self.customer_type)?,
+                kra_pin: self.kra_pin,
+                postal_address: self.postal_address,
+                city: self.city,
+                physical_address: self.physical_address,
+                legacy_customer_number: self.legacy_customer_number,
+                next_of_kin_name: self.next_of_kin_name,
+                next_of_kin_relationship: self.next_of_kin_relationship,
+                next_of_kin_mobile: self.next_of_kin_mobile,
+                next_of_kin_id_number: self.next_of_kin_id_number,
+                next_of_kin_address: self.next_of_kin_address,
             },
             plots_owned: self.plots_owned as u32,
         })
@@ -112,6 +163,9 @@ async fn list_customers(
         r#"
         select c.id, c.organization_id, c.full_name, c.email, c.phone, c.id_number,
             c.assigned_agent_id, c.stage, c.source, c.next_follow_up_at, c.notes, c.created_at,
+            c.title, c.customer_type, c.kra_pin, c.postal_address, c.city, c.physical_address,
+            c.legacy_customer_number, c.next_of_kin_name, c.next_of_kin_relationship,
+            c.next_of_kin_mobile, c.next_of_kin_id_number, c.next_of_kin_address,
             count(pl.id) as plots_owned
         from customers c
         left join plots pl on pl.assigned_customer_id = c.id
@@ -218,6 +272,86 @@ async fn bulk_create_customers(
     }
 
     Ok(Json(BulkImportResult { created, errors }))
+}
+
+/// Editing a customer's own profile — see `PERM_CUSTOMERS_EDIT`'s doc
+/// comment for why this didn't exist until now. Applies the same
+/// full-name/ID-number validation `insert_customer` does, since both
+/// are the same record just at different points in its life.
+async fn update_customer(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(input): Json<UpdateCustomerInput>,
+) -> Result<Json<Customer>, AppError> {
+    auth.require_permission(PERM_CUSTOMERS_EDIT)?;
+
+    let full_name = input.full_name.trim();
+    if full_name.is_empty() {
+        return Err(AppError::bad_request("Enter the customer's name."));
+    }
+
+    let id_number = input.id_number.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if let Some(id_number) = id_number {
+        let duplicate: bool = sqlx::query_scalar(
+            "select exists(select 1 from customers where organization_id = $1 and id_number = $2 and id <> $3)",
+        )
+        .bind(auth.organization_id)
+        .bind(id_number)
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
+        if duplicate {
+            return Err(AppError::conflict(
+                "That ID/passport number is already registered.",
+            ));
+        }
+    }
+
+    let clean = |v: &Option<String>| v.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+
+    let row: Option<CustomerRow> = sqlx::query_as(&format!(
+        r#"
+        update customers set
+            full_name = $1, email = $2, phone = $3, id_number = $4, title = $5,
+            customer_type = $6, kra_pin = $7, postal_address = $8, city = $9,
+            physical_address = $10, legacy_customer_number = $11, next_of_kin_name = $12,
+            next_of_kin_relationship = $13, next_of_kin_mobile = $14, next_of_kin_id_number = $15,
+            next_of_kin_address = $16
+        where id = $17 and organization_id = $18
+        returning {CUSTOMER_COLUMNS}
+        "#
+    ))
+    .bind(full_name)
+    .bind(clean(&input.email))
+    .bind(clean(&input.phone))
+    .bind(id_number)
+    .bind(clean(&input.title))
+    .bind(to_pg(&input.customer_type))
+    .bind(clean(&input.kra_pin))
+    .bind(clean(&input.postal_address))
+    .bind(clean(&input.city))
+    .bind(clean(&input.physical_address))
+    .bind(clean(&input.legacy_customer_number))
+    .bind(clean(&input.next_of_kin_name))
+    .bind(clean(&input.next_of_kin_relationship))
+    .bind(clean(&input.next_of_kin_mobile))
+    .bind(clean(&input.next_of_kin_id_number))
+    .bind(clean(&input.next_of_kin_address))
+    .bind(id)
+    .bind(auth.organization_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| match &e {
+        sqlx::Error::Database(db_err)
+            if db_err.constraint() == Some("customers_legacy_number_uidx") =>
+        {
+            AppError::conflict("That legacy customer number is already in use.")
+        }
+        _ => AppError::from(e),
+    })?;
+
+    Ok(Json(row.ok_or(AppError::NotFound)?.into_domain()?))
 }
 
 async fn update_lead(
