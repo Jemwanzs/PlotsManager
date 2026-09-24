@@ -15,13 +15,13 @@ use domain::{
     quotation_status_meta, AgentPerformanceReport, AgentPerformanceRow, ApiError, ApprovalRequest,
     ApprovalRequestSummary, ApprovalStatus, AreaUnit, AuthSession, BulkSaleRow, CreateCustomerInput,
     CreatePlotInput, CreateProjectInput, CreateQuotationInput, CreateSaleInput, Customer,
-    CustomerDetail, CustomerSaleView, CustomerSummary, DashboardSummary, InventoryReport,
+    CustomerDetail, CustomerSaleView, CustomerSummary, DashboardSummary, DocumentMeta, InventoryReport,
     LeadStage, LoanAccountDetail, LoanAccountStatus, MapPolygons, Organization, Payment,
     PaymentMode, PaymentStatus, PlatformOrganizationDetail, PlatformOrganizationSummary, Plot,
     PlotLoanAccount, PlotSale, PlotStatus, PlotStatusCount, PlotWithColor, Project,
     ProjectInventoryRow, ProjectMapSummary, ProjectStatus, ProjectSummary, Quotation,
     QuotationDetail, QuotationStatus, QuotationSummary, RecordPaymentInput, SalesReport,
-    SalesReportRow, SignupInput, UpdateLeadInput, User,
+    SalesReportRow, SignupInput, UpdateLeadInput, UploadDocumentInput, User,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -67,6 +67,28 @@ struct MockDb {
     roles: Vec<domain::Role>,
     tenant_users: Vec<domain::TenantUser>,
     branches: Vec<domain::Branch>,
+    documents: Vec<MockDocument>,
+}
+
+/// Mirrors the real `documents` table (`database/migrations/
+/// 0027_documents.sql`) — `file_url` is a browser blob: URL, same
+/// stand-in `project_maps.image_url` uses, since the mock never
+/// leaves this tab and has no server to round-trip bytes through.
+struct MockDocument {
+    id: Uuid,
+    entity_type: domain::DocumentEntityType,
+    entity_id: Uuid,
+    document_type: String,
+    document_number: Option<String>,
+    original_filename: String,
+    mime_type: String,
+    file_size: i64,
+    file_url: String,
+    issue_date: Option<NaiveDate>,
+    expiry_date: Option<NaiveDate>,
+    description: Option<String>,
+    uploaded_by_name: String,
+    uploaded_at: chrono::DateTime<Utc>,
 }
 
 /// Mirrors one row of the real `numbering_sequences` table
@@ -2242,6 +2264,95 @@ impl MockApi {
             .unwrap_or_default()
     }
 
+    pub async fn list_documents(
+        &self,
+        entity_type: domain::DocumentEntityType,
+        entity_id: Uuid,
+    ) -> Result<Vec<DocumentMeta>, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+        let mut docs: Vec<DocumentMeta> = db
+            .documents
+            .iter()
+            .filter(|d| d.entity_type == entity_type && d.entity_id == entity_id)
+            .map(mock_document_to_meta)
+            .collect();
+        docs.sort_by(|a, b| b.uploaded_at.cmp(&a.uploaded_at));
+        Ok(docs)
+    }
+
+    pub async fn upload_document(
+        &self,
+        input: UploadDocumentInput,
+        file: web_sys::File,
+    ) -> Result<DocumentMeta, ApiError> {
+        settle(300).await;
+        let mime_type = file.type_();
+        if !matches!(mime_type.as_str(), "application/pdf" | "image/jpeg" | "image/png") {
+            return Err(ApiError::InvalidCredentials(
+                "Only PDF, JPEG, or PNG files are accepted.".to_string(),
+            ));
+        }
+        let file_size = file.size() as i64;
+        if file_size > 10 * 1024 * 1024 {
+            return Err(ApiError::InvalidCredentials(
+                "File must be smaller than 10MB.".to_string(),
+            ));
+        }
+        if file_size == 0 {
+            return Err(ApiError::InvalidCredentials(
+                "The uploaded file is empty.".to_string(),
+            ));
+        }
+        let original_filename = file.name();
+        let file_url = web_sys::Url::create_object_url_with_blob(&file)
+            .map_err(|_| ApiError::Network("couldn't read that file".to_string()))?;
+
+        let mut db = self.db.lock().unwrap();
+        let uploaded_by_name = db.demo_user.full_name.clone();
+        let doc = MockDocument {
+            id: Uuid::new_v4(),
+            entity_type: input.entity_type,
+            entity_id: input.entity_id,
+            document_type: input.document_type,
+            document_number: input.document_number,
+            original_filename,
+            mime_type,
+            file_size,
+            file_url,
+            issue_date: input.issue_date,
+            expiry_date: input.expiry_date,
+            description: input.description,
+            uploaded_by_name,
+            uploaded_at: Utc::now(),
+        };
+        let meta = mock_document_to_meta(&doc);
+        db.documents.push(doc);
+        Ok(meta)
+    }
+
+    pub async fn delete_document(&self, id: Uuid) -> Result<(), ApiError> {
+        settle(150).await;
+        let mut db = self.db.lock().unwrap();
+        let before = db.documents.len();
+        db.documents.retain(|d| d.id != id);
+        if db.documents.len() == before {
+            return Err(ApiError::NotFound);
+        }
+        Ok(())
+    }
+
+    pub fn document_file_url(&self, id: Uuid) -> String {
+        self.db
+            .lock()
+            .unwrap()
+            .documents
+            .iter()
+            .find(|d| d.id == id)
+            .map(|d| d.file_url.clone())
+            .unwrap_or_default()
+    }
+
     /// Reuses `create_plot`/`create_customer` per row rather than a
     /// separate in-memory insert path — mirrors
     /// `crates/backend/src/routes/projects.rs`'s `insert_plot` /
@@ -2930,6 +3041,25 @@ async fn settle(millis: u32) {
     gloo_timers::future::TimeoutFuture::new(millis).await;
 }
 
+fn mock_document_to_meta(doc: &MockDocument) -> DocumentMeta {
+    DocumentMeta {
+        id: doc.id,
+        entity_type: doc.entity_type,
+        entity_id: doc.entity_id,
+        document_type: doc.document_type.clone(),
+        document_number: doc.document_number.clone(),
+        original_filename: doc.original_filename.clone(),
+        mime_type: doc.mime_type.clone(),
+        file_size: doc.file_size,
+        issue_date: doc.issue_date,
+        expiry_date: doc.expiry_date,
+        description: doc.description.clone(),
+        uploaded_by_name: doc.uploaded_by_name.clone(),
+        uploaded_at: doc.uploaded_at,
+        legacy_source_path: None,
+    }
+}
+
 fn seed() -> MockDb {
     let org_id = Uuid::new_v4();
     let organization = Organization {
@@ -3281,5 +3411,6 @@ fn seed() -> MockDb {
         // phase, is what creates the first one), so the mock matches
         // that reality rather than pre-seeding one.
         branches: Vec::new(),
+        documents: Vec::new(),
     }
 }

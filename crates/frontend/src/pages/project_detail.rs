@@ -12,7 +12,7 @@ use crate::api::{
     UpdatePlotInput,
 };
 use crate::auth::{has_permission, use_api, use_auth, use_currency};
-use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
+use crate::components::{DocumentsPanel, EmptyState, ErrorAlert, LoadingState, StatusBadge};
 use crate::csv_import::{self, ParsedRow};
 use crate::format::{format_money, format_payment_mode};
 use domain::{
@@ -324,6 +324,8 @@ pub fn ProjectDetail() -> impl IntoView {
                             {pwc.plot.title_number.clone().map(|t| view! { <p>"Title: " {t}</p> })}
 
                             <PlotCommercialPosition project_id=pwc.plot.project_id plot_id=plot_id />
+
+                            <DocumentsPanel entity_type=domain::DocumentEntityType::Plot entity_id=plot_id />
 
                             {can_edit_plot.then(|| view! {
                                 <button

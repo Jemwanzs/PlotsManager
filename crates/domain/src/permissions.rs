@@ -186,6 +186,16 @@ pub const PERM_CONFIGURE_APPROVALS: &str = "security:configure_approvals";
 // ---------------------------------------------------------------
 pub const PERM_SETTINGS_MANAGE_ORGANIZATION: &str = "settings:manage_organization";
 
+// ---------------------------------------------------------------
+// Documents — the generic document vault (`routes/documents.rs`).
+// Viewing/downloading a document is gated by view access on its
+// parent entity (e.g. customers:view for a customer's documents), not
+// a separate key; only upload/delete get their own permission, since
+// those are the actions with real blast radius (replacing or removing
+// a KYC record, a title deed, evidence of payment).
+// ---------------------------------------------------------------
+pub const PERM_DOCUMENTS_MANAGE: &str = "documents:manage";
+
 /// The wildcard every auto-provisioned org-admin role carries.
 pub const PERM_WILDCARD: &str = "*";
 
@@ -248,6 +258,8 @@ const REGISTRY: &[StaticPermissionDef] = &[
     StaticPermissionDef { key: PERM_CONFIGURE_APPROVALS, label: "Configure approval workflows", module: "Security", feature: "Policies", sensitive: true },
 
     StaticPermissionDef { key: PERM_SETTINGS_MANAGE_ORGANIZATION, label: "Manage organization settings", module: "Settings", feature: "Organization", sensitive: true },
+
+    StaticPermissionDef { key: PERM_DOCUMENTS_MANAGE, label: "Upload/delete documents", module: "Documents", feature: "Document vault", sensitive: true },
 ];
 
 /// The registry as owned, wire-ready `PermissionDef`s — what

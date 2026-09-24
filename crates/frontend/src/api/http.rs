@@ -35,7 +35,7 @@ use domain::{
     QuotationDetail, QuotationSummary, RecordPaymentInput, RejectOrganizationInput,
     ResetPasswordInput, ReverseEntryInput, Role, SalesReport, SignupInput, SignupResult, TenantUser, TermsVersion,
     UpdateBranchInput, UpdateCustomerInput, UpdateLeadInput, UpdateMapPolygonsInput, UpdateOrganizationSettingsInput,
-    UpdatePlotInput, UpdateRoleInput, UpdateUserInput,
+    UpdatePlotInput, UpdateRoleInput, UpdateUserInput, UploadDocumentInput,
 };
 
 #[derive(Clone)]
@@ -126,11 +126,29 @@ impl HttpApi {
         field_name: &str,
         file: web_sys::File,
     ) -> Result<T, ApiError> {
+        self.post_file_with_fields(path, field_name, file, &[]).await
+    }
+
+    /// Same as `post_file`, plus arbitrary plain-text form fields sent
+    /// alongside the file (e.g. document metadata) — `crates/backend`'s
+    /// multipart handlers read those by field name off the same
+    /// `Multipart` stream as the file part.
+    async fn post_file_with_fields<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        field_name: &str,
+        file: web_sys::File,
+        extra_fields: &[(&str, &str)],
+    ) -> Result<T, ApiError> {
         let form = web_sys::FormData::new().map_err(|_| {
             ApiError::Network("couldn't build the upload".to_string())
         })?;
         form.append_with_blob_and_filename(field_name, &file, &file.name())
             .map_err(|_| ApiError::Network("couldn't attach the file".to_string()))?;
+        for (name, value) in extra_fields {
+            form.append_with_str(name, value)
+                .map_err(|_| ApiError::Network("couldn't attach form field".to_string()))?;
+        }
 
         let req = self
             .authorize(Request::post(&self.url(path)))
@@ -552,6 +570,65 @@ impl HttpApi {
     pub fn map_image_url(&self, project_id: Uuid) -> String {
         let token = self.token.lock().unwrap().clone().unwrap_or_default();
         format!("{}/api/v1/projects/{project_id}/map/image?token={token}", self.base_url)
+    }
+
+    pub async fn list_documents(
+        &self,
+        entity_type: domain::DocumentEntityType,
+        entity_id: Uuid,
+    ) -> Result<Vec<domain::DocumentMeta>, ApiError> {
+        let entity_type = serde_json::to_value(entity_type)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        self.get(&format!(
+            "/api/v1/documents?entity_type={entity_type}&entity_id={entity_id}"
+        ))
+        .await
+    }
+
+    pub async fn upload_document(
+        &self,
+        input: UploadDocumentInput,
+        file: web_sys::File,
+    ) -> Result<domain::DocumentMeta, ApiError> {
+        let entity_type = serde_json::to_value(input.entity_type)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        let entity_id = input.entity_id.to_string();
+        let mut fields: Vec<(&str, &str)> = vec![
+            ("entity_type", &entity_type),
+            ("entity_id", &entity_id),
+            ("document_type", &input.document_type),
+        ];
+        if let Some(n) = input.document_number.as_deref() {
+            fields.push(("document_number", n));
+        }
+        let issue_date_str = input.issue_date.map(|d| d.to_string());
+        if let Some(s) = issue_date_str.as_deref() {
+            fields.push(("issue_date", s));
+        }
+        let expiry_date_str = input.expiry_date.map(|d| d.to_string());
+        if let Some(s) = expiry_date_str.as_deref() {
+            fields.push(("expiry_date", s));
+        }
+        if let Some(d) = input.description.as_deref() {
+            fields.push(("description", d));
+        }
+        self.post_file_with_fields("/api/v1/documents", "file", file, &fields)
+            .await
+    }
+
+    pub async fn delete_document(&self, id: Uuid) -> Result<(), ApiError> {
+        self.delete(&format!("/api/v1/documents/{id}")).await
+    }
+
+    /// Not async — an `<a href>`/`<img>` URL, same token-in-query
+    /// pattern as `map_image_url`.
+    pub fn document_file_url(&self, id: Uuid) -> String {
+        let token = self.token.lock().unwrap().clone().unwrap_or_default();
+        format!("{}/api/v1/documents/{id}/file?token={token}", self.base_url)
     }
 
     pub async fn bulk_create_plots(

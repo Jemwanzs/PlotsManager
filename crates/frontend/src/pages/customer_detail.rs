@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::api::{lead_stage_meta, ApiClient, ApiError, LeadStage, UpdateLeadInput};
 use crate::auth::{has_permission, use_api, use_auth, use_currency};
 use domain::{CustomerType, UpdateCustomerInput, PERM_CUSTOMERS_EDIT, PERM_CUSTOMERS_LEADS_UPDATE};
-use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
+use crate::components::{DocumentsPanel, EmptyState, ErrorAlert, LoadingState, StatusBadge};
 use crate::format::{format_money, format_payment_mode};
 
 fn customer_type_value(t: CustomerType) -> &'static str {
@@ -460,6 +460,8 @@ pub fn CustomerDetail() -> impl IntoView {
                                 }
                                     .into_any()
                             }}
+
+                            <DocumentsPanel entity_type=domain::DocumentEntityType::Customer entity_id=customer_id />
                         }
                             .into_any()
                         }

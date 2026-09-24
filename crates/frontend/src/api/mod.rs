@@ -411,6 +411,42 @@ impl ApiClient {
         }
     }
 
+    pub async fn list_documents(
+        &self,
+        entity_type: DocumentEntityType,
+        entity_id: Uuid,
+    ) -> Result<Vec<DocumentMeta>, ApiError> {
+        match self {
+            Self::Mock(api) => api.list_documents(entity_type, entity_id).await,
+            Self::Http(api) => api.list_documents(entity_type, entity_id).await,
+        }
+    }
+
+    pub async fn upload_document(
+        &self,
+        input: UploadDocumentInput,
+        file: web_sys::File,
+    ) -> Result<DocumentMeta, ApiError> {
+        match self {
+            Self::Mock(api) => api.upload_document(input, file).await,
+            Self::Http(api) => api.upload_document(input, file).await,
+        }
+    }
+
+    pub async fn delete_document(&self, id: Uuid) -> Result<(), ApiError> {
+        match self {
+            Self::Mock(api) => api.delete_document(id).await,
+            Self::Http(api) => api.delete_document(id).await,
+        }
+    }
+
+    pub fn document_file_url(&self, id: Uuid) -> String {
+        match self {
+            Self::Mock(api) => api.document_file_url(id),
+            Self::Http(api) => api.document_file_url(id),
+        }
+    }
+
     pub async fn update_map_polygons(
         &self,
         project_id: Uuid,
