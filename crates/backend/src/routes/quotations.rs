@@ -429,6 +429,8 @@ async fn accept_quotation(
             agent_id: agent_id.unwrap_or(auth.user_id),
             payment_mode,
             agreed_price: quoted_price,
+            additional_plot_ids: Vec::new(),
+            additional_customers: Vec::new(),
         },
     )
     .await?;

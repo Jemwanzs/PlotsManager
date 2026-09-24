@@ -33,6 +33,48 @@ pub struct PlotCommercialSummary {
     pub sale: Option<PlotSaleSummary>,
 }
 
+/// A sale/agreement's ("legacy data migration readiness" gap analysis)
+/// customer, beyond the single "primary" one `plot_sales.customer_id`
+/// still points at. `role` distinguishes a real joint buyer from a
+/// company representative — both are "on the sale" but mean different
+/// things legally. See `database/migrations/0026_sale_plots_and_
+/// customers.sql`'s own docs for why this is additive alongside the
+/// existing primary column rather than replacing it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SaleCustomerRole {
+    Primary,
+    Joint,
+    Representative,
+}
+
+/// One additional (non-primary) buyer to attach when creating a sale —
+/// `CreateSaleInput::additional_customers`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdditionalSaleCustomer {
+    pub customer_id: Uuid,
+    pub role: SaleCustomerRole,
+}
+
+/// A co-buyer as returned on a sale's read side (`PlotSaleSummary::
+/// co_buyers`) — enough to display and link to them without a further
+/// round trip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaleCustomerRef {
+    pub customer_id: Uuid,
+    pub customer_name: String,
+    pub role: SaleCustomerRole,
+}
+
+/// An additional (non-primary) plot on a sale (`PlotSaleSummary::
+/// additional_plots`) — the legacy loan registry's "one loan across
+/// several plots" pattern (e.g. `PL.7,8,9,10` under one loan number).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SalePlotRef {
+    pub plot_id: Uuid,
+    pub plot_number: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlotSaleSummary {
     pub customer_id: Uuid,
@@ -49,6 +91,13 @@ pub struct PlotSaleSummary {
     pub loan_account: Option<PlotLoanAccount>,
     pub loan_status_label: Option<String>,
     pub loan_status_color: Option<String>,
+    /// Buyers on this sale beyond the primary one above — empty for
+    /// the overwhelming majority of sales.
+    pub co_buyers: Vec<SaleCustomerRef>,
+    /// Other plots this same sale/loan also covers, beyond the one
+    /// this summary was requested for — empty for the overwhelming
+    /// majority of sales.
+    pub additional_plots: Vec<SalePlotRef>,
 }
 
 /// One row of the organization-wide Finance → Loan Accounts list
@@ -299,6 +348,18 @@ pub struct CreateSaleInput {
     pub customer_id: Uuid,
     pub payment_mode: PaymentMode,
     pub agreed_price: Decimal,
+    /// Other plots this same sale/loan also covers — legacy data
+    /// migration readiness (e.g. one loan across `PL.7,8,9,10`). Empty
+    /// for the overwhelming majority of sales; `#[serde(default)]` so
+    /// every existing caller that doesn't know about this keeps
+    /// compiling and working unchanged.
+    #[serde(default)]
+    pub additional_plot_ids: Vec<Uuid>,
+    /// Other buyers on this sale beyond `customer_id` — real joint
+    /// buyers, not a name concatenated into one `Customer` row. Empty
+    /// for the overwhelming majority of sales.
+    #[serde(default)]
+    pub additional_customers: Vec<AdditionalSaleCustomer>,
 }
 
 /// A Plot Loan Account plus enough about the plot/project/customer to

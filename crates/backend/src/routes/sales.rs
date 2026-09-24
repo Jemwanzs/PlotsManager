@@ -1,8 +1,8 @@
 use axum::{extract::State, routing::post, Json, Router};
 use chrono::NaiveTime;
 use domain::{
-    BulkImportResult, BulkImportRowError, BulkSaleRow, CreateSaleInput, LoanAccountStatus,
-    PaymentMode, PlotSale, PlotStatus, PERM_PLOTS_TRANSACTIONS_BULK_IMPORT,
+    AdditionalSaleCustomer, BulkImportResult, BulkImportRowError, BulkSaleRow, CreateSaleInput,
+    LoanAccountStatus, PaymentMode, PlotSale, PlotStatus, PERM_PLOTS_TRANSACTIONS_BULK_IMPORT,
     PERM_PLOTS_TRANSACTIONS_CREATE,
 };
 use rust_decimal::Decimal;
@@ -98,6 +98,8 @@ async fn create_sale(
             agent_id: auth.user_id,
             payment_mode: input.payment_mode,
             agreed_price: input.agreed_price,
+            additional_plot_ids: input.additional_plot_ids,
+            additional_customers: input.additional_customers,
         },
     )
     .await?;
@@ -121,6 +123,14 @@ pub(crate) struct ExecuteSaleParams {
     pub agent_id: Uuid,
     pub payment_mode: PaymentMode,
     pub agreed_price: Decimal,
+    /// Other plots this same sale/loan also covers — see
+    /// `database/migrations/0026_sale_plots_and_customers.sql`. Empty
+    /// from `accept_quotation` (a quotation is for one plot; multi-plot
+    /// sales only exist via the direct reserve flow for now).
+    pub additional_plot_ids: Vec<Uuid>,
+    /// Other buyers on this sale beyond `customer_id`. Empty from
+    /// `accept_quotation`, same reason as above.
+    pub additional_customers: Vec<AdditionalSaleCustomer>,
 }
 
 /// The actual "commit to a sale" transaction — plot/customer validation,
@@ -166,6 +176,44 @@ pub(crate) async fn execute_sale(
         return Err(AppError::bad_request("Choose a valid customer."));
     }
 
+    for &plot_id in &params.additional_plot_ids {
+        if plot_id == params.plot_id {
+            return Err(AppError::bad_request(
+                "The same plot can't be listed as both the primary plot and an additional one.",
+            ));
+        }
+        let ok: bool = sqlx::query_scalar(
+            r#"select exists(
+                select 1 from plots pl join projects p on p.id = pl.project_id
+                where pl.id = $1 and p.organization_id = $2
+            )"#,
+        )
+        .bind(plot_id)
+        .bind(organization_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        if !ok {
+            return Err(AppError::bad_request("One of the additional plots doesn't exist."));
+        }
+    }
+    for extra in &params.additional_customers {
+        if extra.customer_id == params.customer_id {
+            return Err(AppError::bad_request(
+                "The same customer can't be listed as both the primary buyer and an additional one.",
+            ));
+        }
+        let ok: bool = sqlx::query_scalar(
+            "select exists(select 1 from customers where id = $1 and organization_id = $2)",
+        )
+        .bind(extra.customer_id)
+        .bind(organization_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        if !ok {
+            return Err(AppError::bad_request("One of the additional buyers doesn't exist."));
+        }
+    }
+
     let sale_id: Uuid = sqlx::query_scalar(
         r#"
         insert into plot_sales (plot_id, customer_id, organization_id, agent_id, payment_mode, agreed_price)
@@ -189,6 +237,55 @@ pub(crate) async fn execute_sale(
         }
         _ => AppError::from(e),
     })?;
+
+    sqlx::query("insert into sale_plots (sale_id, plot_id) values ($1, $2)")
+        .bind(sale_id)
+        .bind(params.plot_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| match &e {
+            sqlx::Error::Database(db_err)
+                if db_err.constraint() == Some("sale_plots_plot_uidx") =>
+            {
+                // Reachable even though the `plot_sales` insert above
+                // just succeeded: that only enforces uniqueness on
+                // `plot_sales.plot_id` (the *primary* plot column), so
+                // a plot that was only ever an *additional* plot on
+                // some other sale passes that check but still
+                // collides here.
+                AppError::conflict("This plot already has an active sale.")
+            }
+            _ => AppError::from(e),
+        })?;
+    for &plot_id in &params.additional_plot_ids {
+        sqlx::query("insert into sale_plots (sale_id, plot_id) values ($1, $2)")
+            .bind(sale_id)
+            .bind(plot_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| match &e {
+                sqlx::Error::Database(db_err)
+                    if db_err.constraint() == Some("sale_plots_plot_uidx") =>
+                {
+                    AppError::conflict("One of the additional plots already has an active sale.")
+                }
+                _ => AppError::from(e),
+            })?;
+    }
+
+    sqlx::query("insert into sale_customers (sale_id, customer_id, role) values ($1, $2, 'primary')")
+        .bind(sale_id)
+        .bind(params.customer_id)
+        .execute(&mut **tx)
+        .await?;
+    for extra in &params.additional_customers {
+        sqlx::query("insert into sale_customers (sale_id, customer_id, role) values ($1, $2, $3)")
+            .bind(sale_id)
+            .bind(extra.customer_id)
+            .bind(to_pg(&extra.role))
+            .execute(&mut **tx)
+            .await?;
+    }
 
     if params.payment_mode != PaymentMode::FullCash {
         let account_number: String = sqlx::query_scalar(
@@ -247,6 +344,14 @@ pub(crate) async fn execute_sale(
         .bind(params.plot_id)
         .execute(&mut **tx)
         .await?;
+    for &plot_id in &params.additional_plot_ids {
+        sqlx::query("update plots set status = $1, assigned_customer_id = $2 where id = $3")
+            .bind(to_pg(&new_status))
+            .bind(params.customer_id)
+            .bind(plot_id)
+            .execute(&mut **tx)
+            .await?;
+    }
 
     let sale: PlotSaleRow = sqlx::query_as(
         r#"select id, plot_id, customer_id, organization_id, agent_id, payment_mode, agreed_price, created_at
@@ -373,6 +478,31 @@ async fn insert_bulk_sale(
         }
         _ => AppError::from(e),
     })?;
+
+    sqlx::query("insert into sale_plots (sale_id, plot_id) values ($1, $2)")
+        .bind(sale_id)
+        .bind(plot_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| match &e {
+            sqlx::Error::Database(db_err)
+                if db_err.constraint() == Some("sale_plots_plot_uidx") =>
+            {
+                // Reachable even though the `plot_sales` insert above
+                // just succeeded: that only enforces uniqueness on
+                // `plot_sales.plot_id` (the *primary* plot column), so
+                // a plot that was only ever an *additional* plot on
+                // some other sale passes that check but still
+                // collides here.
+                AppError::conflict("This plot already has an active sale.")
+            }
+            _ => AppError::from(e),
+        })?;
+    sqlx::query("insert into sale_customers (sale_id, customer_id, role) values ($1, $2, 'primary')")
+        .bind(sale_id)
+        .bind(customer_id)
+        .execute(&mut *tx)
+        .await?;
 
     // Matches `execute_sale`: a cash sale is paid in full the moment
     // it's recorded, live or imported, so it always lands on `Sold`

@@ -374,6 +374,7 @@ pub fn ProjectDetail() -> impl IntoView {
                                     fallback=move || view! {
                                         <ReserveForm
                                             plot_id=plot_id
+                                            project_id=pwc.plot.project_id
                                             asking_price=asking_price
                                             on_reserved=move || {
                                                 plots.refetch();
@@ -996,6 +997,24 @@ fn PlotCommercialPosition(project_id: Uuid, plot_id: Uuid) -> impl IntoView {
                                                 <span class="meta">"Selling Price"</span>
                                                 <p class="mt-0">{format_money(sale.agreed_price, &currency)}</p>
                                             </div>
+                                            {(!sale.co_buyers.is_empty()).then(|| {
+                                                let names: Vec<String> = sale.co_buyers.iter().map(|c| c.customer_name.clone()).collect();
+                                                view! {
+                                                    <div>
+                                                        <span class="meta">"Co-buyers"</span>
+                                                        <p class="mt-0">{names.join(", ")}</p>
+                                                    </div>
+                                                }
+                                            })}
+                                            {(!sale.additional_plots.is_empty()).then(|| {
+                                                let numbers: Vec<String> = sale.additional_plots.iter().map(|p| p.plot_number.clone()).collect();
+                                                view! {
+                                                    <div>
+                                                        <span class="meta">"Also includes plots"</span>
+                                                        <p class="mt-0">{numbers.join(", ")}</p>
+                                                    </div>
+                                                }
+                                            })}
                                             {match &sale.loan_account {
                                                 None => view! {
                                                     <div>
@@ -1073,11 +1092,33 @@ fn PlotCommercialPosition(project_id: Uuid, plot_id: Uuid) -> impl IntoView {
 #[component]
 fn ReserveForm(
     plot_id: Uuid,
+    project_id: Uuid,
     asking_price: Decimal,
     on_reserved: impl Fn() + Clone + 'static,
 ) -> impl IntoView {
     let api = use_api();
     let currency = use_currency();
+
+    // For "Additional plots" — other plots in this same project one
+    // loan/agreement can also cover (legacy data migration readiness:
+    // e.g. one loan across PL.7,8,9,10). Only plots that could
+    // actually start a sale are offered.
+    let project_plots = LocalResource::new({
+        let api = api.clone();
+        move || {
+            let api = api.clone();
+            async move { api.list_plots(project_id).await }
+        }
+    });
+    let additional_plot_ids = RwSignal::new(Vec::<Uuid>::new());
+    let show_additional_plots = RwSignal::new(false);
+
+    // For "Additional buyers" — real joint buyers (legacy data
+    // migration readiness: a customer register row like "CATHERINE A
+    // OHOLA/ELIZABETH A OHOLA" recorded as two actual customers, not
+    // one name concatenated together).
+    let additional_customer_ids = RwSignal::new(Vec::<Uuid>::new());
+    let show_additional_customers = RwSignal::new(false);
 
     let customers = LocalResource::new({
         let api = api.clone();
@@ -1114,6 +1155,12 @@ fn ReserveForm(
             _ => PaymentMode::FullCash,
         };
 
+        let additional_customers = additional_customer_ids
+            .get()
+            .into_iter()
+            .map(|customer_id| domain::AdditionalSaleCustomer { customer_id, role: domain::SaleCustomerRole::Joint })
+            .collect();
+
         submitting.set(true);
         let api = api.clone();
         let on_reserved = on_reserved.clone();
@@ -1123,6 +1170,8 @@ fn ReserveForm(
                     plot_id,
                     customer_id: customer,
                     payment_mode: mode,
+                    additional_plot_ids: additional_plot_ids.get_untracked(),
+                    additional_customers,
                     agreed_price,
                 })
                 .await;
@@ -1200,6 +1249,98 @@ fn ReserveForm(
                     on:input=move |ev| price.set(event_target_value(&ev))
                 />
             </div>
+
+            <button
+                type="button"
+                class="btn btn-secondary"
+                style="margin-bottom: var(--space-2);"
+                on:click=move |_| show_additional_plots.update(|v| *v = !*v)
+            >
+                {move || if show_additional_plots.get() { "Hide additional plots" } else { "+ Additional plots (one loan across several plots)" }}
+            </button>
+            <Show when=move || show_additional_plots.get()>
+                <div class="field">
+                    <Suspense fallback=|| ()>
+                        {move || {
+                            project_plots.get().map(|wrapped| wrapped.take()).map(|result| match result {
+                                Ok(list) => list
+                                    .into_iter()
+                                    .filter(|pwc| pwc.plot.id != plot_id && matches!(pwc.plot.status, PlotStatus::Available))
+                                    .map(|pwc| {
+                                        let pid = pwc.plot.id;
+                                        view! {
+                                            <label class="checkbox-field">
+                                                <input
+                                                    type="checkbox"
+                                                    on:change=move |ev| {
+                                                        let checked = event_target_checked(&ev);
+                                                        additional_plot_ids.update(|list| {
+                                                            if checked {
+                                                                if !list.contains(&pid) { list.push(pid); }
+                                                            } else {
+                                                                list.retain(|id| *id != pid);
+                                                            }
+                                                        });
+                                                    }
+                                                />
+                                                {pwc.plot.plot_number.clone()}
+                                            </label>
+                                        }
+                                    })
+                                    .collect_view()
+                                    .into_any(),
+                                Err(_) => ().into_any(),
+                            })
+                        }}
+                    </Suspense>
+                </div>
+            </Show>
+
+            <button
+                type="button"
+                class="btn btn-secondary"
+                style="margin-bottom: var(--space-2);"
+                on:click=move |_| show_additional_customers.update(|v| *v = !*v)
+            >
+                {move || if show_additional_customers.get() { "Hide additional buyers" } else { "+ Additional buyers (joint purchase)" }}
+            </button>
+            <Show when=move || show_additional_customers.get()>
+                <div class="field">
+                    <Suspense fallback=|| ()>
+                        {move || {
+                            customers.get().map(|wrapped| wrapped.take()).map(|result| match result {
+                                Ok(list) => list
+                                    .into_iter()
+                                    .filter(|c| customer_id.get() != c.customer.id.to_string())
+                                    .map(|c| {
+                                        let cid = c.customer.id;
+                                        view! {
+                                            <label class="checkbox-field">
+                                                <input
+                                                    type="checkbox"
+                                                    on:change=move |ev| {
+                                                        let checked = event_target_checked(&ev);
+                                                        additional_customer_ids.update(|list| {
+                                                            if checked {
+                                                                if !list.contains(&cid) { list.push(cid); }
+                                                            } else {
+                                                                list.retain(|id| *id != cid);
+                                                            }
+                                                        });
+                                                    }
+                                                />
+                                                {c.customer.full_name.clone()}
+                                            </label>
+                                        }
+                                    })
+                                    .collect_view()
+                                    .into_any(),
+                                Err(_) => ().into_any(),
+                            })
+                        }}
+                    </Suspense>
+                </div>
+            </Show>
 
             <button type="submit" class="btn btn-primary" disabled=submitting>
                 {move || if submitting.get() { "Reserving…" } else { "Reserve for customer" }}

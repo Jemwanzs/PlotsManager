@@ -482,6 +482,7 @@ struct PlotCommercialRow {
     assigned_customer_id: Option<Uuid>,
     created_at: DateTime<Utc>,
     // sale (null when the plot has never had one)
+    ps_id: Option<Uuid>,
     customer_id: Option<Uuid>,
     customer_name: Option<String>,
     payment_mode: Option<String>,
@@ -523,7 +524,7 @@ async fn get_plot_commercial_summary(
         select pl.id, pl.project_id, pl.plot_number, pl.title_number, pl.size, pl.side_1, pl.side_2,
             pl.dimension_unit, pl.asking_price, pl.minimum_price, pl.status, pl.map_feature_id,
             pl.assigned_customer_id, pl.created_at,
-            ps.customer_id, c.full_name as customer_name, ps.payment_mode, ps.agreed_price,
+            ps.id as ps_id, ps.customer_id, c.full_name as customer_name, ps.payment_mode, ps.agreed_price,
             ps.created_at as sale_created_at,
             pla.id as loan_id, pla.account_number, pla.sale_id, pla.principal, pla.interest_rate,
             pla.deposit_required, pla.deposit_paid, pla.instalment_amount, pla.repayment_frequency_days,
@@ -532,7 +533,16 @@ async fn get_plot_commercial_summary(
             lass.next_instalment_due_date, lass.next_instalment_amount
         from plots pl
         left join plot_sales ps on ps.id = (
-            select id from plot_sales where plot_id = pl.id order by created_at desc limit 1
+            -- Via `sale_plots` (every plot on the sale, primary or
+            -- additional), not `plot_sales.plot_id` directly — that
+            -- column only ever names the primary plot, so a plot that's
+            -- only an additional one on a multi-plot sale (`database/
+            -- migrations/0026_sale_plots_and_customers.sql`) would
+            -- otherwise never find its own sale here.
+            select ps2.id from plot_sales ps2
+            join sale_plots sp2 on sp2.sale_id = ps2.id
+            where sp2.plot_id = pl.id
+            order by ps2.created_at desc limit 1
         )
         left join customers c on c.id = ps.customer_id
         left join plot_loan_accounts pla on pla.sale_id = ps.id
@@ -589,6 +599,14 @@ async fn get_plot_commercial_summary(
                 None => (None, None),
             };
 
+            let (co_buyers, additional_plots) = match row.ps_id {
+                Some(ps_id) => (
+                    fetch_co_buyers(&state.db, ps_id, customer_id).await?,
+                    fetch_additional_plots(&state.db, ps_id, plot_id).await?,
+                ),
+                None => (Vec::new(), Vec::new()),
+            };
+
             Some(PlotSaleSummary {
                 customer_id,
                 customer_name,
@@ -598,6 +616,8 @@ async fn get_plot_commercial_summary(
                 loan_account,
                 loan_status_label,
                 loan_status_color,
+                co_buyers,
+                additional_plots,
             })
         }
         _ => None,
@@ -624,4 +644,70 @@ async fn get_plot_commercial_summary(
         status_color: status_color.to_string(),
         sale,
     }))
+}
+
+/// Buyers on a sale beyond `exclude_customer_id` (the primary one,
+/// already surfaced separately) — see `database/migrations/
+/// 0026_sale_plots_and_customers.sql`.
+async fn fetch_co_buyers(
+    db: &sqlx::PgPool,
+    sale_id: Uuid,
+    exclude_customer_id: Uuid,
+) -> Result<Vec<domain::SaleCustomerRef>, AppError> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        customer_id: Uuid,
+        customer_name: String,
+        role: String,
+    }
+    let rows: Vec<Row> = sqlx::query_as(
+        r#"select sc.customer_id, c.full_name as customer_name, sc.role
+           from sale_customers sc
+           join customers c on c.id = sc.customer_id
+           where sc.sale_id = $1 and sc.customer_id <> $2
+           order by c.full_name"#,
+    )
+    .bind(sale_id)
+    .bind(exclude_customer_id)
+    .fetch_all(db)
+    .await?;
+    rows.into_iter()
+        .map(|r| {
+            Ok(domain::SaleCustomerRef {
+                customer_id: r.customer_id,
+                customer_name: r.customer_name,
+                role: from_pg("sale_customers.role", &r.role)?,
+            })
+        })
+        .collect()
+}
+
+/// Plots on a sale beyond `exclude_plot_id` (the one this summary was
+/// requested for, already surfaced separately) — see `database/
+/// migrations/0026_sale_plots_and_customers.sql`.
+async fn fetch_additional_plots(
+    db: &sqlx::PgPool,
+    sale_id: Uuid,
+    exclude_plot_id: Uuid,
+) -> Result<Vec<domain::SalePlotRef>, AppError> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        plot_id: Uuid,
+        plot_number: String,
+    }
+    let rows: Vec<Row> = sqlx::query_as(
+        r#"select sp.plot_id, pl.plot_number
+           from sale_plots sp
+           join plots pl on pl.id = sp.plot_id
+           where sp.sale_id = $1 and sp.plot_id <> $2
+           order by pl.plot_number"#,
+    )
+    .bind(sale_id)
+    .bind(exclude_plot_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| domain::SalePlotRef { plot_id: r.plot_id, plot_number: r.plot_number })
+        .collect())
 }

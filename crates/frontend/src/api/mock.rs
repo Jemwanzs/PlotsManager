@@ -41,6 +41,13 @@ struct MockDb {
     plots: Vec<Plot>,
     customers: Vec<Customer>,
     sales: Vec<PlotSale>,
+    /// Every plot/customer on each sale, including the primary one
+    /// already in `PlotSale.plot_id`/`customer_id` — mirrors the real
+    /// backend's `sale_plots`/`sale_customers` tables (see `database/
+    /// migrations/0026_sale_plots_and_customers.sql`). `(sale_id, plot_id)`
+    /// and `(sale_id, customer_id, role)` respectively.
+    sale_plots: Vec<(Uuid, Uuid)>,
+    sale_customers: Vec<(Uuid, Uuid, domain::SaleCustomerRole)>,
     loan_accounts: Vec<PlotLoanAccount>,
     payments: Vec<Payment>,
     /// Manual interest/penalty charges posted via `post_charge` — the
@@ -543,10 +550,16 @@ impl MockApi {
             .clone();
         let (status_label, status_color) = domain::plot_status_meta(plot.status);
 
+        // Via `sale_plots` (every plot on the sale, primary or
+        // additional), not `s.plot_id == plot_id` directly — that field
+        // only ever names the primary plot, so a plot that's only an
+        // additional one on a multi-plot sale would otherwise never
+        // find its own sale here. Mirrors the real backend's identical
+        // fix in `routes/projects.rs::get_plot_commercial_summary`.
         let sale = db
             .sales
             .iter()
-            .filter(|s| s.plot_id == plot_id)
+            .filter(|s| db.sale_plots.iter().any(|(sale_id, pid)| *sale_id == s.id && *pid == plot_id))
             .max_by_key(|s| s.created_at)
             .and_then(|s| {
                 let customer = db.customers.iter().find(|c| c.id == s.customer_id)?;
@@ -558,6 +571,25 @@ impl MockApi {
                     }
                     None => (None, None),
                 };
+                let co_buyers: Vec<domain::SaleCustomerRef> = db
+                    .sale_customers
+                    .iter()
+                    .filter(|(sale_id, cid, _)| *sale_id == s.id && *cid != customer.id)
+                    .filter_map(|(_, cid, role)| {
+                        let c = db.customers.iter().find(|c| c.id == *cid)?;
+                        Some(domain::SaleCustomerRef { customer_id: c.id, customer_name: c.full_name.clone(), role: *role })
+                    })
+                    .collect();
+                let additional_plots: Vec<domain::SalePlotRef> = db
+                    .sale_plots
+                    .iter()
+                    .filter(|(sale_id, pid)| *sale_id == s.id && *pid != plot_id)
+                    .filter_map(|(_, pid)| {
+                        let p = db.plots.iter().find(|p| p.id == *pid)?;
+                        Some(domain::SalePlotRef { plot_id: p.id, plot_number: p.plot_number.clone() })
+                    })
+                    .collect();
+
                 Some(domain::PlotSaleSummary {
                     customer_id: customer.id,
                     customer_name: customer.full_name.clone(),
@@ -567,6 +599,8 @@ impl MockApi {
                     loan_account,
                     loan_status_label,
                     loan_status_color,
+                    co_buyers,
+                    additional_plots,
                 })
             });
 
@@ -726,10 +760,14 @@ impl MockApi {
             .cloned()
             .ok_or(ApiError::NotFound)?;
 
+        // Via `sale_customers` (not `s.customer_id == id` directly) so
+        // a co-buyer sees the sale too — mirrors the real backend's
+        // `get_customer` (see `database/migrations/
+        // 0026_sale_plots_and_customers.sql`).
         let sales = db
             .sales
             .iter()
-            .filter(|s| s.customer_id == id)
+            .filter(|s| db.sale_customers.iter().any(|(sale_id, cid, _)| *sale_id == s.id && *cid == id))
             .filter_map(|sale| {
                 let plot = db.plots.iter().find(|p| p.id == sale.plot_id)?;
                 let project = db.projects.iter().find(|pr| pr.id == plot.project_id)?;
@@ -780,6 +818,8 @@ impl MockApi {
             input.customer_id,
             input.payment_mode,
             input.agreed_price,
+            input.additional_plot_ids,
+            input.additional_customers,
         )?;
 
         if let Some(approval_id) = approval_id {
@@ -1788,6 +1828,8 @@ impl MockApi {
             quotation.customer_id,
             quotation.payment_mode,
             quotation.quoted_price,
+            Vec::new(),
+            Vec::new(),
         )?;
 
         if let Some(approval_id) = approval_id {
@@ -2585,16 +2627,43 @@ fn execute_sale_locked(
     customer_id: Uuid,
     payment_mode: PaymentMode,
     agreed_price: Decimal,
+    additional_plot_ids: Vec<Uuid>,
+    additional_customers: Vec<domain::AdditionalSaleCustomer>,
 ) -> Result<PlotSale, ApiError> {
     if !db.customers.iter().any(|c| c.id == customer_id) {
         return Err(ApiError::NotFound);
     }
 
-    let already_sold = db.sales.iter().any(|s| s.plot_id == plot_id);
+    let already_sold = db.sales.iter().any(|s| s.plot_id == plot_id)
+        || db.sale_plots.iter().any(|(_, p)| *p == plot_id);
     if already_sold {
         return Err(ApiError::InvalidCredentials(
             "This plot already has an active sale.".to_string(),
         ));
+    }
+    for &extra_plot_id in &additional_plot_ids {
+        if extra_plot_id == plot_id {
+            return Err(ApiError::InvalidCredentials(
+                "The same plot can't be listed as both the primary plot and an additional one.".to_string(),
+            ));
+        }
+        let extra_already_sold = db.sales.iter().any(|s| s.plot_id == extra_plot_id)
+            || db.sale_plots.iter().any(|(_, p)| *p == extra_plot_id);
+        if extra_already_sold {
+            return Err(ApiError::InvalidCredentials(
+                "One of the additional plots already has an active sale.".to_string(),
+            ));
+        }
+    }
+    for extra in &additional_customers {
+        if extra.customer_id == customer_id {
+            return Err(ApiError::InvalidCredentials(
+                "The same customer can't be listed as both the primary buyer and an additional one.".to_string(),
+            ));
+        }
+        if !db.customers.iter().any(|c| c.id == extra.customer_id) {
+            return Err(ApiError::NotFound);
+        }
     }
 
     let organization_id = db.organization.id;
@@ -2611,20 +2680,36 @@ fn execute_sale_locked(
     };
     db.sales.push(sale.clone());
 
+    db.sale_plots.push((sale.id, plot_id));
+    for &extra_plot_id in &additional_plot_ids {
+        db.sale_plots.push((sale.id, extra_plot_id));
+    }
+    db.sale_customers.push((sale.id, customer_id, domain::SaleCustomerRole::Primary));
+    for extra in &additional_customers {
+        db.sale_customers.push((sale.id, extra.customer_id, extra.role));
+    }
+
     if payment_mode != PaymentMode::FullCash {
         let seq = db.loan_accounts.len() + 1;
         let today = Utc::now().date_naive();
         db.loan_accounts.push(new_loan_account(&sale, seq, today));
     }
 
-    if let Some(plot) = db.plots.iter_mut().find(|p| p.id == plot_id) {
-        plot.status = match payment_mode {
-            PaymentMode::FullCash => PlotStatus::Reserved,
-            PaymentMode::LipaPolePoleInterestFree | PaymentMode::LipaPolePoleInterestBearing => {
-                PlotStatus::Booked
-            }
-        };
-        plot.assigned_customer_id = Some(customer_id);
+    // Matches the real backend (`routes/sales.rs::execute_sale`): a
+    // cash sale is paid in full the moment it's recorded, so it goes
+    // straight to `Sold` rather than sitting at `Reserved` forever —
+    // no follow-up payment step exists anywhere for a cash sale.
+    let new_status = match payment_mode {
+        PaymentMode::FullCash => PlotStatus::Sold,
+        PaymentMode::LipaPolePoleInterestFree | PaymentMode::LipaPolePoleInterestBearing => {
+            PlotStatus::Booked
+        }
+    };
+    for &id in std::iter::once(&plot_id).chain(additional_plot_ids.iter()) {
+        if let Some(plot) = db.plots.iter_mut().find(|p| p.id == id) {
+            plot.status = new_status;
+            plot.assigned_customer_id = Some(customer_id);
+        }
     }
 
     Ok(sale)
@@ -2719,6 +2804,8 @@ fn insert_bulk_sale_locked(db: &mut MockDb, input: &BulkSaleRow) -> Result<(), A
         plot.assigned_customer_id = Some(customer_id);
     }
 
+    db.sale_plots.push((sale.id, plot_id));
+    db.sale_customers.push((sale.id, customer_id, domain::SaleCustomerRole::Primary));
     db.sales.push(sale);
     Ok(())
 }
@@ -3139,6 +3226,14 @@ fn seed() -> MockDb {
         password_changed_at: demo_user.created_at,
     };
 
+    // Every seeded sale's primary plot/customer, mirroring the real
+    // migration's backfill (0026_sale_plots_and_customers.sql).
+    let sale_plots: Vec<(Uuid, Uuid)> = sales.iter().map(|s| (s.id, s.plot_id)).collect();
+    let sale_customers: Vec<(Uuid, Uuid, domain::SaleCustomerRole)> = sales
+        .iter()
+        .map(|s| (s.id, s.customer_id, domain::SaleCustomerRole::Primary))
+        .collect();
+
     MockDb {
         organization,
         date_format,
@@ -3164,6 +3259,8 @@ fn seed() -> MockDb {
         plots,
         customers,
         sales,
+        sale_plots,
+        sale_customers,
         loan_accounts,
         payments,
         charges: Vec::new(),

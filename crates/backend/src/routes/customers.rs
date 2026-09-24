@@ -409,16 +409,20 @@ async fn get_customer(
     .await?;
     let customer_row = customer_row.ok_or(AppError::NotFound)?;
 
+    // Joined through `sale_customers` (not `ps.customer_id = $1` directly)
+    // so a co-buyer sees the sale too, not just the primary buyer — see
+    // `database/migrations/0026_sale_plots_and_customers.sql`.
     let sale_rows: Vec<CustomerSaleRow> = sqlx::query_as(
         r#"
         select ps.id as sale_id, pl.id as plot_id, pr.id as project_id, pl.plot_number,
             pr.name as project_name, ps.payment_mode, ps.agreed_price, pl.status as plot_status,
             pla.id as loan_account_id
         from plot_sales ps
+        join sale_customers sc on sc.sale_id = ps.id
         join plots pl on pl.id = ps.plot_id
         join projects pr on pr.id = pl.project_id
         left join plot_loan_accounts pla on pla.sale_id = ps.id
-        where ps.customer_id = $1
+        where sc.customer_id = $1
         order by ps.created_at desc
         "#,
     )
