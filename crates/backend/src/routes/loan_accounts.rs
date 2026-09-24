@@ -33,24 +33,60 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-/// Penalty -> interest -> principal, the spec's default waterfall
-/// order (a literal constant here rather than a config table until a
-/// real "make this configurable" phase exists to attach a UI to it).
-/// Shared by `record_payment` (which actually posts the result) and
+/// Applies `amount` against penalty/interest/principal in whatever
+/// order `order` lists them (the organization's configured
+/// `FinancePolicy::allocation_order` — see `domain::organization`; the
+/// spec's default is penalty -> interest -> principal). Shared by
+/// `record_payment` (which actually posts the result) and
 /// `preview_allocation` (which only shows what it *would* be) so the
-/// two can never drift apart.
+/// two can never drift apart. Any amount left over once all three are
+/// fully cleared (an overpayment) always lands on principal, same as
+/// it would if principal happened to be last in the configured order.
 fn allocate_waterfall(
     amount: Decimal,
     interest_outstanding: Decimal,
     penalty_outstanding: Decimal,
+    principal_outstanding: Decimal,
+    order: &[String],
 ) -> (Decimal, Decimal, Decimal) {
     let mut remaining = amount;
-    let penalty_paid = remaining.min(penalty_outstanding.max(Decimal::ZERO));
-    remaining -= penalty_paid;
-    let interest_paid = remaining.min(interest_outstanding.max(Decimal::ZERO));
-    remaining -= interest_paid;
-    let principal_paid = remaining;
+    let mut penalty_paid = Decimal::ZERO;
+    let mut interest_paid = Decimal::ZERO;
+    let mut principal_paid = Decimal::ZERO;
+    for component in order {
+        match component.as_str() {
+            "penalty" => {
+                let paid = remaining.min(penalty_outstanding.max(Decimal::ZERO));
+                penalty_paid = paid;
+                remaining -= paid;
+            }
+            "interest" => {
+                let paid = remaining.min(interest_outstanding.max(Decimal::ZERO));
+                interest_paid = paid;
+                remaining -= paid;
+            }
+            "principal" => {
+                let paid = remaining.min(principal_outstanding.max(Decimal::ZERO));
+                principal_paid = paid;
+                remaining -= paid;
+            }
+            _ => {}
+        }
+    }
+    principal_paid += remaining;
     (penalty_paid, interest_paid, principal_paid)
+}
+
+async fn fetch_allocation_order<'e, E: sqlx::PgExecutor<'e>>(
+    db: E,
+    organization_id: Uuid,
+) -> Result<Vec<String>, AppError> {
+    let order: Vec<String> =
+        sqlx::query_scalar("select allocation_order from organizations where id = $1")
+            .bind(organization_id)
+            .fetch_one(db)
+            .await?;
+    Ok(order)
 }
 
 async fn outstanding_components<'e, E: sqlx::PgExecutor<'e>>(
@@ -168,6 +204,7 @@ async fn get_loan_account(
 
     let status: LoanAccountStatus = from_pg("plot_loan_accounts.status", &row.status)?;
     let (label, color) = domain::loan_status_meta(status);
+    let (interest_outstanding, penalty_outstanding) = outstanding_components(&state.db, id).await?;
 
     Ok(Json(LoanAccountDetail {
         account: PlotLoanAccount {
@@ -197,6 +234,8 @@ async fn get_loan_account(
         status_label: label.to_string(),
         status_color: color.to_string(),
         payments,
+        interest_outstanding,
+        penalty_outstanding,
     }))
 }
 
@@ -244,8 +283,15 @@ async fn record_payment(
     };
 
     let (interest_outstanding, penalty_outstanding) = outstanding_components(&mut *tx, id).await?;
-    let (penalty_paid, interest_paid, principal_paid) =
-        allocate_waterfall(input.amount, interest_outstanding, penalty_outstanding);
+    let principal_outstanding = (outstanding_balance - interest_outstanding - penalty_outstanding).max(Decimal::ZERO);
+    let allocation_order = fetch_allocation_order(&mut *tx, auth.organization_id).await?;
+    let (penalty_paid, interest_paid, principal_paid) = allocate_waterfall(
+        input.amount,
+        interest_outstanding,
+        penalty_outstanding,
+        principal_outstanding,
+        &allocation_order,
+    );
 
     let payment_row: PaymentRow = sqlx::query_as(
         r#"
@@ -469,8 +515,15 @@ async fn preview_allocation(
     let outstanding_balance = outstanding_balance.ok_or(AppError::NotFound)?;
 
     let (interest_outstanding, penalty_outstanding) = outstanding_components(&state.db, id).await?;
-    let (penalty_paid, interest_paid, principal_paid) =
-        allocate_waterfall(params.amount, interest_outstanding, penalty_outstanding);
+    let principal_outstanding = (outstanding_balance - interest_outstanding - penalty_outstanding).max(Decimal::ZERO);
+    let allocation_order = fetch_allocation_order(&state.db, auth.organization_id).await?;
+    let (penalty_paid, interest_paid, principal_paid) = allocate_waterfall(
+        params.amount,
+        interest_outstanding,
+        penalty_outstanding,
+        principal_outstanding,
+        &allocation_order,
+    );
     let new_balance = (outstanding_balance - params.amount).max(Decimal::ZERO);
 
     Ok(Json(PaymentAllocationPreview {

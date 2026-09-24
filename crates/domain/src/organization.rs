@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -99,6 +100,46 @@ pub struct NumberingConfigInput {
     pub next_number: u32,
 }
 
+/// Whether a manual interest/penalty charge is computed as a percentage
+/// of the account's outstanding principal, or a flat amount every time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RateType {
+    Percentage,
+    Fixed,
+}
+
+/// One side (interest or penalty) of `FinancePolicy` — whether it's
+/// switched on at all, and if so, how a manual charge's suggested
+/// amount is computed. This doesn't *apply* anything on its own (no
+/// scheduler exists to charge automatically — see `routes/loan_accounts
+/// .rs::post_charge`'s own docs); it only feeds the "use policy rate"
+/// suggestion on that manual charge form, and future automatic
+/// charging can read the exact same field once that phase exists.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ChargePolicy {
+    pub enabled: bool,
+    pub rate_type: RateType,
+    pub rate_value: Decimal,
+}
+
+/// The three previously-hardcoded finance behaviors this organization
+/// can now actually configure: which order a payment clears penalty/
+/// interest/principal in (`routes/loan_accounts.rs::allocate_waterfall`
+/// used to hardcode penalty -> interest -> principal), how many days
+/// past a due date before a schedule instalment counts as overdue
+/// (`0022_repayment_schedule.sql`'s views used to hardcode 7), and
+/// each charge type's suggested manual-charge rate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinancePolicy {
+    /// A permutation of exactly `["penalty", "interest", "principal"]`
+    /// — the order `allocate_waterfall` applies a payment in.
+    pub allocation_order: Vec<String>,
+    pub grace_period_days: i32,
+    pub interest: ChargePolicy,
+    pub penalty: ChargePolicy,
+}
+
 /// `GET /api/v1/settings` — the "Organization / System Configuration"
 /// screen's whole payload in one round trip.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +151,7 @@ pub struct OrganizationSettings {
     pub timezone: String,
     pub plot_numbering: NumberingConfig,
     pub project_numbering: NumberingConfig,
+    pub finance_policy: FinancePolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +161,7 @@ pub struct UpdateOrganizationSettingsInput {
     pub timezone: String,
     pub plot_numbering: NumberingConfigInput,
     pub project_numbering: NumberingConfigInput,
+    pub finance_policy: FinancePolicy,
 }
 
 /// `POST /api/v1/settings/numbering/:entity_type/next` — the number that

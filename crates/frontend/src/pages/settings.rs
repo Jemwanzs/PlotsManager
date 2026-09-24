@@ -10,10 +10,15 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::hooks::use_location;
+use rust_decimal::Decimal;
+use std::str::FromStr;
 
 use crate::auth::{has_permission, use_api, use_auth, use_currency};
 use crate::components::{ErrorAlert, LoadingState};
-use domain::{NumberingConfigInput, OrganizationSettings, UpdateOrganizationSettingsInput, PERM_SETTINGS_MANAGE_ORGANIZATION};
+use domain::{
+    ChargePolicy, FinancePolicy, NumberingConfigInput, OrganizationSettings, RateType,
+    UpdateOrganizationSettingsInput, PERM_SETTINGS_MANAGE_ORGANIZATION,
+};
 
 #[component]
 pub fn Settings() -> impl IntoView {
@@ -93,6 +98,18 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
     let project_padding = RwSignal::new(initial.project_numbering.padding.to_string());
     let project_next = RwSignal::new(initial.project_numbering.next_number.to_string());
 
+    let alloc_order = &initial.finance_policy.allocation_order;
+    let alloc_1 = RwSignal::new(alloc_order.first().cloned().unwrap_or_else(|| "penalty".to_string()));
+    let alloc_2 = RwSignal::new(alloc_order.get(1).cloned().unwrap_or_else(|| "interest".to_string()));
+    let alloc_3 = RwSignal::new(alloc_order.get(2).cloned().unwrap_or_else(|| "principal".to_string()));
+    let grace_period = RwSignal::new(initial.finance_policy.grace_period_days.to_string());
+    let interest_enabled = RwSignal::new(initial.finance_policy.interest.enabled);
+    let interest_rate_type = RwSignal::new(rate_type_str(initial.finance_policy.interest.rate_type).to_string());
+    let interest_rate_value = RwSignal::new(initial.finance_policy.interest.rate_value.to_string());
+    let penalty_enabled = RwSignal::new(initial.finance_policy.penalty.enabled);
+    let penalty_rate_type = RwSignal::new(rate_type_str(initial.finance_policy.penalty.rate_type).to_string());
+    let penalty_rate_value = RwSignal::new(initial.finance_policy.penalty.rate_value.to_string());
+
     let error = RwSignal::new(None::<String>);
     let success = RwSignal::new(false);
     let submitting = RwSignal::new(false);
@@ -139,6 +156,34 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
             return;
         };
 
+        let allocation_order = vec![alloc_1.get(), alloc_2.get(), alloc_3.get()];
+        let mut sorted_order = allocation_order.clone();
+        sorted_order.sort();
+        if sorted_order != ["interest", "penalty", "principal"] {
+            error.set(Some("Allocation order must list penalty, interest, and principal, each exactly once.".to_string()));
+            return;
+        }
+        let Ok(grace_period_val) = grace_period.get().trim().parse::<i32>() else {
+            error.set(Some("Enter a valid grace period in days.".to_string()));
+            return;
+        };
+        if !(0..=365).contains(&grace_period_val) {
+            error.set(Some("Grace period must be between 0 and 365 days.".to_string()));
+            return;
+        }
+        let Ok(interest_rate_val) = Decimal::from_str(interest_rate_value.get().trim()) else {
+            error.set(Some("Enter a valid interest rate.".to_string()));
+            return;
+        };
+        let Ok(penalty_rate_val) = Decimal::from_str(penalty_rate_value.get().trim()) else {
+            error.set(Some("Enter a valid penalty rate.".to_string()));
+            return;
+        };
+        if interest_rate_val < Decimal::ZERO || penalty_rate_val < Decimal::ZERO {
+            error.set(Some("Rates can't be negative.".to_string()));
+            return;
+        }
+
         submitting.set(true);
         let api = api.clone();
         let input = UpdateOrganizationSettingsInput {
@@ -159,6 +204,20 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
                 padding: project_padding_val,
                 next_number: project_next_val,
             },
+            finance_policy: FinancePolicy {
+                allocation_order,
+                grace_period_days: grace_period_val,
+                interest: ChargePolicy {
+                    enabled: interest_enabled.get(),
+                    rate_type: parse_rate_type(&interest_rate_type.get()),
+                    rate_value: interest_rate_val,
+                },
+                penalty: ChargePolicy {
+                    enabled: penalty_enabled.get(),
+                    rate_type: parse_rate_type(&penalty_rate_type.get()),
+                    rate_value: penalty_rate_val,
+                },
+            },
         };
         spawn_local(async move {
             match api.update_settings(input).await {
@@ -176,6 +235,16 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
                     project_include_year.set(s.project_numbering.include_year);
                     project_padding.set(s.project_numbering.padding.to_string());
                     project_next.set(s.project_numbering.next_number.to_string());
+                    alloc_1.set(s.finance_policy.allocation_order.first().cloned().unwrap_or_else(|| "penalty".to_string()));
+                    alloc_2.set(s.finance_policy.allocation_order.get(1).cloned().unwrap_or_else(|| "interest".to_string()));
+                    alloc_3.set(s.finance_policy.allocation_order.get(2).cloned().unwrap_or_else(|| "principal".to_string()));
+                    grace_period.set(s.finance_policy.grace_period_days.to_string());
+                    interest_enabled.set(s.finance_policy.interest.enabled);
+                    interest_rate_type.set(rate_type_str(s.finance_policy.interest.rate_type).to_string());
+                    interest_rate_value.set(s.finance_policy.interest.rate_value.to_string());
+                    penalty_enabled.set(s.finance_policy.penalty.enabled);
+                    penalty_rate_type.set(rate_type_str(s.finance_policy.penalty.rate_type).to_string());
+                    penalty_rate_value.set(s.finance_policy.penalty.rate_value.to_string());
                     success.set(true);
                 }
                 Err(e) => error.set(Some(format!("{e}"))),
@@ -333,11 +402,137 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
                         />
                     </div>
                 </div>
+
+                <div id="finance-policy" class="card span-full">
+                    <h2 class="mt-0">"Finance policy"</h2>
+                    <p class="meta">
+                        "Controls how a payment is allocated across a Lipa Pole Pole account, "
+                        "when a schedule instalment counts as overdue, and the suggested rate "
+                        "on a manual interest/penalty charge."
+                    </p>
+
+                    <h3>"Payment allocation order"</h3>
+                    <div class="form-grid-2">
+                        <div class="field">
+                            <label for="alloc-1">"1st priority"</label>
+                            <select id="alloc-1" prop:value=alloc_1 on:change=move |ev| alloc_1.set(event_target_value(&ev))>
+                                <option value="penalty">"Penalty"</option>
+                                <option value="interest">"Interest"</option>
+                                <option value="principal">"Principal"</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="alloc-2">"2nd priority"</label>
+                            <select id="alloc-2" prop:value=alloc_2 on:change=move |ev| alloc_2.set(event_target_value(&ev))>
+                                <option value="penalty">"Penalty"</option>
+                                <option value="interest">"Interest"</option>
+                                <option value="principal">"Principal"</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="alloc-3">"3rd priority"</label>
+                            <select id="alloc-3" prop:value=alloc_3 on:change=move |ev| alloc_3.set(event_target_value(&ev))>
+                                <option value="penalty">"Penalty"</option>
+                                <option value="interest">"Interest"</option>
+                                <option value="principal">"Principal"</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="grace-period">"Overdue grace period (days)"</label>
+                            <input
+                                id="grace-period"
+                                type="text"
+                                inputmode="numeric"
+                                prop:value=grace_period
+                                on:input=move |ev| grace_period.set(event_target_value(&ev))
+                            />
+                        </div>
+                    </div>
+
+                    <div class="form-grid-2" style="margin-top: var(--space-4);">
+                        <div>
+                            <h3 class="mt-0">"Interest"</h3>
+                            <label class="checkbox-field">
+                                <input
+                                    type="checkbox"
+                                    prop:checked=interest_enabled
+                                    on:change=move |ev| interest_enabled.set(event_target_checked(&ev))
+                                />
+                                "Enabled"
+                            </label>
+                            <div class="field">
+                                <label for="interest-rate-type">"Rate type"</label>
+                                <select id="interest-rate-type" prop:value=interest_rate_type on:change=move |ev| interest_rate_type.set(event_target_value(&ev))>
+                                    <option value="percentage">"Percentage of outstanding principal"</option>
+                                    <option value="fixed">"Fixed amount"</option>
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label for="interest-rate-value">"Rate"</label>
+                                <input
+                                    id="interest-rate-value"
+                                    type="text"
+                                    inputmode="decimal"
+                                    prop:value=interest_rate_value
+                                    on:input=move |ev| interest_rate_value.set(event_target_value(&ev))
+                                />
+                            </div>
+                        </div>
+                        <div>
+                            <h3 class="mt-0">"Penalty"</h3>
+                            <label class="checkbox-field">
+                                <input
+                                    type="checkbox"
+                                    prop:checked=penalty_enabled
+                                    on:change=move |ev| penalty_enabled.set(event_target_checked(&ev))
+                                />
+                                "Enabled"
+                            </label>
+                            <div class="field">
+                                <label for="penalty-rate-type">"Rate type"</label>
+                                <select id="penalty-rate-type" prop:value=penalty_rate_type on:change=move |ev| penalty_rate_type.set(event_target_value(&ev))>
+                                    <option value="percentage">"Percentage of outstanding principal"</option>
+                                    <option value="fixed">"Fixed amount"</option>
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label for="penalty-rate-value">"Rate"</label>
+                                <input
+                                    id="penalty-rate-value"
+                                    type="text"
+                                    inputmode="decimal"
+                                    prop:value=penalty_rate_value
+                                    on:input=move |ev| penalty_rate_value.set(event_target_value(&ev))
+                                />
+                            </div>
+                        </div>
+                    </div>
+                    <p class="meta" style="margin-top: var(--space-3);">
+                        "No automatic charging runs yet — this only suggests an amount on the "
+                        "\"Post a manual charge\" form. A charge is still only ever posted when "
+                        "someone explicitly submits it."
+                    </p>
+                </div>
             </div>
 
             <button type="submit" class="btn btn-primary" disabled=move || submitting.get() || !can_manage() style="margin-top: var(--space-4);">
                 {move || if submitting.get() { "Saving…" } else { "Save settings" }}
             </button>
         </form>
+    }
+}
+
+fn rate_type_str(rate_type: RateType) -> &'static str {
+    match rate_type {
+        RateType::Percentage => "percentage",
+        RateType::Fixed => "fixed",
+    }
+}
+
+fn parse_rate_type(value: &str) -> RateType {
+    if value == "fixed" {
+        RateType::Fixed
+    } else {
+        RateType::Percentage
     }
 }

@@ -33,6 +33,7 @@ struct MockDb {
     organization: Organization,
     date_format: String,
     timezone: String,
+    finance_policy: domain::FinancePolicy,
     plot_numbering: MockNumbering,
     project_numbering: MockNumbering,
     demo_user: User,
@@ -758,6 +759,7 @@ impl MockApi {
             .find(|c| c.id == sale.customer_id)
             .ok_or(ApiError::NotFound)?;
         let (label, color) = loan_status_meta(account.status);
+        let (interest_outstanding, penalty_outstanding) = self.outstanding_components(&db, id);
 
         let mut payments: Vec<Payment> = db
             .payments
@@ -778,6 +780,8 @@ impl MockApi {
             status_color: color.to_string(),
             account,
             payments,
+            interest_outstanding,
+            penalty_outstanding,
         })
     }
 
@@ -899,13 +903,15 @@ impl MockApi {
         let account = db.loan_accounts.iter().find(|la| la.id == id).ok_or(ApiError::NotFound)?;
         let outstanding_balance = account.outstanding_balance;
         let (interest_outstanding, penalty_outstanding) = self.outstanding_components(&db, id);
+        let principal_outstanding = (outstanding_balance - interest_outstanding - penalty_outstanding).max(Decimal::ZERO);
 
-        let mut remaining = amount;
-        let penalty_paid = remaining.min(penalty_outstanding.max(Decimal::ZERO));
-        remaining -= penalty_paid;
-        let interest_paid = remaining.min(interest_outstanding.max(Decimal::ZERO));
-        remaining -= interest_paid;
-        let principal_paid = remaining;
+        let (penalty_paid, interest_paid, principal_paid) = allocate_waterfall_mock(
+            amount,
+            interest_outstanding,
+            penalty_outstanding,
+            principal_outstanding,
+            &db.finance_policy.allocation_order,
+        );
         let new_balance = (outstanding_balance - amount).max(Decimal::ZERO);
 
         Ok(domain::PaymentAllocationPreview { amount, penalty_paid, interest_paid, principal_paid, new_balance })
@@ -2236,11 +2242,31 @@ impl MockApi {
                 ));
             }
         }
+        {
+            let mut sorted = input.finance_policy.allocation_order.clone();
+            sorted.sort();
+            if sorted != ["interest", "penalty", "principal"] {
+                return Err(ApiError::InvalidCredentials(
+                    "Allocation order must list penalty, interest, and principal exactly once each.".to_string(),
+                ));
+            }
+        }
+        if !(0..=365).contains(&input.finance_policy.grace_period_days) {
+            return Err(ApiError::InvalidCredentials(
+                "Grace period must be between 0 and 365 days.".to_string(),
+            ));
+        }
+        for charge in [&input.finance_policy.interest, &input.finance_policy.penalty] {
+            if charge.rate_value < Decimal::ZERO {
+                return Err(ApiError::InvalidCredentials("A rate can't be negative.".to_string()));
+            }
+        }
 
         let mut db = self.db.lock().unwrap();
         db.organization.currency = currency;
         db.date_format = input.date_format.trim().to_string();
         db.timezone = input.timezone.trim().to_string();
+        db.finance_policy = input.finance_policy.clone();
         db.plot_numbering = MockNumbering {
             prefix: input.plot_numbering.prefix.trim().to_string(),
             include_year: input.plot_numbering.include_year,
@@ -2318,6 +2344,7 @@ fn build_settings(db: &MockDb) -> domain::OrganizationSettings {
             domain::NumberingEntityType::Project,
             &db.project_numbering,
         ),
+        finance_policy: db.finance_policy.clone(),
     }
 }
 
@@ -2665,6 +2692,46 @@ fn new_loan_account(sale: &PlotSale, seq: usize, start_date: NaiveDate) -> PlotL
     })
 }
 
+/// Mock-side equivalent of the backend's generic, order-aware
+/// `allocate_waterfall` (`routes/loan_accounts.rs`) — applies `amount`
+/// against penalty/interest/principal in whatever order `order` lists
+/// them, with any leftover (an overpayment beyond all three) landing
+/// on principal regardless of where it fell in that order.
+fn allocate_waterfall_mock(
+    amount: Decimal,
+    interest_outstanding: Decimal,
+    penalty_outstanding: Decimal,
+    principal_outstanding: Decimal,
+    order: &[String],
+) -> (Decimal, Decimal, Decimal) {
+    let mut remaining = amount;
+    let mut penalty_paid = Decimal::ZERO;
+    let mut interest_paid = Decimal::ZERO;
+    let mut principal_paid = Decimal::ZERO;
+    for component in order {
+        match component.as_str() {
+            "penalty" => {
+                let paid = remaining.min(penalty_outstanding.max(Decimal::ZERO));
+                penalty_paid = paid;
+                remaining -= paid;
+            }
+            "interest" => {
+                let paid = remaining.min(interest_outstanding.max(Decimal::ZERO));
+                interest_paid = paid;
+                remaining -= paid;
+            }
+            "principal" => {
+                let paid = remaining.min(principal_outstanding.max(Decimal::ZERO));
+                principal_paid = paid;
+                remaining -= paid;
+            }
+            _ => {}
+        }
+    }
+    principal_paid += remaining;
+    (penalty_paid, interest_paid, principal_paid)
+}
+
 /// Mock-side equivalent of the backend's `loan_account_schedule_summary`
 /// view (`0022_repayment_schedule.sql`) — same deposit-then-12-instalments
 /// plan, same "allocate `amount_paid` oldest-due-first" logic, same
@@ -2977,6 +3044,20 @@ fn seed() -> MockDb {
         organization,
         date_format,
         timezone,
+        finance_policy: domain::FinancePolicy {
+            allocation_order: vec!["penalty".to_string(), "interest".to_string(), "principal".to_string()],
+            grace_period_days: 7,
+            interest: domain::ChargePolicy {
+                enabled: false,
+                rate_type: domain::RateType::Percentage,
+                rate_value: Decimal::ZERO,
+            },
+            penalty: domain::ChargePolicy {
+                enabled: false,
+                rate_type: domain::RateType::Percentage,
+                rate_value: Decimal::ZERO,
+            },
+        },
         plot_numbering,
         project_numbering,
         demo_user,

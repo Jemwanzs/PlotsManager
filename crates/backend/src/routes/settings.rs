@@ -16,15 +16,17 @@
 use axum::extract::{Path, Query, State};
 use axum::{routing::get, routing::post, Json, Router};
 use domain::{
-    format_sequence_number, GeneratedNumber, NumberingConfig, NumberingConfigInput,
-    NumberingEntityType, OrganizationSettings, UpdateOrganizationSettingsInput,
-    PERM_SETTINGS_MANAGE_ORGANIZATION,
+    format_sequence_number, ChargePolicy, FinancePolicy, GeneratedNumber, NumberingConfig,
+    NumberingConfigInput, NumberingEntityType, OrganizationSettings, RateType,
+    UpdateOrganizationSettingsInput, PERM_SETTINGS_MANAGE_ORGANIZATION,
 };
+use rust_decimal::Decimal;
 use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extractors::AuthUser;
+use crate::pg_enum::{from_pg, to_pg};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -42,6 +44,33 @@ struct OrgSettingsRow {
     currency: String,
     date_format: String,
     timezone: String,
+    allocation_order: Vec<String>,
+    finance_grace_period_days: i32,
+    interest_enabled: bool,
+    interest_rate_type: String,
+    interest_rate_value: Decimal,
+    penalty_enabled: bool,
+    penalty_rate_type: String,
+    penalty_rate_value: Decimal,
+}
+
+impl OrgSettingsRow {
+    fn finance_policy(&self) -> Result<FinancePolicy, AppError> {
+        Ok(FinancePolicy {
+            allocation_order: self.allocation_order.clone(),
+            grace_period_days: self.finance_grace_period_days,
+            interest: ChargePolicy {
+                enabled: self.interest_enabled,
+                rate_type: from_pg("organizations.interest_rate_type", &self.interest_rate_type)?,
+                rate_value: self.interest_rate_value,
+            },
+            penalty: ChargePolicy {
+                enabled: self.penalty_enabled,
+                rate_type: from_pg("organizations.penalty_rate_type", &self.penalty_rate_type)?,
+                rate_value: self.penalty_rate_value,
+            },
+        })
+    }
 }
 
 #[derive(sqlx::FromRow, Clone)]
@@ -97,7 +126,10 @@ async fn fetch_settings(
     organization_id: Uuid,
 ) -> Result<OrganizationSettings, AppError> {
     let org: OrgSettingsRow = sqlx::query_as(
-        "select name, currency, date_format, timezone from organizations where id = $1",
+        r#"select name, currency, date_format, timezone, allocation_order,
+               finance_grace_period_days, interest_enabled, interest_rate_type, interest_rate_value,
+               penalty_enabled, penalty_rate_type, penalty_rate_value
+           from organizations where id = $1"#,
     )
     .bind(organization_id)
     .fetch_one(&state.db)
@@ -124,12 +156,13 @@ async fn fetch_settings(
 
     Ok(OrganizationSettings {
         organization_id,
-        name: org.name,
-        currency: org.currency,
-        date_format: org.date_format,
-        timezone: org.timezone,
+        name: org.name.clone(),
+        currency: org.currency.clone(),
+        date_format: org.date_format.clone(),
+        timezone: org.timezone.clone(),
         plot_numbering: plot_row.into_config()?,
         project_numbering: project_row.into_config()?,
+        finance_policy: org.finance_policy()?,
     })
 }
 
@@ -159,6 +192,32 @@ fn validate_numbering(input: &NumberingConfigInput) -> Result<(), AppError> {
     Ok(())
 }
 
+fn validate_finance_policy(policy: &FinancePolicy) -> Result<(), AppError> {
+    let mut sorted = policy.allocation_order.clone();
+    sorted.sort();
+    if sorted != ["interest", "penalty", "principal"] {
+        return Err(AppError::bad_request(
+            "Allocation order must list penalty, interest, and principal exactly once each.",
+        ));
+    }
+    if policy.grace_period_days < 0 || policy.grace_period_days > 365 {
+        return Err(AppError::bad_request(
+            "Grace period must be between 0 and 365 days.",
+        ));
+    }
+    for (label, charge) in [("Interest", &policy.interest), ("Penalty", &policy.penalty)] {
+        if charge.rate_value < Decimal::ZERO {
+            return Err(AppError::bad_request(format!("{label} rate can't be negative.")));
+        }
+        if charge.rate_type == RateType::Percentage && charge.rate_value > Decimal::from(100) {
+            return Err(AppError::bad_request(format!(
+                "{label} rate can't exceed 100% when expressed as a percentage."
+            )));
+        }
+    }
+    Ok(())
+}
+
 async fn update_settings(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -181,15 +240,29 @@ async fn update_settings(
     }
     validate_numbering(&input.plot_numbering)?;
     validate_numbering(&input.project_numbering)?;
+    validate_finance_policy(&input.finance_policy)?;
 
     let mut tx = state.db.begin().await?;
 
     sqlx::query(
-        "update organizations set currency = $1, date_format = $2, timezone = $3 where id = $4",
+        r#"update organizations set
+               currency = $1, date_format = $2, timezone = $3,
+               allocation_order = $4, finance_grace_period_days = $5,
+               interest_enabled = $6, interest_rate_type = $7, interest_rate_value = $8,
+               penalty_enabled = $9, penalty_rate_type = $10, penalty_rate_value = $11
+           where id = $12"#,
     )
     .bind(&currency)
     .bind(date_format)
     .bind(timezone)
+    .bind(&input.finance_policy.allocation_order)
+    .bind(input.finance_policy.grace_period_days)
+    .bind(input.finance_policy.interest.enabled)
+    .bind(to_pg(&input.finance_policy.interest.rate_type))
+    .bind(input.finance_policy.interest.rate_value)
+    .bind(input.finance_policy.penalty.enabled)
+    .bind(to_pg(&input.finance_policy.penalty.rate_type))
+    .bind(input.finance_policy.penalty.rate_value)
     .bind(auth.organization_id)
     .execute(&mut *tx)
     .await?;

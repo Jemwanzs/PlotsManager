@@ -315,6 +315,14 @@ pub struct LoanAccountDetail {
     pub status_label: String,
     pub status_color: String,
     pub payments: Vec<Payment>,
+    /// Net outstanding for each component, summed from the ledger the
+    /// same way `outstanding_components`/`allocate_waterfall`
+    /// (`routes/loan_accounts.rs`) do — lets the frontend derive
+    /// `principal_outstanding` (`outstanding_balance` minus these two)
+    /// for the "use policy rate" suggestion on a manual charge, without
+    /// a second round trip.
+    pub interest_outstanding: Decimal,
+    pub penalty_outstanding: Decimal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

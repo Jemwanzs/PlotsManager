@@ -64,6 +64,7 @@ fn LoanAccountContent(
     let can_post_charges = has_permission(auth, PERM_FINANCE_POST_CHARGES);
     let can_reverse = has_permission(auth, PERM_FINANCE_REVERSE);
     let account = detail.account.clone();
+    let principal_outstanding = (account.outstanding_balance - detail.interest_outstanding - detail.penalty_outstanding).max(Decimal::ZERO);
     let project_href = format!("/projects/{}", detail.project_id);
     let customer_href = format!("/customers/{}", detail.customer_id);
     let statement_href = format!("/loan-accounts/{}/statement", account.id);
@@ -133,7 +134,7 @@ fn LoanAccountContent(
             }}
             {can_post_charges.then(|| view! {
                 <div class="card">
-                    <PostChargeForm loan_account_id=account.id on_posted=on_payment_recorded.clone() />
+                    <PostChargeForm loan_account_id=account.id principal_outstanding=principal_outstanding on_posted=on_payment_recorded.clone() />
                 </div>
             })}
             {can_reverse.then(|| view! {
@@ -390,7 +391,11 @@ fn RecordPaymentForm(loan_account_id: Uuid, on_recorded: impl Fn() + Clone + 'st
 }
 
 #[component]
-fn PostChargeForm(loan_account_id: Uuid, on_posted: impl Fn() + Clone + 'static) -> impl IntoView {
+fn PostChargeForm(
+    loan_account_id: Uuid,
+    principal_outstanding: Decimal,
+    on_posted: impl Fn() + Clone + 'static,
+) -> impl IntoView {
     let api = use_api();
 
     let charge_type = RwSignal::new("interest".to_string());
@@ -399,6 +404,31 @@ fn PostChargeForm(loan_account_id: Uuid, on_posted: impl Fn() + Clone + 'static)
     let reason = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
     let submitting = RwSignal::new(false);
+
+    // The org's Finance policy (Settings -> Finance policy) — read-only
+    // here, just to power "Use policy rate" below. No automatic
+    // charging reads this; a charge only ever posts when this form is
+    // explicitly submitted.
+    let settings = LocalResource::new({
+        let api = api.clone();
+        move || {
+            let api = api.clone();
+            async move { api.get_settings().await }
+        }
+    });
+    let active_policy = move || -> Option<domain::ChargePolicy> {
+        let s = settings.get()?.take().ok()?;
+        Some(if charge_type.get() == "penalty" { s.finance_policy.penalty } else { s.finance_policy.interest })
+    };
+    let use_policy_rate = move |_: leptos::ev::MouseEvent| {
+        if let Some(policy) = active_policy() {
+            let suggested = match policy.rate_type {
+                domain::RateType::Percentage => principal_outstanding * policy.rate_value / Decimal::from(100),
+                domain::RateType::Fixed => policy.rate_value,
+            };
+            amount.set(suggested.round_dp(2).to_string());
+        }
+    };
 
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
@@ -486,6 +516,14 @@ fn PostChargeForm(loan_account_id: Uuid, on_posted: impl Fn() + Clone + 'static)
                     prop:value=amount
                     on:input=move |ev| amount.set(event_target_value(&ev))
                 />
+                {move || {
+                    let use_policy_rate = use_policy_rate.clone();
+                    active_policy().filter(|p| p.enabled).map(|_| view! {
+                        <button type="button" class="btn btn-secondary" style="margin-top: var(--space-2);" on:click=use_policy_rate>
+                            "Use policy rate"
+                        </button>
+                    })
+                }}
             </div>
 
             <div class="field">
