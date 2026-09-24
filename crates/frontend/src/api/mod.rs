@@ -447,6 +447,35 @@ impl ApiClient {
         }
     }
 
+    pub async fn list_title_records(&self, plot_id: Uuid) -> Result<Vec<TitleRecord>, ApiError> {
+        match self {
+            Self::Mock(api) => api.list_title_records(plot_id).await,
+            Self::Http(api) => api.list_title_records(plot_id).await,
+        }
+    }
+
+    pub async fn create_title_record(
+        &self,
+        plot_id: Uuid,
+        input: CreateTitleRecordInput,
+    ) -> Result<TitleRecord, ApiError> {
+        match self {
+            Self::Mock(api) => api.create_title_record(plot_id, input).await,
+            Self::Http(api) => api.create_title_record(plot_id, input).await,
+        }
+    }
+
+    pub async fn update_title_record(
+        &self,
+        id: Uuid,
+        input: UpdateTitleRecordInput,
+    ) -> Result<TitleRecord, ApiError> {
+        match self {
+            Self::Mock(api) => api.update_title_record(id, input).await,
+            Self::Http(api) => api.update_title_record(id, input).await,
+        }
+    }
+
     pub async fn update_map_polygons(
         &self,
         project_id: Uuid,

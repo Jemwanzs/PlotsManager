@@ -20,6 +20,7 @@ pub mod quotation;
 pub mod reports;
 pub mod sales;
 pub mod status_meta;
+pub mod title_record;
 pub mod user;
 
 pub use api_types::*;
@@ -35,4 +36,5 @@ pub use quotation::*;
 pub use reports::*;
 pub use sales::*;
 pub use status_meta::*;
+pub use title_record::*;
 pub use user::*;

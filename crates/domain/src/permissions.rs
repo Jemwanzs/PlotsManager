@@ -196,6 +196,16 @@ pub const PERM_SETTINGS_MANAGE_ORGANIZATION: &str = "settings:manage_organizatio
 // ---------------------------------------------------------------
 pub const PERM_DOCUMENTS_MANAGE: &str = "documents:manage";
 
+// ---------------------------------------------------------------
+// Titles — a plot's title/ownership history (`routes/title_records.rs`).
+// Viewing is gated by plots:view, same as the plot itself; only
+// recording/updating a title record needs its own key. No delete route
+// exists (title records are a history/provenance trail, never removed
+// — see the migration's own doc comment), so there's no separate
+// "delete" permission to add either.
+// ---------------------------------------------------------------
+pub const PERM_TITLES_MANAGE: &str = "titles:manage";
+
 /// The wildcard every auto-provisioned org-admin role carries.
 pub const PERM_WILDCARD: &str = "*";
 
@@ -220,6 +230,7 @@ const REGISTRY: &[StaticPermissionDef] = &[
     StaticPermissionDef { key: PERM_PLOTS_MAP_LINK, label: "Link/unlink plots to map shapes", module: "Plots", feature: "Plot map", sensitive: false },
     StaticPermissionDef { key: PERM_PLOTS_TRANSACTIONS_CREATE, label: "Reserve/book a plot", module: "Plots", feature: "Plot transactions", sensitive: true },
     StaticPermissionDef { key: PERM_PLOTS_TRANSACTIONS_BULK_IMPORT, label: "Bulk import historical sales", module: "Plots", feature: "Plot transactions", sensitive: true },
+    StaticPermissionDef { key: PERM_TITLES_MANAGE, label: "Record/update title & ownership history", module: "Plots", feature: "Title tracking", sensitive: true },
 
     StaticPermissionDef { key: PERM_CUSTOMERS_VIEW, label: "View customers", module: "Customers", feature: "Customer management", sensitive: false },
     StaticPermissionDef { key: PERM_CUSTOMERS_CREATE, label: "Create customers", module: "Customers", feature: "Customer management", sensitive: false },

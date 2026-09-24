@@ -327,6 +327,8 @@ pub fn ProjectDetail() -> impl IntoView {
 
                             <DocumentsPanel entity_type=domain::DocumentEntityType::Plot entity_id=plot_id />
 
+                            <TitleRecordsPanel plot_id=plot_id />
+
                             {can_edit_plot.then(|| view! {
                                 <button
                                     type="button"
@@ -1080,6 +1082,448 @@ fn PlotCommercialPosition(project_id: Uuid, plot_id: Uuid) -> impl IntoView {
                                 }
                             },
                             Err(e) => view! { <ErrorAlert message=format!("Couldn't load this plot's commercial position: {e}") /> }.into_any(),
+                        })
+                }}
+            </Suspense>
+        </div>
+    }
+}
+
+fn title_status_value(s: domain::TitleStatus) -> &'static str {
+    match s {
+        domain::TitleStatus::MotherTitle => "mother_title",
+        domain::TitleStatus::IndividualTitle => "individual_title",
+        domain::TitleStatus::PendingRegistration => "pending_registration",
+        domain::TitleStatus::Disputed => "disputed",
+        domain::TitleStatus::Cancelled => "cancelled",
+    }
+}
+
+fn title_status_from_value(v: &str) -> domain::TitleStatus {
+    match v {
+        "mother_title" => domain::TitleStatus::MotherTitle,
+        "pending_registration" => domain::TitleStatus::PendingRegistration,
+        "disputed" => domain::TitleStatus::Disputed,
+        "cancelled" => domain::TitleStatus::Cancelled,
+        _ => domain::TitleStatus::IndividualTitle,
+    }
+}
+
+fn title_status_label(s: domain::TitleStatus) -> &'static str {
+    match s {
+        domain::TitleStatus::MotherTitle => "Mother Title",
+        domain::TitleStatus::IndividualTitle => "Individual Title",
+        domain::TitleStatus::PendingRegistration => "Pending Registration",
+        domain::TitleStatus::Disputed => "Disputed",
+        domain::TitleStatus::Cancelled => "Cancelled",
+    }
+}
+
+fn transfer_status_value(s: domain::TransferStatus) -> &'static str {
+    match s {
+        domain::TransferStatus::NotStarted => "not_started",
+        domain::TransferStatus::InProgress => "in_progress",
+        domain::TransferStatus::Completed => "completed",
+    }
+}
+
+fn transfer_status_from_value(v: &str) -> domain::TransferStatus {
+    match v {
+        "in_progress" => domain::TransferStatus::InProgress,
+        "completed" => domain::TransferStatus::Completed,
+        _ => domain::TransferStatus::NotStarted,
+    }
+}
+
+fn transfer_status_label(s: domain::TransferStatus) -> &'static str {
+    match s {
+        domain::TransferStatus::NotStarted => "Not Started",
+        domain::TransferStatus::InProgress => "In Progress",
+        domain::TransferStatus::Completed => "Completed",
+    }
+}
+
+fn parse_date_field(s: &str) -> Option<chrono::NaiveDate> {
+    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
+}
+
+/// A plot's title/ownership history (`domain::TitleRecord` — see its
+/// module docs). Separate from `Plot::title_number` (the plain string
+/// shown just above this card): that field is "the title on record
+/// right now", this is the structured history behind it — a mother
+/// title becoming an individual title, a transfer in progress, a chain
+/// of registered owners. Each record can carry its own attached
+/// documents (a title deed, a survey plan) via the generic
+/// `DocumentsPanel`, toggled open per row rather than always rendered
+/// — most rows are old history nobody needs to re-open.
+#[component]
+fn TitleRecordsPanel(plot_id: Uuid) -> impl IntoView {
+    let api = use_api();
+    let auth = use_auth();
+    let can_manage = has_permission(auth, domain::PERM_TITLES_MANAGE);
+
+    let refresh = RwSignal::new(0u32);
+    let add_open = RwSignal::new(false);
+    let add_error = RwSignal::new(None::<String>);
+    let add_saving = RwSignal::new(false);
+    let editing_id = RwSignal::new(None::<Uuid>);
+    let edit_error = RwSignal::new(None::<String>);
+    let edit_saving = RwSignal::new(false);
+    let docs_open_id = RwSignal::new(None::<Uuid>);
+
+    let a_title_number = RwSignal::new(String::new());
+    let a_owner = RwSignal::new(String::new());
+    let a_previous_owner = RwSignal::new(String::new());
+    let a_title_status = RwSignal::new(title_status_value(domain::TitleStatus::IndividualTitle).to_string());
+    let a_transfer_status = RwSignal::new(transfer_status_value(domain::TransferStatus::NotStarted).to_string());
+    let a_issue_date = RwSignal::new(String::new());
+    let a_registration_date = RwSignal::new(String::new());
+    let a_transfer_date = RwSignal::new(String::new());
+    let a_notes = RwSignal::new(String::new());
+
+    let e_title_number = RwSignal::new(String::new());
+    let e_owner = RwSignal::new(String::new());
+    let e_previous_owner = RwSignal::new(String::new());
+    let e_title_status = RwSignal::new(String::new());
+    let e_transfer_status = RwSignal::new(String::new());
+    let e_issue_date = RwSignal::new(String::new());
+    let e_registration_date = RwSignal::new(String::new());
+    let e_transfer_date = RwSignal::new(String::new());
+    let e_notes = RwSignal::new(String::new());
+
+    let records = LocalResource::new({
+        let api = api.clone();
+        move || {
+            let api = api.clone();
+            refresh.get();
+            async move { api.list_title_records(plot_id).await }
+        }
+    });
+
+    let api_for_add = api.clone();
+    let on_add = move |_| {
+        if add_saving.get() {
+            return;
+        }
+        add_error.set(None);
+        add_saving.set(true);
+        let api = api_for_add.clone();
+        let input = domain::CreateTitleRecordInput {
+            title_number: a_title_number.get(),
+            registered_owner_name: a_owner.get(),
+            previous_owner_name: Some(a_previous_owner.get()).filter(|s| !s.trim().is_empty()),
+            title_status: title_status_from_value(&a_title_status.get()),
+            transfer_status: transfer_status_from_value(&a_transfer_status.get()),
+            issue_date: parse_date_field(&a_issue_date.get()),
+            registration_date: parse_date_field(&a_registration_date.get()),
+            transfer_date: parse_date_field(&a_transfer_date.get()),
+            notes: Some(a_notes.get()).filter(|s| !s.trim().is_empty()),
+        };
+        spawn_local(async move {
+            match api.create_title_record(plot_id, input).await {
+                Ok(_) => {
+                    a_title_number.set(String::new());
+                    a_owner.set(String::new());
+                    a_previous_owner.set(String::new());
+                    a_title_status.set(title_status_value(domain::TitleStatus::IndividualTitle).to_string());
+                    a_transfer_status.set(transfer_status_value(domain::TransferStatus::NotStarted).to_string());
+                    a_issue_date.set(String::new());
+                    a_registration_date.set(String::new());
+                    a_transfer_date.set(String::new());
+                    a_notes.set(String::new());
+                    add_open.set(false);
+                    refresh.update(|n| *n += 1);
+                }
+                Err(e) => add_error.set(Some(format!("{e}"))),
+            }
+            add_saving.set(false);
+        });
+    };
+
+    let api_for_edit = api.clone();
+    let on_save_edit = move |id: Uuid| {
+        if edit_saving.get() {
+            return;
+        }
+        edit_error.set(None);
+        edit_saving.set(true);
+        let api = api_for_edit.clone();
+        let input = domain::UpdateTitleRecordInput {
+            title_number: e_title_number.get(),
+            registered_owner_name: e_owner.get(),
+            previous_owner_name: Some(e_previous_owner.get()).filter(|s| !s.trim().is_empty()),
+            title_status: title_status_from_value(&e_title_status.get()),
+            transfer_status: transfer_status_from_value(&e_transfer_status.get()),
+            issue_date: parse_date_field(&e_issue_date.get()),
+            registration_date: parse_date_field(&e_registration_date.get()),
+            transfer_date: parse_date_field(&e_transfer_date.get()),
+            notes: Some(e_notes.get()).filter(|s| !s.trim().is_empty()),
+        };
+        spawn_local(async move {
+            match api.update_title_record(id, input).await {
+                Ok(_) => {
+                    editing_id.set(None);
+                    refresh.update(|n| *n += 1);
+                }
+                Err(e) => edit_error.set(Some(format!("{e}"))),
+            }
+            edit_saving.set(false);
+        });
+    };
+
+    view! {
+        <div class="card form-card" style="margin-bottom: var(--space-5)">
+            <div class="page-header" style="margin-bottom: var(--space-3)">
+                <h2 class="mt-0">"Title & Ownership"</h2>
+                {can_manage.then(|| {
+                    view! {
+                        <button
+                            type="button"
+                            class="btn btn-secondary"
+                            on:click=move |_| add_open.update(|v| *v = !*v)
+                        >
+                            {move || if add_open.get() { "Cancel" } else { "Add title record" }}
+                        </button>
+                    }
+                })}
+            </div>
+
+            {move || if add_open.get() {
+                let on_add = on_add.clone();
+                view! {
+                    <div class="form-grid-2" style="margin-bottom: var(--space-3)">
+                        <div class="field">
+                            <label for="tr-add-number">"Title number"</label>
+                            <input id="tr-add-number" type="text" required prop:value=a_title_number on:input=move |ev| a_title_number.set(event_target_value(&ev)) />
+                        </div>
+                        <div class="field">
+                            <label for="tr-add-owner">"Registered owner"</label>
+                            <input id="tr-add-owner" type="text" required prop:value=a_owner on:input=move |ev| a_owner.set(event_target_value(&ev)) />
+                        </div>
+                        <div class="field">
+                            <label for="tr-add-prev-owner">"Previous owner"</label>
+                            <input id="tr-add-prev-owner" type="text" prop:value=a_previous_owner on:input=move |ev| a_previous_owner.set(event_target_value(&ev)) />
+                        </div>
+                        <div class="field">
+                            <label for="tr-add-title-status">"Title status"</label>
+                            <select id="tr-add-title-status" prop:value=a_title_status on:change=move |ev| a_title_status.set(event_target_value(&ev))>
+                                <option value="mother_title">"Mother Title"</option>
+                                <option value="individual_title">"Individual Title"</option>
+                                <option value="pending_registration">"Pending Registration"</option>
+                                <option value="disputed">"Disputed"</option>
+                                <option value="cancelled">"Cancelled"</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="tr-add-transfer-status">"Transfer status"</label>
+                            <select id="tr-add-transfer-status" prop:value=a_transfer_status on:change=move |ev| a_transfer_status.set(event_target_value(&ev))>
+                                <option value="not_started">"Not Started"</option>
+                                <option value="in_progress">"In Progress"</option>
+                                <option value="completed">"Completed"</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="tr-add-issue-date">"Issue date"</label>
+                            <input id="tr-add-issue-date" type="date" prop:value=a_issue_date on:input=move |ev| a_issue_date.set(event_target_value(&ev)) />
+                        </div>
+                        <div class="field">
+                            <label for="tr-add-reg-date">"Registration date"</label>
+                            <input id="tr-add-reg-date" type="date" prop:value=a_registration_date on:input=move |ev| a_registration_date.set(event_target_value(&ev)) />
+                        </div>
+                        <div class="field">
+                            <label for="tr-add-transfer-date">"Transfer date"</label>
+                            <input id="tr-add-transfer-date" type="date" prop:value=a_transfer_date on:input=move |ev| a_transfer_date.set(event_target_value(&ev)) />
+                        </div>
+                        <div class="field" style="grid-column: 1 / -1">
+                            <label for="tr-add-notes">"Notes"</label>
+                            <input id="tr-add-notes" type="text" prop:value=a_notes on:input=move |ev| a_notes.set(event_target_value(&ev)) />
+                        </div>
+                    </div>
+                    {move || add_error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+                    <button
+                        type="button"
+                        class="btn btn-primary"
+                        style="margin-bottom: var(--space-3)"
+                        disabled=move || add_saving.get() || a_title_number.get().trim().is_empty() || a_owner.get().trim().is_empty()
+                        on:click=on_add
+                    >
+                        {move || if add_saving.get() { "Saving…" } else { "Save title record" }}
+                    </button>
+                }.into_any()
+            } else {
+                view! {}.into_any()
+            }}
+
+            <Suspense fallback=|| view! { <LoadingState label="Loading title history…" /> }>
+                {move || {
+                    records.get()
+                        .map(|wrapped| wrapped.take())
+                        .map(|result| match result {
+                            Ok(list) if list.is_empty() => view! {
+                                <p class="meta">"No title records yet."</p>
+                            }.into_any(),
+                            Ok(list) => {
+                                view! {
+                                    <table class="data-table">
+                                        <thead>
+                                            <tr>
+                                                <th>"Title number"</th>
+                                                <th>"Registered owner"</th>
+                                                <th>"Title status"</th>
+                                                <th>"Transfer status"</th>
+                                                <th>"Recorded"</th>
+                                                <th></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {list.into_iter().map(|rec| {
+                                                let rec_id = rec.id;
+                                                let is_editing = move || editing_id.get() == Some(rec_id);
+                                                let is_docs_open = move || docs_open_id.get() == Some(rec_id);
+                                                let rec_for_edit = rec.clone();
+                                                let on_save_edit = on_save_edit.clone();
+                                                view! {
+                                                    <tr>
+                                                        <td>{rec.title_number.clone()}</td>
+                                                        <td>
+                                                            {rec.registered_owner_name.clone()}
+                                                            {rec.previous_owner_name.clone().map(|p| view! {
+                                                                <div class="meta">"from " {p}</div>
+                                                            })}
+                                                        </td>
+                                                        <td>{title_status_label(rec.title_status)}</td>
+                                                        <td>{transfer_status_label(rec.transfer_status)}</td>
+                                                        <td><span class="meta">{rec.created_at.format("%d %b %Y").to_string()} " · " {rec.created_by_name.clone()}</span></td>
+                                                        <td>
+                                                            <div style="display: flex; gap: var(--space-2)">
+                                                                {can_manage.then(|| {
+                                                                    let rec_for_edit = rec_for_edit.clone();
+                                                                    view! {
+                                                                        <button
+                                                                            type="button"
+                                                                            class="btn btn-secondary btn-sm"
+                                                                            on:click=move |_| {
+                                                                                if is_editing() {
+                                                                                    editing_id.set(None);
+                                                                                } else {
+                                                                                    e_title_number.set(rec_for_edit.title_number.clone());
+                                                                                    e_owner.set(rec_for_edit.registered_owner_name.clone());
+                                                                                    e_previous_owner.set(rec_for_edit.previous_owner_name.clone().unwrap_or_default());
+                                                                                    e_title_status.set(title_status_value(rec_for_edit.title_status).to_string());
+                                                                                    e_transfer_status.set(transfer_status_value(rec_for_edit.transfer_status).to_string());
+                                                                                    e_issue_date.set(rec_for_edit.issue_date.map(|d| d.to_string()).unwrap_or_default());
+                                                                                    e_registration_date.set(rec_for_edit.registration_date.map(|d| d.to_string()).unwrap_or_default());
+                                                                                    e_transfer_date.set(rec_for_edit.transfer_date.map(|d| d.to_string()).unwrap_or_default());
+                                                                                    e_notes.set(rec_for_edit.notes.clone().unwrap_or_default());
+                                                                                    edit_error.set(None);
+                                                                                    editing_id.set(Some(rec_id));
+                                                                                }
+                                                                            }
+                                                                        >
+                                                                            {move || if is_editing() { "Cancel" } else { "Edit" }}
+                                                                        </button>
+                                                                    }
+                                                                })}
+                                                                <button
+                                                                    type="button"
+                                                                    class="btn btn-secondary btn-sm"
+                                                                    on:click=move |_| {
+                                                                        docs_open_id.update(|v| {
+                                                                            *v = if *v == Some(rec_id) { None } else { Some(rec_id) };
+                                                                        });
+                                                                    }
+                                                                >
+                                                                    {move || if is_docs_open() { "Hide documents" } else { "Documents" }}
+                                                                </button>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                    {move || if is_editing() {
+                                                        let on_save_edit = on_save_edit.clone();
+                                                        view! {
+                                                            <tr>
+                                                                <td colspan="6">
+                                                                    <div class="form-grid-2" style="margin: var(--space-2) 0">
+                                                                        <div class="field">
+                                                                            <label for="tr-edit-number">"Title number"</label>
+                                                                            <input id="tr-edit-number" type="text" required prop:value=e_title_number on:input=move |ev| e_title_number.set(event_target_value(&ev)) />
+                                                                        </div>
+                                                                        <div class="field">
+                                                                            <label for="tr-edit-owner">"Registered owner"</label>
+                                                                            <input id="tr-edit-owner" type="text" required prop:value=e_owner on:input=move |ev| e_owner.set(event_target_value(&ev)) />
+                                                                        </div>
+                                                                        <div class="field">
+                                                                            <label for="tr-edit-prev-owner">"Previous owner"</label>
+                                                                            <input id="tr-edit-prev-owner" type="text" prop:value=e_previous_owner on:input=move |ev| e_previous_owner.set(event_target_value(&ev)) />
+                                                                        </div>
+                                                                        <div class="field">
+                                                                            <label for="tr-edit-title-status">"Title status"</label>
+                                                                            <select id="tr-edit-title-status" prop:value=e_title_status on:change=move |ev| e_title_status.set(event_target_value(&ev))>
+                                                                                <option value="mother_title">"Mother Title"</option>
+                                                                                <option value="individual_title">"Individual Title"</option>
+                                                                                <option value="pending_registration">"Pending Registration"</option>
+                                                                                <option value="disputed">"Disputed"</option>
+                                                                                <option value="cancelled">"Cancelled"</option>
+                                                                            </select>
+                                                                        </div>
+                                                                        <div class="field">
+                                                                            <label for="tr-edit-transfer-status">"Transfer status"</label>
+                                                                            <select id="tr-edit-transfer-status" prop:value=e_transfer_status on:change=move |ev| e_transfer_status.set(event_target_value(&ev))>
+                                                                                <option value="not_started">"Not Started"</option>
+                                                                                <option value="in_progress">"In Progress"</option>
+                                                                                <option value="completed">"Completed"</option>
+                                                                            </select>
+                                                                        </div>
+                                                                        <div class="field">
+                                                                            <label for="tr-edit-issue-date">"Issue date"</label>
+                                                                            <input id="tr-edit-issue-date" type="date" prop:value=e_issue_date on:input=move |ev| e_issue_date.set(event_target_value(&ev)) />
+                                                                        </div>
+                                                                        <div class="field">
+                                                                            <label for="tr-edit-reg-date">"Registration date"</label>
+                                                                            <input id="tr-edit-reg-date" type="date" prop:value=e_registration_date on:input=move |ev| e_registration_date.set(event_target_value(&ev)) />
+                                                                        </div>
+                                                                        <div class="field">
+                                                                            <label for="tr-edit-transfer-date">"Transfer date"</label>
+                                                                            <input id="tr-edit-transfer-date" type="date" prop:value=e_transfer_date on:input=move |ev| e_transfer_date.set(event_target_value(&ev)) />
+                                                                        </div>
+                                                                        <div class="field" style="grid-column: 1 / -1">
+                                                                            <label for="tr-edit-notes">"Notes"</label>
+                                                                            <input id="tr-edit-notes" type="text" prop:value=e_notes on:input=move |ev| e_notes.set(event_target_value(&ev)) />
+                                                                        </div>
+                                                                    </div>
+                                                                    {move || edit_error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+                                                                    <button
+                                                                        type="button"
+                                                                        class="btn btn-primary btn-sm"
+                                                                        disabled=move || edit_saving.get()
+                                                                        on:click=move |_| on_save_edit(rec_id)
+                                                                    >
+                                                                        {move || if edit_saving.get() { "Saving…" } else { "Save changes" }}
+                                                                    </button>
+                                                                </td>
+                                                            </tr>
+                                                        }.into_any()
+                                                    } else {
+                                                        view! {}.into_any()
+                                                    }}
+                                                    {move || if is_docs_open() {
+                                                        view! {
+                                                            <tr>
+                                                                <td colspan="6">
+                                                                    <DocumentsPanel entity_type=domain::DocumentEntityType::TitleRecord entity_id=rec_id />
+                                                                </td>
+                                                            </tr>
+                                                        }.into_any()
+                                                    } else {
+                                                        view! {}.into_any()
+                                                    }}
+                                                }
+                                            }).collect_view()}
+                                        </tbody>
+                                    </table>
+                                }.into_any()
+                            }
+                            Err(e) => view! { <ErrorAlert message=format!("Couldn't load title history: {e}") /> }.into_any(),
                         })
                 }}
             </Suspense>

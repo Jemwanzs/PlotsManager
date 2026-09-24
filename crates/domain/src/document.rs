@@ -23,6 +23,7 @@ pub enum DocumentEntityType {
     Sale,
     LoanAccount,
     Payment,
+    TitleRecord,
 }
 
 impl DocumentEntityType {
@@ -34,6 +35,7 @@ impl DocumentEntityType {
             DocumentEntityType::Sale => "sale",
             DocumentEntityType::LoanAccount => "loan_account",
             DocumentEntityType::Payment => "payment",
+            DocumentEntityType::TitleRecord => "title_record",
         }
     }
 }

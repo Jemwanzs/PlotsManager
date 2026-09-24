@@ -67,6 +67,7 @@ async fn require_entity_access(
                 domain::PERM_PLOTS_VIEW
             }
             DocumentEntityType::LoanAccount | DocumentEntityType::Payment => domain::PERM_FINANCE_VIEW,
+            DocumentEntityType::TitleRecord => domain::PERM_PLOTS_VIEW,
         };
         auth.require_permission(perm)?;
     }
@@ -116,6 +117,12 @@ async fn require_entity_access(
             .bind(entity_id)
             .fetch_optional(db)
             .await?
+        }
+        DocumentEntityType::TitleRecord => {
+            sqlx::query_scalar("select organization_id from title_records where id = $1")
+                .bind(entity_id)
+                .fetch_optional(db)
+                .await?
         }
     };
 

@@ -35,7 +35,8 @@ use domain::{
     QuotationDetail, QuotationSummary, RecordPaymentInput, RejectOrganizationInput,
     ResetPasswordInput, ReverseEntryInput, Role, SalesReport, SignupInput, SignupResult, TenantUser, TermsVersion,
     UpdateBranchInput, UpdateCustomerInput, UpdateLeadInput, UpdateMapPolygonsInput, UpdateOrganizationSettingsInput,
-    UpdatePlotInput, UpdateRoleInput, UpdateUserInput, UploadDocumentInput,
+    UpdatePlotInput, UpdateRoleInput, UpdateTitleRecordInput, UpdateUserInput, UploadDocumentInput,
+    CreateTitleRecordInput, TitleRecord,
 };
 
 #[derive(Clone)]
@@ -629,6 +630,26 @@ impl HttpApi {
     pub fn document_file_url(&self, id: Uuid) -> String {
         let token = self.token.lock().unwrap().clone().unwrap_or_default();
         format!("{}/api/v1/documents/{id}/file?token={token}", self.base_url)
+    }
+
+    pub async fn list_title_records(&self, plot_id: Uuid) -> Result<Vec<TitleRecord>, ApiError> {
+        self.get(&format!("/api/v1/plots/{plot_id}/title-records")).await
+    }
+
+    pub async fn create_title_record(
+        &self,
+        plot_id: Uuid,
+        input: CreateTitleRecordInput,
+    ) -> Result<TitleRecord, ApiError> {
+        self.post(&format!("/api/v1/plots/{plot_id}/title-records"), &input).await
+    }
+
+    pub async fn update_title_record(
+        &self,
+        id: Uuid,
+        input: UpdateTitleRecordInput,
+    ) -> Result<TitleRecord, ApiError> {
+        self.put(&format!("/api/v1/title-records/{id}"), &input).await
     }
 
     pub async fn bulk_create_plots(

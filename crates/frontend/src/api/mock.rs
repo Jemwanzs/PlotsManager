@@ -21,7 +21,8 @@ use domain::{
     PlotLoanAccount, PlotSale, PlotStatus, PlotStatusCount, PlotWithColor, Project,
     ProjectInventoryRow, ProjectMapSummary, ProjectStatus, ProjectSummary, Quotation,
     QuotationDetail, QuotationStatus, QuotationSummary, RecordPaymentInput, SalesReport,
-    SalesReportRow, SignupInput, UpdateLeadInput, UploadDocumentInput, User,
+    SalesReportRow, SignupInput, CreateTitleRecordInput, TitleRecord, UpdateLeadInput,
+    UpdateTitleRecordInput, UploadDocumentInput, User,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -68,6 +69,7 @@ struct MockDb {
     tenant_users: Vec<domain::TenantUser>,
     branches: Vec<domain::Branch>,
     documents: Vec<MockDocument>,
+    title_records: Vec<domain::TitleRecord>,
 }
 
 /// Mirrors the real `documents` table (`database/migrations/
@@ -2353,6 +2355,81 @@ impl MockApi {
             .unwrap_or_default()
     }
 
+    pub async fn list_title_records(&self, plot_id: Uuid) -> Result<Vec<TitleRecord>, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+        let mut records: Vec<TitleRecord> =
+            db.title_records.iter().filter(|t| t.plot_id == plot_id).cloned().collect();
+        records.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(records)
+    }
+
+    pub async fn create_title_record(
+        &self,
+        plot_id: Uuid,
+        input: CreateTitleRecordInput,
+    ) -> Result<TitleRecord, ApiError> {
+        settle(200).await;
+        if input.title_number.trim().is_empty() {
+            return Err(ApiError::InvalidCredentials("Title number is required.".to_string()));
+        }
+        if input.registered_owner_name.trim().is_empty() {
+            return Err(ApiError::InvalidCredentials("Registered owner is required.".to_string()));
+        }
+        let mut db = self.db.lock().unwrap();
+        if !db.plots.iter().any(|p| p.id == plot_id) {
+            return Err(ApiError::NotFound);
+        }
+        let now = Utc::now();
+        let record = TitleRecord {
+            id: Uuid::new_v4(),
+            plot_id,
+            title_number: input.title_number.trim().to_string(),
+            registered_owner_name: input.registered_owner_name.trim().to_string(),
+            previous_owner_name: input.previous_owner_name.filter(|s| !s.trim().is_empty()),
+            title_status: input.title_status,
+            transfer_status: input.transfer_status,
+            issue_date: input.issue_date,
+            registration_date: input.registration_date,
+            transfer_date: input.transfer_date,
+            notes: input.notes.filter(|s| !s.trim().is_empty()),
+            created_by_name: db.demo_user.full_name.clone(),
+            created_at: now,
+            updated_at: now,
+        };
+        db.title_records.push(record.clone());
+        Ok(record)
+    }
+
+    pub async fn update_title_record(
+        &self,
+        id: Uuid,
+        input: UpdateTitleRecordInput,
+    ) -> Result<TitleRecord, ApiError> {
+        settle(200).await;
+        if input.title_number.trim().is_empty() {
+            return Err(ApiError::InvalidCredentials("Title number is required.".to_string()));
+        }
+        if input.registered_owner_name.trim().is_empty() {
+            return Err(ApiError::InvalidCredentials("Registered owner is required.".to_string()));
+        }
+        let mut db = self.db.lock().unwrap();
+        let Some(record) = db.title_records.iter_mut().find(|t| t.id == id) else {
+            return Err(ApiError::NotFound);
+        };
+        record.title_number = input.title_number.trim().to_string();
+        record.registered_owner_name = input.registered_owner_name.trim().to_string();
+        record.previous_owner_name = input.previous_owner_name.filter(|s| !s.trim().is_empty());
+        record.title_status = input.title_status;
+        record.transfer_status = input.transfer_status;
+        record.issue_date = input.issue_date;
+        record.registration_date = input.registration_date;
+        record.transfer_date = input.transfer_date;
+        record.notes = input.notes.filter(|s| !s.trim().is_empty());
+        record.updated_at = Utc::now();
+        Ok(record.clone())
+    }
+
     /// Reuses `create_plot`/`create_customer` per row rather than a
     /// separate in-memory insert path — mirrors
     /// `crates/backend/src/routes/projects.rs`'s `insert_plot` /
@@ -3412,5 +3489,6 @@ fn seed() -> MockDb {
         // that reality rather than pre-seeding one.
         branches: Vec::new(),
         documents: Vec::new(),
+        title_records: Vec::new(),
     }
 }
