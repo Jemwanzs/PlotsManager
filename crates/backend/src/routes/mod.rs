@@ -7,6 +7,7 @@ mod dashboard;
 mod documents;
 mod finance;
 mod loan_accounts;
+mod migrations;
 mod platform;
 mod project_map;
 mod projects;
@@ -45,4 +46,5 @@ pub fn router() -> Router<AppState> {
         .merge(terms::router())
         .merge(documents::router())
         .merge(title_records::router())
+        .merge(migrations::router())
 }

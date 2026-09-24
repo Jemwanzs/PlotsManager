@@ -22,7 +22,9 @@ use domain::{
     ProjectInventoryRow, ProjectMapSummary, ProjectStatus, ProjectSummary, Quotation,
     QuotationDetail, QuotationStatus, QuotationSummary, RecordPaymentInput, SalesReport,
     SalesReportRow, SignupInput, CreateTitleRecordInput, TitleRecord, UpdateLeadInput,
-    UpdateTitleRecordInput, UploadDocumentInput, User,
+    UpdateTitleRecordInput, UploadDocumentInput, User, CreateMigrationBatchInput, MigrationBatch,
+    MigrationBatchStatus, MigrationCommitResult, MigrationRowStatus, MigrationStagingRow,
+    UpdateMigrationRowInput,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -70,6 +72,8 @@ struct MockDb {
     branches: Vec<domain::Branch>,
     documents: Vec<MockDocument>,
     title_records: Vec<domain::TitleRecord>,
+    migration_batches: Vec<domain::MigrationBatch>,
+    migration_staging_rows: Vec<domain::MigrationStagingRow>,
 }
 
 /// Mirrors the real `documents` table (`database/migrations/
@@ -2430,6 +2434,236 @@ impl MockApi {
         Ok(record.clone())
     }
 
+    pub async fn list_migration_batches(&self) -> Result<Vec<MigrationBatch>, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+        let mut batches = db.migration_batches.clone();
+        batches.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(batches)
+    }
+
+    pub async fn get_migration_batch(&self, id: Uuid) -> Result<MigrationBatch, ApiError> {
+        settle(100).await;
+        let db = self.db.lock().unwrap();
+        db.migration_batches.iter().find(|b| b.id == id).cloned().ok_or(ApiError::NotFound)
+    }
+
+    pub async fn create_migration_batch(
+        &self,
+        input: CreateMigrationBatchInput,
+    ) -> Result<MigrationBatch, ApiError> {
+        settle(300).await;
+        if input.rows.is_empty() {
+            return Err(ApiError::InvalidCredentials("The uploaded file has no data rows.".to_string()));
+        }
+        let mut db = self.db.lock().unwrap();
+        let existing_legacy_numbers: HashSet<String> = db
+            .customers
+            .iter()
+            .filter_map(|c| c.legacy_customer_number.clone())
+            .collect();
+        let mut seen_in_batch = HashSet::new();
+
+        let batch_id = Uuid::new_v4();
+        let mut valid_rows = 0i32;
+        let mut exception_rows = 0i32;
+        for row in &input.rows {
+            let (normalized, status, message) =
+                mock_normalize_customer_row(&row.raw_data, &existing_legacy_numbers, &mut seen_in_batch);
+            if status == MigrationRowStatus::Valid {
+                valid_rows += 1;
+            } else {
+                exception_rows += 1;
+            }
+            db.migration_staging_rows.push(MigrationStagingRow {
+                id: Uuid::new_v4(),
+                batch_id,
+                source_row: row.source_row as i32,
+                raw_data: serde_json::to_value(&row.raw_data).unwrap_or(serde_json::Value::Null),
+                normalized_data: normalized,
+                status,
+                exception_message: message,
+                committed_entity_id: None,
+            });
+        }
+
+        let batch = MigrationBatch {
+            id: batch_id,
+            entity_type: input.entity_type,
+            source_system: input.source_system,
+            source_file_name: input.source_file_name,
+            status: MigrationBatchStatus::Staged,
+            total_rows: input.rows.len() as i32,
+            valid_rows,
+            exception_rows,
+            committed_rows: 0,
+            created_by_name: db.demo_user.full_name.clone(),
+            created_at: Utc::now(),
+            committed_at: None,
+        };
+        db.migration_batches.push(batch.clone());
+        Ok(batch)
+    }
+
+    pub async fn list_migration_rows(&self, batch_id: Uuid) -> Result<Vec<MigrationStagingRow>, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+        let mut rows: Vec<MigrationStagingRow> =
+            db.migration_staging_rows.iter().filter(|r| r.batch_id == batch_id).cloned().collect();
+        rows.sort_by_key(|r| r.source_row);
+        Ok(rows)
+    }
+
+    pub async fn update_migration_row(
+        &self,
+        batch_id: Uuid,
+        row_id: Uuid,
+        input: UpdateMigrationRowInput,
+    ) -> Result<MigrationStagingRow, ApiError> {
+        settle(200).await;
+        let mut db = self.db.lock().unwrap();
+        let existing_legacy_numbers: HashSet<String> = db
+            .customers
+            .iter()
+            .filter_map(|c| c.legacy_customer_number.clone())
+            .collect();
+        let mut seen_in_batch: HashSet<String> = db
+            .migration_staging_rows
+            .iter()
+            .filter(|r| r.batch_id == batch_id && r.id != row_id)
+            .filter_map(|r| r.normalized_data.get("legacy_customer_number").and_then(|v| v.as_str()).map(str::to_string))
+            .collect();
+
+        let (normalized, status, message) =
+            mock_normalize_customer_row(&input.fields, &existing_legacy_numbers, &mut seen_in_batch);
+
+        let Some(row) = db.migration_staging_rows.iter_mut().find(|r| r.id == row_id && r.batch_id == batch_id) else {
+            return Err(ApiError::NotFound);
+        };
+        let old_status = row.status;
+        row.raw_data = serde_json::to_value(&input.fields).unwrap_or(serde_json::Value::Null);
+        row.normalized_data = normalized;
+        row.status = status;
+        row.exception_message = message;
+        let updated = row.clone();
+
+        if old_status != status {
+            if let Some(batch) = db.migration_batches.iter_mut().find(|b| b.id == batch_id) {
+                if status == MigrationRowStatus::Valid {
+                    batch.valid_rows += 1;
+                    batch.exception_rows -= 1;
+                } else {
+                    batch.valid_rows -= 1;
+                    batch.exception_rows += 1;
+                }
+            }
+        }
+
+        Ok(updated)
+    }
+
+    pub async fn commit_migration_batch(&self, batch_id: Uuid) -> Result<MigrationCommitResult, ApiError> {
+        settle(300).await;
+        let mut db = self.db.lock().unwrap();
+        if !db.migration_batches.iter().any(|b| b.id == batch_id) {
+            return Err(ApiError::NotFound);
+        }
+
+        let row_ids: Vec<Uuid> = db
+            .migration_staging_rows
+            .iter()
+            .filter(|r| r.batch_id == batch_id)
+            .map(|r| r.id)
+            .collect();
+
+        let mut committed = 0u32;
+        let mut skipped_exceptions = 0u32;
+        let mut already_committed = 0u32;
+        let mut seen_in_batch: HashSet<String> = HashSet::new();
+
+        for row_id in row_ids {
+            let (status, normalized, already_has_entity) = {
+                let row = db.migration_staging_rows.iter().find(|r| r.id == row_id).unwrap();
+                (row.status, row.normalized_data.clone(), row.committed_entity_id.is_some())
+            };
+            if already_has_entity {
+                already_committed += 1;
+                continue;
+            }
+            if status != MigrationRowStatus::Valid {
+                skipped_exceptions += 1;
+                continue;
+            }
+
+            let legacy_number = normalized.get("legacy_customer_number").and_then(|v| v.as_str()).map(str::to_string);
+            let taken = legacy_number.as_ref().map(|num| {
+                db.customers.iter().any(|c| c.legacy_customer_number.as_deref() == Some(num.as_str()))
+                    || !seen_in_batch.insert(num.clone())
+            }).unwrap_or(false);
+            if taken {
+                let num = legacy_number.unwrap_or_default();
+                let msg = format!("legacy_customer_number \"{num}\" was taken by another record before this commit ran");
+                if let Some(row) = db.migration_staging_rows.iter_mut().find(|r| r.id == row_id) {
+                    row.status = MigrationRowStatus::Exception;
+                    row.exception_message = Some(msg);
+                }
+                if let Some(batch) = db.migration_batches.iter_mut().find(|b| b.id == batch_id) {
+                    batch.valid_rows -= 1;
+                    batch.exception_rows += 1;
+                }
+                skipped_exceptions += 1;
+                continue;
+            }
+
+            let get_str = |key: &str| normalized.get(key).and_then(|v| v.as_str()).map(str::to_string);
+            let customer_id = Uuid::new_v4();
+            let customer = Customer {
+                id: customer_id,
+                organization_id: db.organization.id,
+                full_name: get_str("full_name").unwrap_or_default(),
+                email: get_str("email"),
+                phone: get_str("phone"),
+                id_number: get_str("id_number"),
+                assigned_agent_id: Some(db.demo_user.id),
+                stage: LeadStage::New,
+                source: Some("Legacy migration".to_string()),
+                next_follow_up_at: None,
+                notes: None,
+                created_at: Utc::now(),
+                title: get_str("title"),
+                customer_type: match get_str("customer_type").as_deref() {
+                    Some("company") => domain::CustomerType::Company,
+                    Some("joint") => domain::CustomerType::Joint,
+                    _ => domain::CustomerType::Individual,
+                },
+                kra_pin: get_str("kra_pin"),
+                postal_address: get_str("postal_address"),
+                city: get_str("city"),
+                physical_address: get_str("physical_address"),
+                legacy_customer_number: legacy_number,
+                next_of_kin_name: get_str("next_of_kin_name"),
+                next_of_kin_relationship: get_str("next_of_kin_relationship"),
+                next_of_kin_mobile: get_str("next_of_kin_mobile"),
+                next_of_kin_id_number: get_str("next_of_kin_id_number"),
+                next_of_kin_address: get_str("next_of_kin_address"),
+            };
+            db.customers.push(customer);
+
+            if let Some(row) = db.migration_staging_rows.iter_mut().find(|r| r.id == row_id) {
+                row.committed_entity_id = Some(customer_id);
+            }
+            committed += 1;
+        }
+
+        if let Some(batch) = db.migration_batches.iter_mut().find(|b| b.id == batch_id) {
+            batch.status = MigrationBatchStatus::Committed;
+            batch.committed_at = Some(Utc::now());
+            batch.committed_rows += committed as i32;
+        }
+
+        Ok(MigrationCommitResult { committed, skipped_exceptions, already_committed })
+    }
+
     /// Reuses `create_plot`/`create_customer` per row rather than a
     /// separate in-memory insert path — mirrors
     /// `crates/backend/src/routes/projects.rs`'s `insert_plot` /
@@ -3118,6 +3352,77 @@ async fn settle(millis: u32) {
     gloo_timers::future::TimeoutFuture::new(millis).await;
 }
 
+/// Mirrors `crates/backend/src/routes/migrations.rs::normalize_customer_row`
+/// — the mock has no server to stage/validate against, so it re-derives
+/// the same result client-side. Kept in lockstep with the backend
+/// deliberately (same field list, same messages) since a diverging mock
+/// would defeat the point of testing against it.
+fn mock_normalize_customer_row(
+    raw: &HashMap<String, String>,
+    existing_legacy_numbers: &HashSet<String>,
+    seen_in_batch: &mut HashSet<String>,
+) -> (serde_json::Value, MigrationRowStatus, Option<String>) {
+    let get = |key: &str| raw.get(key).map(|s| s.trim()).filter(|s| !s.is_empty());
+    let mut errors = Vec::new();
+
+    let full_name = get("full_name");
+    if full_name.is_none() {
+        errors.push("Missing full_name".to_string());
+    }
+
+    let legacy_number = get("legacy_customer_number");
+    match legacy_number {
+        None => errors.push("Missing legacy_customer_number".to_string()),
+        Some(num) => {
+            if existing_legacy_numbers.contains(num) {
+                errors.push(format!(
+                    "legacy_customer_number \"{num}\" already exists on a customer in this organization"
+                ));
+            } else if !seen_in_batch.insert(num.to_string()) {
+                errors.push(format!("legacy_customer_number \"{num}\" is duplicated within this file"));
+            }
+        }
+    }
+
+    let customer_type_raw = get("customer_type").map(|s| s.to_lowercase());
+    let customer_type = match customer_type_raw.as_deref() {
+        None | Some("individual") => "individual",
+        Some("company") => "company",
+        Some("joint") => "joint",
+        Some(other) => {
+            errors.push(format!(
+                "customer_type \"{other}\" isn't recognised — use individual, company, or joint"
+            ));
+            "individual"
+        }
+    };
+
+    let normalized = serde_json::json!({
+        "full_name": full_name,
+        "legacy_customer_number": legacy_number,
+        "id_number": get("id_number"),
+        "email": get("email"),
+        "phone": get("phone"),
+        "title": get("title"),
+        "customer_type": customer_type,
+        "kra_pin": get("kra_pin"),
+        "postal_address": get("postal_address"),
+        "city": get("city"),
+        "physical_address": get("physical_address"),
+        "next_of_kin_name": get("next_of_kin_name"),
+        "next_of_kin_relationship": get("next_of_kin_relationship"),
+        "next_of_kin_mobile": get("next_of_kin_mobile"),
+        "next_of_kin_id_number": get("next_of_kin_id_number"),
+        "next_of_kin_address": get("next_of_kin_address"),
+    });
+
+    if errors.is_empty() {
+        (normalized, MigrationRowStatus::Valid, None)
+    } else {
+        (normalized, MigrationRowStatus::Exception, Some(errors.join("; ")))
+    }
+}
+
 fn mock_document_to_meta(doc: &MockDocument) -> DocumentMeta {
     DocumentMeta {
         id: doc.id,
@@ -3490,5 +3795,7 @@ fn seed() -> MockDb {
         branches: Vec::new(),
         documents: Vec::new(),
         title_records: Vec::new(),
+        migration_batches: Vec::new(),
+        migration_staging_rows: Vec::new(),
     }
 }

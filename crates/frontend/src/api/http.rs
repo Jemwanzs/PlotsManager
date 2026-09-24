@@ -36,7 +36,8 @@ use domain::{
     ResetPasswordInput, ReverseEntryInput, Role, SalesReport, SignupInput, SignupResult, TenantUser, TermsVersion,
     UpdateBranchInput, UpdateCustomerInput, UpdateLeadInput, UpdateMapPolygonsInput, UpdateOrganizationSettingsInput,
     UpdatePlotInput, UpdateRoleInput, UpdateTitleRecordInput, UpdateUserInput, UploadDocumentInput,
-    CreateTitleRecordInput, TitleRecord,
+    CreateTitleRecordInput, TitleRecord, CreateMigrationBatchInput, MigrationBatch,
+    MigrationCommitResult, MigrationStagingRow, UpdateMigrationRowInput,
 };
 
 #[derive(Clone)]
@@ -650,6 +651,38 @@ impl HttpApi {
         input: UpdateTitleRecordInput,
     ) -> Result<TitleRecord, ApiError> {
         self.put(&format!("/api/v1/title-records/{id}"), &input).await
+    }
+
+    pub async fn list_migration_batches(&self) -> Result<Vec<MigrationBatch>, ApiError> {
+        self.get("/api/v1/migrations").await
+    }
+
+    pub async fn get_migration_batch(&self, id: Uuid) -> Result<MigrationBatch, ApiError> {
+        self.get(&format!("/api/v1/migrations/{id}")).await
+    }
+
+    pub async fn create_migration_batch(
+        &self,
+        input: CreateMigrationBatchInput,
+    ) -> Result<MigrationBatch, ApiError> {
+        self.post("/api/v1/migrations", &input).await
+    }
+
+    pub async fn list_migration_rows(&self, batch_id: Uuid) -> Result<Vec<MigrationStagingRow>, ApiError> {
+        self.get(&format!("/api/v1/migrations/{batch_id}/rows")).await
+    }
+
+    pub async fn update_migration_row(
+        &self,
+        batch_id: Uuid,
+        row_id: Uuid,
+        input: UpdateMigrationRowInput,
+    ) -> Result<MigrationStagingRow, ApiError> {
+        self.put(&format!("/api/v1/migrations/{batch_id}/rows/{row_id}"), &input).await
+    }
+
+    pub async fn commit_migration_batch(&self, batch_id: Uuid) -> Result<MigrationCommitResult, ApiError> {
+        self.post(&format!("/api/v1/migrations/{batch_id}/commit"), &()).await
     }
 
     pub async fn bulk_create_plots(

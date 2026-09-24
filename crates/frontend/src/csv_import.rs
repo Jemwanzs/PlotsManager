@@ -35,6 +35,49 @@ pub const SALES_TEMPLATE: &str = "project_code,plot_number,customer_lookup,payme
 AG-P1,AG-P1-003,0722000000,lipa_pole_pole_interest_free,755000,2023-06-01,300000\n\
 AG-P1,AG-P1-004,12345678,full_cash,720000,2024-02-14,720000\n";
 
+/// The legacy-data migration template for customers — header-based
+/// (unlike the positional templates above), since the migration
+/// framework's server-side staging needs real column names to map
+/// against (`crates/backend/src/routes/migrations.rs::normalize_customer_row`).
+pub const CUSTOMER_MIGRATION_TEMPLATE: &str = "legacy_customer_number,full_name,id_number,email,phone,title,customer_type,kra_pin,postal_address,city,physical_address,next_of_kin_name,next_of_kin_relationship,next_of_kin_mobile,next_of_kin_id_number,next_of_kin_address\n\
+PPP_C001,Jane Wanjiku,12345678,jane@example.com,0722000000,Mrs,individual,A001234567B,P.O. Box 100,Nairobi,123 Example Street,John Wanjiku,Spouse,0733000000,87654321,123 Example Street\n";
+
+pub struct MigrationParsedFile {
+    pub headers: Vec<String>,
+    pub rows: Vec<domain::MigrationRawRow>,
+}
+
+/// Parses a legacy-migration CSV by header name, preserving every raw
+/// cell untouched (no validation, no type coercion — that all happens
+/// server-side, on rows that stay staged rather than being dropped
+/// here). Only fails on CSV syntax itself being unreadable (an
+/// unterminated quote, wrong number of columns); a blank or
+/// nonsensical cell is the server's problem to flag as an exception,
+/// not this parser's to reject.
+pub fn parse_migration_csv(text: &str) -> Result<MigrationParsedFile, String> {
+    let mut reader = csv::ReaderBuilder::new().trim(csv::Trim::All).from_reader(text.as_bytes());
+    let headers: Vec<String> = reader
+        .headers()
+        .map_err(|e| format!("couldn't read the header row: {e}"))?
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    if headers.is_empty() {
+        return Err("The file has no header row.".to_string());
+    }
+
+    let mut rows = Vec::new();
+    for (idx, record) in reader.records().enumerate() {
+        let record = record.map_err(|e| format!("couldn't read row {}: {e}", idx + 2))?;
+        let mut raw_data = std::collections::HashMap::new();
+        for (i, header) in headers.iter().enumerate() {
+            raw_data.insert(header.clone(), record.get(i).unwrap_or("").to_string());
+        }
+        rows.push(domain::MigrationRawRow { source_row: idx as u32 + 1, raw_data });
+    }
+    Ok(MigrationParsedFile { headers, rows })
+}
+
 fn non_empty(s: &str) -> Option<String> {
     let s = s.trim();
     if s.is_empty() {

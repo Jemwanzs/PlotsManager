@@ -69,6 +69,7 @@ fn secondary_nav_items(is_platform_owner: bool) -> Vec<NavItem> {
         NavItem { href: "/finance", icon: IconName::Finance, label: "Finance" },
         NavItem { href: "/reports", icon: IconName::Reports, label: "Reports" },
         NavItem { href: "/sales/import", icon: IconName::Import, label: "Import sales" },
+        NavItem { href: "/migrations", icon: IconName::Import, label: "Legacy data migration" },
         NavItem { href: "/settings", icon: IconName::Settings, label: "Settings" },
     ];
     if is_platform_owner {
@@ -158,6 +159,7 @@ fn sidebar_nav_groups(is_platform_owner: bool) -> Vec<NavGroup> {
             children: vec![
                 NavChild { href: "/sales/import", label: "Import sales" },
                 NavChild { href: "/customers?import=1", label: "Import customers" },
+                NavChild { href: "/migrations", label: "Legacy data migration" },
             ],
         },
         NavGroup {

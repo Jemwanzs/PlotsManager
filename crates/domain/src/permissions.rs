@@ -197,6 +197,15 @@ pub const PERM_SETTINGS_MANAGE_ORGANIZATION: &str = "settings:manage_organizatio
 pub const PERM_DOCUMENTS_MANAGE: &str = "documents:manage";
 
 // ---------------------------------------------------------------
+// Migrations — the legacy-data staging/import framework
+// (`routes/migrations.rs`). One key for the whole flow (upload,
+// resolve exceptions, commit): this is an inherently admin-only,
+// whole-tenant-data-shaping capability, not something worth splitting
+// into finer actions the way documents/titles were.
+// ---------------------------------------------------------------
+pub const PERM_MIGRATIONS_MANAGE: &str = "migrations:manage";
+
+// ---------------------------------------------------------------
 // Titles — a plot's title/ownership history (`routes/title_records.rs`).
 // Viewing is gated by plots:view, same as the plot itself; only
 // recording/updating a title record needs its own key. No delete route
@@ -271,6 +280,8 @@ const REGISTRY: &[StaticPermissionDef] = &[
     StaticPermissionDef { key: PERM_SETTINGS_MANAGE_ORGANIZATION, label: "Manage organization settings", module: "Settings", feature: "Organization", sensitive: true },
 
     StaticPermissionDef { key: PERM_DOCUMENTS_MANAGE, label: "Upload/delete documents", module: "Documents", feature: "Document vault", sensitive: true },
+
+    StaticPermissionDef { key: PERM_MIGRATIONS_MANAGE, label: "Import legacy data (migration batches)", module: "Migrations", feature: "Legacy data import", sensitive: true },
 ];
 
 /// The registry as owned, wire-ready `PermissionDef`s — what

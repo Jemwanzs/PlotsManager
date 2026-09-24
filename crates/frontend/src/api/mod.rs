@@ -476,6 +476,56 @@ impl ApiClient {
         }
     }
 
+    pub async fn list_migration_batches(&self) -> Result<Vec<MigrationBatch>, ApiError> {
+        match self {
+            Self::Mock(api) => api.list_migration_batches().await,
+            Self::Http(api) => api.list_migration_batches().await,
+        }
+    }
+
+    pub async fn get_migration_batch(&self, id: Uuid) -> Result<MigrationBatch, ApiError> {
+        match self {
+            Self::Mock(api) => api.get_migration_batch(id).await,
+            Self::Http(api) => api.get_migration_batch(id).await,
+        }
+    }
+
+    pub async fn create_migration_batch(
+        &self,
+        input: CreateMigrationBatchInput,
+    ) -> Result<MigrationBatch, ApiError> {
+        match self {
+            Self::Mock(api) => api.create_migration_batch(input).await,
+            Self::Http(api) => api.create_migration_batch(input).await,
+        }
+    }
+
+    pub async fn list_migration_rows(&self, batch_id: Uuid) -> Result<Vec<MigrationStagingRow>, ApiError> {
+        match self {
+            Self::Mock(api) => api.list_migration_rows(batch_id).await,
+            Self::Http(api) => api.list_migration_rows(batch_id).await,
+        }
+    }
+
+    pub async fn update_migration_row(
+        &self,
+        batch_id: Uuid,
+        row_id: Uuid,
+        input: UpdateMigrationRowInput,
+    ) -> Result<MigrationStagingRow, ApiError> {
+        match self {
+            Self::Mock(api) => api.update_migration_row(batch_id, row_id, input).await,
+            Self::Http(api) => api.update_migration_row(batch_id, row_id, input).await,
+        }
+    }
+
+    pub async fn commit_migration_batch(&self, batch_id: Uuid) -> Result<MigrationCommitResult, ApiError> {
+        match self {
+            Self::Mock(api) => api.commit_migration_batch(batch_id).await,
+            Self::Http(api) => api.commit_migration_batch(batch_id).await,
+        }
+    }
+
     pub async fn update_map_polygons(
         &self,
         project_id: Uuid,
