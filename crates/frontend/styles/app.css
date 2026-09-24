@@ -185,6 +185,16 @@ a {
 .btn:active:not(:disabled) {
   transform: scale(0.97);
 }
+/* A smaller variant for dense, repeated inline actions — a row of
+   "Edit"/"Documents"/"Delete" buttons inside a table cell or card list
+   item (documents, title records, migration rows). Still a real tap
+   target (36px), just not the full 44px every primary-flow button
+   gets, so a row of two or three doesn't dominate its cell. */
+.btn-sm {
+  padding: 6px 12px;
+  min-height: 36px;
+  font-size: 0.82rem;
+}
 .btn-primary {
   background: var(--color-primary);
   color: var(--color-primary-contrast);
@@ -1143,18 +1153,31 @@ a {
 
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  /* `minmax(0, 1fr)`, not bare `1fr` — every multi-track grid in this
+     file uses this. Plain `1fr` is shorthand for `minmax(auto, 1fr)`,
+     and that `auto` minimum means a track never shrinks below its
+     content's own intrinsic width, no matter how narrow the grid gets
+     — the CSS Grid equivalent of the flexbox `min-width: auto` trap.
+     A track can then render wider than its fr-share and push the
+     whole grid past its container (this is what broke `.analytics-
+     grid-even` on a tablet-width viewport: two donut-chart cards each
+     rendering at their natural content width instead of shrinking to
+     fit, overflowing the page by the difference). `minmax(0, 1fr)`
+     keeps the exact same proportional sizing whenever content fits,
+     and only differs by actually letting a track shrink when it
+     wouldn't otherwise. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
   margin-bottom: var(--space-5);
 }
 @media (min-width: 640px) {
   .stat-grid {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 @media (min-width: 1024px) {
   .stat-grid {
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 }
 .stat-card {
@@ -1207,12 +1230,12 @@ a {
 }
 @media (min-width: 640px) {
   .card-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 @media (min-width: 1024px) {
   .card-grid {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -1231,7 +1254,7 @@ a {
 }
 @media (min-width: 640px) {
   .form-grid-2 {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 }
 
@@ -1454,7 +1477,7 @@ a {
 }
 @media (min-width: 1024px) {
   .section-grid-2 {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     align-items: start;
   }
   .section-grid-2 .span-full {
@@ -1480,7 +1503,7 @@ a {
 }
 @media (min-width: 1024px) {
   .analytics-grid {
-    grid-template-columns: 2fr 1fr;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   }
   .analytics-grid .card-span-full {
     grid-column: 1 / -1;
@@ -1499,7 +1522,7 @@ a {
 }
 @media (min-width: 768px) {
   .analytics-grid-even {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 }
 
@@ -1647,6 +1670,10 @@ a {
   flex-direction: column;
   gap: var(--space-2);
   width: 100%;
+  /* Same flex-shrink gotcha as `.legend-label` below, one level up:
+     as a flex item of `.donut-wrap`'s row layout, this also needs
+     `min-width: 0` to actually shrink narrower than its content. */
+  min-width: 0;
 }
 .chart-legend li {
   display: flex;
@@ -1663,6 +1690,14 @@ a {
 .legend-label {
   color: var(--color-text);
   flex: 1;
+  /* A flex item's default `min-width: auto` refuses to shrink below its
+     content's unwrapped width — the classic flexbox overflow gotcha.
+     A long label (a project name, a longer status) was pushing
+     `.donut-wrap` wider than its card, and that overflow propagated
+     all the way up to the page at the exact width band where
+     `.analytics-grid-even` splits into two narrower columns. */
+  min-width: 0;
+  overflow-wrap: break-word;
 }
 .legend-value {
   color: var(--color-text-muted);

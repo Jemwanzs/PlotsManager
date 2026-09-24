@@ -200,6 +200,8 @@ pub fn MigrationBatchDetailPage() -> impl IntoView {
                     .map(|result| match result {
                         Ok(list) => {
                             view! {
+                                <div class="card">
+                                <div class="table-scroll">
                                 <table class="data-table">
                                     <thead>
                                         <tr>
@@ -308,6 +310,8 @@ pub fn MigrationBatchDetailPage() -> impl IntoView {
                                         }).collect_view()}
                                     </tbody>
                                 </table>
+                                </div>
+                                </div>
                             }.into_any()
                         }
                         Err(e) => view! { <ErrorAlert message=format!("Couldn't load rows: {e}") /> }.into_any(),

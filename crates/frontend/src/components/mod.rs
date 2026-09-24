@@ -318,6 +318,7 @@ pub fn DocumentsPanel(entity_type: DocumentEntityType, entity_id: Uuid) -> impl 
                                 let api_for_url = api.clone();
                                 let api_for_delete = api_for_delete.clone();
                                 view! {
+                                    <div class="table-scroll">
                                     <table class="data-table">
                                         <thead>
                                             <tr>
@@ -377,6 +378,7 @@ pub fn DocumentsPanel(entity_type: DocumentEntityType, entity_id: Uuid) -> impl 
                                             }).collect_view()}
                                         </tbody>
                                     </table>
+                                    </div>
                                 }.into_any()
                             }
                             Err(e) => view! { <ErrorAlert message=format!("Couldn't load documents: {e}") /> }.into_any(),

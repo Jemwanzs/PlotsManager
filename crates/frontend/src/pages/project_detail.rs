@@ -1364,6 +1364,7 @@ fn TitleRecordsPanel(plot_id: Uuid) -> impl IntoView {
                             }.into_any(),
                             Ok(list) => {
                                 view! {
+                                    <div class="table-scroll">
                                     <table class="data-table">
                                         <thead>
                                             <tr>
@@ -1521,6 +1522,7 @@ fn TitleRecordsPanel(plot_id: Uuid) -> impl IntoView {
                                             }).collect_view()}
                                         </tbody>
                                     </table>
+                                    </div>
                                 }.into_any()
                             }
                             Err(e) => view! { <ErrorAlert message=format!("Couldn't load title history: {e}") /> }.into_any(),

@@ -168,6 +168,8 @@ pub fn Migrations() -> impl IntoView {
                             />
                         }.into_any(),
                         Ok(list) => view! {
+                            <div class="card">
+                            <div class="table-scroll">
                             <table class="data-table">
                                 <thead>
                                     <tr>
@@ -202,6 +204,8 @@ pub fn Migrations() -> impl IntoView {
                                     }).collect_view()}
                                 </tbody>
                             </table>
+                            </div>
+                            </div>
                         }.into_any(),
                         Err(e) => view! { <ErrorAlert message=format!("Couldn't load migration batches: {e}") /> }.into_any(),
                     })
