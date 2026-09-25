@@ -158,11 +158,17 @@ pub fn ProjectDetail() -> impl IntoView {
                     .map(|result| match result {
                         Ok(p) => {
                             let project_id_val = p.id;
+                            let commission_rate = p.commission_rate_percent;
                             view! {
                                 <div class="page-header">
                                     <div>
                                         <h1>{p.name.clone()}</h1>
                                         <p>{p.location.clone()} " · " {p.code.clone()}</p>
+                                        <ProjectCommissionEditor
+                                            project_id=project_id_val
+                                            current_rate=commission_rate
+                                            on_saved=move || project.refetch()
+                                        />
                                     </div>
                                     <div style="display:flex; gap: var(--space-2);">
                                         {can_bulk_import_plots.then(|| view! {
@@ -1641,6 +1647,125 @@ fn TitleRecordsPanel(plot_id: Uuid) -> impl IntoView {
             </Suspense>
         </div>
     }
+}
+
+/// Overrides the organization's default commission rate for every sale
+/// on this project — see `domain::UpdateProjectCommissionInput`'s own
+/// doc comment for why this is a narrow, single-purpose endpoint
+/// rather than a general "edit project" (which doesn't exist yet).
+/// Gated the same way the org-wide default is (`PERM_SETTINGS_MANAGE_
+/// ORGANIZATION`) — this is the same kind of compensation-adjacent
+/// configuration, just scoped to one project.
+#[component]
+fn ProjectCommissionEditor(
+    project_id: Uuid,
+    current_rate: Option<Decimal>,
+    on_saved: impl Fn() + Clone + Send + 'static,
+) -> impl IntoView {
+    let auth = use_auth();
+    if !has_permission(auth, domain::PERM_SETTINGS_MANAGE_ORGANIZATION) {
+        return view! {
+            <p class="meta mt-0">
+                {match current_rate {
+                    Some(r) => format!("Commission rate: {r}% (project override)"),
+                    None => "Commission rate: organization default".to_string(),
+                }}
+            </p>
+        }.into_any();
+    }
+    let api = use_api();
+
+    let open = RwSignal::new(false);
+    let rate_value = RwSignal::new(current_rate.map(|r| r.to_string()).unwrap_or_default());
+    let error = RwSignal::new(None::<String>);
+    let saving = RwSignal::new(false);
+
+    let api_for_save = api.clone();
+    let on_saved_for_save = on_saved.clone();
+    let save = move |rate: Option<Decimal>| {
+        if saving.get() {
+            return;
+        }
+        error.set(None);
+        saving.set(true);
+        let api = api_for_save.clone();
+        let on_saved = on_saved_for_save.clone();
+        spawn_local(async move {
+            match api.update_project_commission(project_id, domain::UpdateProjectCommissionInput { commission_rate_percent: rate }).await {
+                Ok(_) => {
+                    saving.set(false);
+                    open.set(false);
+                    on_saved();
+                }
+                Err(e) => {
+                    error.set(Some(format!("{e}")));
+                    saving.set(false);
+                }
+            }
+        });
+    };
+
+    view! {
+        <p class="meta mt-0" style="display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap;">
+            {move || match current_rate {
+                Some(r) => format!("Commission rate: {r}% (project override)"),
+                None => "Commission rate: organization default".to_string(),
+            }}
+            <button
+                type="button"
+                class="btn btn-secondary btn-sm"
+                on:click=move |_| open.update(|v| *v = !*v)
+            >
+                {move || if open.get() { "Never mind" } else { "Override" }}
+            </button>
+        </p>
+        {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+        {move || if open.get() {
+            let save_for_set = save.clone();
+            let save_for_clear = save.clone();
+            view! {
+                <div style="display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; margin-bottom: var(--space-3);">
+                    <input
+                        type="text"
+                        inputmode="decimal"
+                        style="max-width: 120px;"
+                        prop:value=rate_value
+                        on:input=move |ev| rate_value.set(event_target_value(&ev))
+                    />
+                    <button
+                        type="button"
+                        class="btn btn-primary btn-sm"
+                        disabled=move || saving.get()
+                        on:click=move |_| {
+                            let Ok(rate) = Decimal::from_str(rate_value.get().trim()) else {
+                                error.set(Some("Enter a valid rate.".to_string()));
+                                return;
+                            };
+                            if rate < Decimal::ZERO || rate > Decimal::from(100) {
+                                error.set(Some("Rate must be between 0 and 100%.".to_string()));
+                                return;
+                            }
+                            save_for_set(Some(rate));
+                        }
+                    >
+                        {move || if saving.get() { "Saving…" } else { "Save override" }}
+                    </button>
+                    {current_rate.is_some().then(|| view! {
+                        <button
+                            type="button"
+                            class="btn btn-secondary btn-sm"
+                            disabled=move || saving.get()
+                            on:click=move |_| save_for_clear(None)
+                        >
+                            "Clear override"
+                        </button>
+                    })}
+                </div>
+            }.into_any()
+        } else {
+            view! {}.into_any()
+        }}
+    }.into_any()
 }
 
 /// Cancel/repossess buttons for an *active* sale — see `domain::

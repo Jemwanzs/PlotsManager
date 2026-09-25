@@ -408,6 +408,7 @@ fn AgentReportTab() -> impl IntoView {
                                                 <th>"Quotations sent"</th>
                                                 <th>"Accepted"</th>
                                                 <th>"Conversion"</th>
+                                                <th>"Commission earned"</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -430,6 +431,7 @@ fn AgentReportTab() -> impl IntoView {
                                                             <td>{row.quotations_sent}</td>
                                                             <td>{row.quotations_accepted}</td>
                                                             <td>{conversion}</td>
+                                                            <td>{format_money(row.commission_earned, &currency.get())}</td>
                                                         </tr>
                                                     }
                                                 })

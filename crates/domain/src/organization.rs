@@ -152,6 +152,12 @@ pub struct OrganizationSettings {
     pub plot_numbering: NumberingConfig,
     pub project_numbering: NumberingConfig,
     pub finance_policy: FinancePolicy,
+    /// The default agent-commission rate (percent of `agreed_price`),
+    /// applied to every sale unless the project it's on has its own
+    /// `Project::commission_rate_percent` override — accrual tracking
+    /// only, computed once at sale creation
+    /// (`routes/sales.rs::execute_sale`), not a payout workflow.
+    pub default_commission_rate_percent: Decimal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +168,7 @@ pub struct UpdateOrganizationSettingsInput {
     pub plot_numbering: NumberingConfigInput,
     pub project_numbering: NumberingConfigInput,
     pub finance_policy: FinancePolicy,
+    pub default_commission_rate_percent: Decimal,
 }
 
 /// `POST /api/v1/settings/numbering/:entity_type/next` — the number that

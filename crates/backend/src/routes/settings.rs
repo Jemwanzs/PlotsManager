@@ -52,6 +52,7 @@ struct OrgSettingsRow {
     penalty_enabled: bool,
     penalty_rate_type: String,
     penalty_rate_value: Decimal,
+    default_commission_rate_percent: Decimal,
 }
 
 impl OrgSettingsRow {
@@ -128,7 +129,7 @@ async fn fetch_settings(
     let org: OrgSettingsRow = sqlx::query_as(
         r#"select name, currency, date_format, timezone, allocation_order,
                finance_grace_period_days, interest_enabled, interest_rate_type, interest_rate_value,
-               penalty_enabled, penalty_rate_type, penalty_rate_value
+               penalty_enabled, penalty_rate_type, penalty_rate_value, default_commission_rate_percent
            from organizations where id = $1"#,
     )
     .bind(organization_id)
@@ -163,6 +164,7 @@ async fn fetch_settings(
         plot_numbering: plot_row.into_config()?,
         project_numbering: project_row.into_config()?,
         finance_policy: org.finance_policy()?,
+        default_commission_rate_percent: org.default_commission_rate_percent,
     })
 }
 
@@ -241,6 +243,11 @@ async fn update_settings(
     validate_numbering(&input.plot_numbering)?;
     validate_numbering(&input.project_numbering)?;
     validate_finance_policy(&input.finance_policy)?;
+    if input.default_commission_rate_percent < Decimal::ZERO || input.default_commission_rate_percent > Decimal::from(100) {
+        return Err(AppError::bad_request(
+            "Default commission rate must be between 0 and 100%.",
+        ));
+    }
 
     let mut tx = state.db.begin().await?;
 
@@ -249,8 +256,9 @@ async fn update_settings(
                currency = $1, date_format = $2, timezone = $3,
                allocation_order = $4, finance_grace_period_days = $5,
                interest_enabled = $6, interest_rate_type = $7, interest_rate_value = $8,
-               penalty_enabled = $9, penalty_rate_type = $10, penalty_rate_value = $11
-           where id = $12"#,
+               penalty_enabled = $9, penalty_rate_type = $10, penalty_rate_value = $11,
+               default_commission_rate_percent = $12
+           where id = $13"#,
     )
     .bind(&currency)
     .bind(date_format)
@@ -263,6 +271,7 @@ async fn update_settings(
     .bind(input.finance_policy.penalty.enabled)
     .bind(to_pg(&input.finance_policy.penalty.rate_type))
     .bind(input.finance_policy.penalty.rate_value)
+    .bind(input.default_commission_rate_percent)
     .bind(auth.organization_id)
     .execute(&mut *tx)
     .await?;

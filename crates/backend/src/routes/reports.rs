@@ -181,6 +181,7 @@ struct AgentPerformanceSqlRow {
     sales_value: Decimal,
     quotations_sent: i64,
     quotations_accepted: i64,
+    commission_earned: Decimal,
 }
 
 async fn agent_performance_report(
@@ -213,13 +214,26 @@ async fn agent_performance_report(
                 and ($2::date is null or created_at::date >= $2)
                 and ($3::date is null or created_at::date <= $3)
             group by agent_id
+        ),
+        commission_agg as (
+            -- Excludes voided rows (a cancelled/repossessed sale's
+            -- commission) — accrual tracking only, not what's actually
+            -- been paid out (`database/migrations/0032_agent_commissions.sql`).
+            select agent_id, coalesce(sum(commission_amount), 0) as commission_earned
+            from agent_commissions
+            where organization_id = $1 and voided_at is null
+                and ($2::date is null or created_at::date >= $2)
+                and ($3::date is null or created_at::date <= $3)
+            group by agent_id
         )
-        select coalesce(s.agent_id, q.agent_id) as agent_id, u.full_name as agent_name,
+        select coalesce(s.agent_id, q.agent_id, c.agent_id) as agent_id, u.full_name as agent_name,
             coalesce(s.sales_count, 0) as sales_count, coalesce(s.sales_value, 0) as sales_value,
-            coalesce(q.sent, 0) as quotations_sent, coalesce(q.accepted, 0) as quotations_accepted
+            coalesce(q.sent, 0) as quotations_sent, coalesce(q.accepted, 0) as quotations_accepted,
+            coalesce(c.commission_earned, 0) as commission_earned
         from sales_agg s
         full outer join quotes_agg q on q.agent_id = s.agent_id
-        join users u on u.id = coalesce(s.agent_id, q.agent_id)
+        full outer join commission_agg c on c.agent_id = coalesce(s.agent_id, q.agent_id)
+        join users u on u.id = coalesce(s.agent_id, q.agent_id, c.agent_id)
         order by sales_value desc
         "#,
     )
@@ -238,6 +252,7 @@ async fn agent_performance_report(
             sales_value: r.sales_value,
             quotations_sent: r.quotations_sent as u32,
             quotations_accepted: r.quotations_accepted as u32,
+            commission_earned: r.commission_earned,
         })
         .collect();
 

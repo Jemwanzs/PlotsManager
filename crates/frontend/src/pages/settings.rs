@@ -109,6 +109,7 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
     let penalty_enabled = RwSignal::new(initial.finance_policy.penalty.enabled);
     let penalty_rate_type = RwSignal::new(rate_type_str(initial.finance_policy.penalty.rate_type).to_string());
     let penalty_rate_value = RwSignal::new(initial.finance_policy.penalty.rate_value.to_string());
+    let commission_rate_value = RwSignal::new(initial.default_commission_rate_percent.to_string());
 
     let error = RwSignal::new(None::<String>);
     let success = RwSignal::new(false);
@@ -183,6 +184,14 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
             error.set(Some("Rates can't be negative.".to_string()));
             return;
         }
+        let Ok(commission_rate_val) = Decimal::from_str(commission_rate_value.get().trim()) else {
+            error.set(Some("Enter a valid default commission rate.".to_string()));
+            return;
+        };
+        if commission_rate_val < Decimal::ZERO || commission_rate_val > Decimal::from(100) {
+            error.set(Some("Default commission rate must be between 0 and 100%.".to_string()));
+            return;
+        }
 
         submitting.set(true);
         let api = api.clone();
@@ -218,6 +227,7 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
                     rate_value: penalty_rate_val,
                 },
             },
+            default_commission_rate_percent: commission_rate_val,
         };
         spawn_local(async move {
             match api.update_settings(input).await {
@@ -245,6 +255,7 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
                     penalty_enabled.set(s.finance_policy.penalty.enabled);
                     penalty_rate_type.set(rate_type_str(s.finance_policy.penalty.rate_type).to_string());
                     penalty_rate_value.set(s.finance_policy.penalty.rate_value.to_string());
+                    commission_rate_value.set(s.default_commission_rate_percent.to_string());
                     success.set(true);
                 }
                 Err(e) => error.set(Some(format!("{e}"))),
@@ -512,6 +523,25 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
                         "\"Post a manual charge\" form. A charge is still only ever posted when "
                         "someone explicitly submits it."
                     </p>
+                </div>
+            </div>
+
+            <div class="card form-card" style="margin-top: var(--space-4)">
+                <h2 class="mt-0">"Agent commission"</h2>
+                <p class="meta mt-0">
+                    "Accrues automatically when a sale is recorded, as a percentage of the agreed "
+                    "price — accrual tracking only, not a payout workflow. A project can override "
+                    "this default from its own detail page."
+                </p>
+                <div class="field" style="max-width: 240px;">
+                    <label for="default-commission-rate">"Default rate (%)"</label>
+                    <input
+                        id="default-commission-rate"
+                        type="text"
+                        inputmode="decimal"
+                        prop:value=commission_rate_value
+                        on:input=move |ev| commission_rate_value.set(event_target_value(&ev))
+                    />
                 </div>
             </div>
 

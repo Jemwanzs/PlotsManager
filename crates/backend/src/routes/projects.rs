@@ -36,6 +36,10 @@ pub fn router() -> Router<AppState> {
             "/api/v1/projects/:project_id/plots/:plot_id/reallocate",
             put(reallocate_plot),
         )
+        .route(
+            "/api/v1/projects/:id/commission-rate",
+            put(update_project_commission),
+        )
 }
 
 #[derive(sqlx::FromRow)]
@@ -104,7 +108,11 @@ struct ProjectRow {
     status: String,
     assigned_manager_id: Option<Uuid>,
     created_at: DateTime<Utc>,
+    commission_rate_percent: Option<Decimal>,
 }
+
+const PROJECT_COLUMNS: &str = "id, organization_id, branch_id, name, code, location, original_title_number, \
+    total_size, area_unit, status, assigned_manager_id, created_at, commission_rate_percent";
 
 impl ProjectRow {
     fn into_domain(self) -> Result<Project, AppError> {
@@ -121,6 +129,7 @@ impl ProjectRow {
             status: from_pg("projects.status", &self.status)?,
             assigned_manager_id: self.assigned_manager_id,
             created_at: self.created_at,
+            commission_rate_percent: self.commission_rate_percent,
         })
     }
 }
@@ -154,14 +163,13 @@ async fn create_project(
         )));
     }
 
-    let row: ProjectRow = sqlx::query_as(
+    let row: ProjectRow = sqlx::query_as(&format!(
         r#"
         insert into projects (organization_id, name, code, location, total_size, area_unit, status, assigned_manager_id)
         values ($1, $2, $3, $4, $5, $6, 'planning', $7)
-        returning id, organization_id, branch_id, name, code, location, original_title_number,
-            total_size, area_unit, status, assigned_manager_id, created_at
+        returning {PROJECT_COLUMNS}
         "#,
-    )
+    ))
     .bind(auth.organization_id)
     .bind(name)
     .bind(&code)
@@ -180,13 +188,54 @@ async fn get_project(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Project>, AppError> {
-    let row: Option<ProjectRow> = sqlx::query_as(
+    let row: Option<ProjectRow> = sqlx::query_as(&format!(
         r#"
-        select id, organization_id, branch_id, name, code, location, original_title_number,
-            total_size, area_unit, status, assigned_manager_id, created_at
+        select {PROJECT_COLUMNS}
         from projects where id = $1 and organization_id = $2
         "#,
-    )
+    ))
+    .bind(id)
+    .bind(auth.organization_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let row = row.ok_or(AppError::NotFound)?;
+    Ok(Json(row.into_domain()?))
+}
+
+/// A narrow, single-purpose endpoint (see `domain::UpdateProjectCommissionInput`'s
+/// own doc comment for why this exists instead of a general "edit
+/// project", which doesn't exist yet) — overrides the organization's
+/// `default_commission_rate_percent` for every sale on this project,
+/// or clears the override with `commission_rate_percent: None`. Gated
+/// the same way every other org-wide financial policy setting is
+/// (`PERM_SETTINGS_MANAGE_ORGANIZATION`), since this is the same kind
+/// of compensation-adjacent configuration, just scoped to one project
+/// instead of the whole tenant.
+async fn update_project_commission(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(input): Json<domain::UpdateProjectCommissionInput>,
+) -> Result<Json<Project>, AppError> {
+    auth.require_permission(domain::PERM_SETTINGS_MANAGE_ORGANIZATION)?;
+
+    if let Some(rate) = input.commission_rate_percent {
+        if rate < Decimal::ZERO || rate > Decimal::from(100) {
+            return Err(AppError::bad_request(
+                "Commission rate must be between 0 and 100%.",
+            ));
+        }
+    }
+
+    let row: Option<ProjectRow> = sqlx::query_as(&format!(
+        r#"
+        update projects set commission_rate_percent = $1
+        where id = $2 and organization_id = $3
+        returning {PROJECT_COLUMNS}
+        "#,
+    ))
+    .bind(input.commission_rate_percent)
     .bind(id)
     .bind(auth.organization_id)
     .fetch_optional(&state.db)

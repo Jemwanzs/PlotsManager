@@ -36,6 +36,10 @@ pub struct Project {
     pub status: ProjectStatus,
     pub assigned_manager_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    /// Overrides the organization's `default_commission_rate_percent`
+    /// for every sale on this project — `None` means "use the org
+    /// default" (see `domain::OrganizationSettings`'s doc comment).
+    pub commission_rate_percent: Option<Decimal>,
 }
 
 /// One image plus one polygon set per project — the minimal v1 slice

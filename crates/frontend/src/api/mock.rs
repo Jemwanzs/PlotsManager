@@ -37,6 +37,7 @@ struct MockDb {
     date_format: String,
     timezone: String,
     finance_policy: domain::FinancePolicy,
+    default_commission_rate_percent: Decimal,
     plot_numbering: MockNumbering,
     project_numbering: MockNumbering,
     demo_user: User,
@@ -81,6 +82,18 @@ struct MockDb {
     /// added to `PlotSale`/the `sale_plots` tuple directly since both
     /// are read in many places that don't care about lifecycle state.
     sale_lifecycle: HashMap<Uuid, (domain::SaleLifecycleStatus, Option<String>, chrono::DateTime<Utc>)>,
+    agent_commissions: Vec<MockAgentCommission>,
+}
+
+/// Mirrors the real `agent_commissions` table (`database/migrations/
+/// 0032_agent_commissions.sql`) — accrual tracking only, no payout
+/// workflow.
+struct MockAgentCommission {
+    sale_id: Uuid,
+    agent_id: Uuid,
+    commission_amount: Decimal,
+    voided: bool,
+    created_at: chrono::DateTime<Utc>,
 }
 
 /// Mirrors the real backend's identical fix in `routes/
@@ -469,9 +482,29 @@ impl MockApi {
             status: ProjectStatus::Planning,
             assigned_manager_id: Some(db.demo_user.id),
             created_at: Utc::now(),
+            commission_rate_percent: None,
         };
         db.projects.push(project.clone());
         Ok(project)
+    }
+
+    pub async fn update_project_commission(
+        &self,
+        project_id: Uuid,
+        input: domain::UpdateProjectCommissionInput,
+    ) -> Result<Project, ApiError> {
+        settle(200).await;
+        if let Some(rate) = input.commission_rate_percent {
+            if rate < Decimal::ZERO || rate > Decimal::from(100) {
+                return Err(ApiError::InvalidCredentials(
+                    "Commission rate must be between 0 and 100%.".to_string(),
+                ));
+            }
+        }
+        let mut db = self.db.lock().unwrap();
+        let project = db.projects.iter_mut().find(|p| p.id == project_id).ok_or(ApiError::NotFound)?;
+        project.commission_rate_percent = input.commission_rate_percent;
+        Ok(project.clone())
     }
 
     pub async fn get_project(&self, id: Uuid) -> Result<Project, ApiError> {
@@ -932,6 +965,9 @@ impl MockApi {
         for account in db.loan_accounts.iter_mut().filter(|l| l.sale_id == sale_id) {
             account.status = LoanAccountStatus::Cancelled;
         }
+        for commission in db.agent_commissions.iter_mut().filter(|c| c.sale_id == sale_id) {
+            commission.voided = true;
+        }
         Ok(())
     }
 
@@ -972,6 +1008,9 @@ impl MockApi {
         }
         for account in db.loan_accounts.iter_mut().filter(|l| l.sale_id == sale_id) {
             account.status = LoanAccountStatus::RepossessedOrReallocated;
+        }
+        for commission in db.agent_commissions.iter_mut().filter(|c| c.sale_id == sale_id) {
+            commission.voided = true;
         }
         Ok(())
     }
@@ -2220,6 +2259,12 @@ impl MockApi {
             .filter(|q| in_range(q.created_at.date_naive()))
             .filter(|q| q.status == QuotationStatus::Accepted)
             .count() as u32;
+        let commission_earned: Decimal = db
+            .agent_commissions
+            .iter()
+            .filter(|c| !c.voided && in_range(c.created_at.date_naive()))
+            .map(|c| c.commission_amount)
+            .sum();
 
         let rows = if sales_count == 0 && quotations_sent == 0 {
             Vec::new()
@@ -2231,6 +2276,7 @@ impl MockApi {
                 sales_value,
                 quotations_sent,
                 quotations_accepted,
+                commission_earned,
             }]
         };
 
@@ -2931,12 +2977,18 @@ impl MockApi {
                 return Err(ApiError::InvalidCredentials("A rate can't be negative.".to_string()));
             }
         }
+        if input.default_commission_rate_percent < Decimal::ZERO || input.default_commission_rate_percent > Decimal::from(100) {
+            return Err(ApiError::InvalidCredentials(
+                "Default commission rate must be between 0 and 100%.".to_string(),
+            ));
+        }
 
         let mut db = self.db.lock().unwrap();
         db.organization.currency = currency;
         db.date_format = input.date_format.trim().to_string();
         db.timezone = input.timezone.trim().to_string();
         db.finance_policy = input.finance_policy.clone();
+        db.default_commission_rate_percent = input.default_commission_rate_percent;
         db.plot_numbering = MockNumbering {
             prefix: input.plot_numbering.prefix.trim().to_string(),
             include_year: input.plot_numbering.include_year,
@@ -3015,6 +3067,7 @@ fn build_settings(db: &MockDb) -> domain::OrganizationSettings {
             &db.project_numbering,
         ),
         finance_policy: db.finance_policy.clone(),
+        default_commission_rate_percent: db.default_commission_rate_percent,
     }
 }
 
@@ -3290,6 +3343,27 @@ fn execute_sale_locked(
             plot.status = new_status;
             plot.assigned_customer_id = Some(customer_id);
         }
+    }
+
+    // Accrual only, mirroring the real backend's identical logic in
+    // `routes/sales.rs::execute_sale` — no row at all when the
+    // effective rate is 0.
+    let rate = db
+        .plots
+        .iter()
+        .find(|p| p.id == plot_id)
+        .and_then(|p| db.projects.iter().find(|proj| proj.id == p.project_id))
+        .and_then(|proj| proj.commission_rate_percent)
+        .unwrap_or(db.default_commission_rate_percent);
+    if rate > Decimal::ZERO {
+        let commission_amount = (agreed_price * rate / Decimal::from(100)).round_dp(2);
+        db.agent_commissions.push(MockAgentCommission {
+            sale_id: sale.id,
+            agent_id,
+            commission_amount,
+            voided: false,
+            created_at: sale.created_at,
+        });
     }
 
     Ok(sale)
@@ -3683,6 +3757,7 @@ fn seed() -> MockDb {
             status: ProjectStatus::Active,
             assigned_manager_id: Some(demo_user.id),
             created_at: Utc::now(),
+            commission_rate_percent: None,
         });
 
         for n in 1..=plot_count {
@@ -3926,6 +4001,7 @@ fn seed() -> MockDb {
                 rate_value: Decimal::ZERO,
             },
         },
+        default_commission_rate_percent: Decimal::ZERO,
         plot_numbering,
         project_numbering,
         demo_user,
@@ -3960,5 +4036,6 @@ fn seed() -> MockDb {
         migration_batches: Vec::new(),
         migration_staging_rows: Vec::new(),
         sale_lifecycle: HashMap::new(),
+        agent_commissions: Vec::new(),
     }
 }

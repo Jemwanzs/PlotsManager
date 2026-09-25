@@ -70,6 +70,11 @@ pub struct AgentPerformanceRow {
     pub sales_value: Decimal,
     pub quotations_sent: u32,
     pub quotations_accepted: u32,
+    /// Sum of `agent_commissions.commission_amount` for this agent,
+    /// excluding voided rows (a cancelled/repossessed sale's
+    /// commission) — accrual tracking only, not what's actually been
+    /// paid out (`database/migrations/0032_agent_commissions.sql`).
+    pub commission_earned: Decimal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

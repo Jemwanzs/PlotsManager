@@ -231,6 +231,14 @@ impl HttpApi {
         self.post("/api/v1/projects", &input).await
     }
 
+    pub async fn update_project_commission(
+        &self,
+        project_id: Uuid,
+        input: domain::UpdateProjectCommissionInput,
+    ) -> Result<domain::Project, ApiError> {
+        self.put(&format!("/api/v1/projects/{project_id}/commission-rate"), &input).await
+    }
+
     pub async fn list_plots(&self, project_id: Uuid) -> Result<Vec<PlotWithColor>, ApiError> {
         self.get(&format!("/api/v1/projects/{project_id}/plots"))
             .await

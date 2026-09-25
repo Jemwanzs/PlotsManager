@@ -95,6 +95,17 @@ impl ApiClient {
         }
     }
 
+    pub async fn update_project_commission(
+        &self,
+        project_id: Uuid,
+        input: UpdateProjectCommissionInput,
+    ) -> Result<domain::Project, ApiError> {
+        match self {
+            Self::Mock(api) => api.update_project_commission(project_id, input).await,
+            Self::Http(api) => api.update_project_commission(project_id, input).await,
+        }
+    }
+
     pub async fn create_project(&self, input: CreateProjectInput) -> Result<domain::Project, ApiError> {
         match self {
             Self::Mock(api) => api.create_project(input).await,

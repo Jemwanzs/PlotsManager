@@ -239,6 +239,18 @@ pub struct CreateProjectInput {
     pub area_unit: AreaUnit,
 }
 
+/// `PUT /api/v1/projects/:id/commission-rate` — a narrow, single-purpose
+/// endpoint rather than a general "edit project" (which doesn't exist
+/// yet at all): the org-wide default commission rate needed a way to
+/// be overridden per project after the fact, without inventing a full
+/// project-editing feature just for this one field.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateProjectCommissionInput {
+    /// `None` clears the override, falling back to the organization's
+    /// default rate.
+    pub commission_rate_percent: Option<Decimal>,
+}
+
 /// A new plot within a project. `plot_number` must be unique **within
 /// its project** (docs/05's fix for the legacy system's global-uniqueness
 /// bug — see docs/02 §3). `side_1`/`side_2` are the plot's side lengths

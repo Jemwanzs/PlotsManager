@@ -369,6 +369,39 @@ pub(crate) async fn execute_sale(
             .await?;
     }
 
+    // Accrual only — no payout/settlement workflow (explicit product
+    // decision). Earned the moment the sale is recorded, on the full
+    // `agreed_price`, at the project's own rate if it has one, else the
+    // organization's default (`database/migrations/
+    // 0032_agent_commissions.sql`). No row at all when the effective
+    // rate is 0 — most tenants never configure commissions, and a sea
+    // of $0 rows in the agent-performance report would just be noise.
+    let rate: Decimal = sqlx::query_scalar(
+        r#"select coalesce(p.commission_rate_percent, o.default_commission_rate_percent)
+           from plots pl
+           join projects p on p.id = pl.project_id
+           join organizations o on o.id = p.organization_id
+           where pl.id = $1"#,
+    )
+    .bind(params.plot_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if rate > Decimal::ZERO {
+        let commission_amount = (params.agreed_price * rate / Decimal::from(100)).round_dp(2);
+        sqlx::query(
+            r#"insert into agent_commissions (organization_id, sale_id, agent_id, rate_percent, agreed_price, commission_amount)
+               values ($1, $2, $3, $4, $5, $6)"#,
+        )
+        .bind(organization_id)
+        .bind(sale_id)
+        .bind(params.agent_id)
+        .bind(rate)
+        .bind(params.agreed_price)
+        .bind(commission_amount)
+        .execute(&mut **tx)
+        .await?;
+    }
+
     let sale: PlotSaleRow = sqlx::query_as(
         r#"select id, plot_id, customer_id, organization_id, agent_id, payment_mode, agreed_price, created_at
            from plot_sales where id = $1"#,
@@ -444,6 +477,11 @@ async fn cancel_sale(
     .await?;
 
     sqlx::query("update plot_loan_accounts set status = 'cancelled' where sale_id = $1")
+        .bind(sale_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("update agent_commissions set voided_at = now() where sale_id = $1 and voided_at is null")
         .bind(sale_id)
         .execute(&mut *tx)
         .await?;
@@ -535,6 +573,11 @@ async fn repossess_sale(
     .await?;
 
     sqlx::query("update plot_loan_accounts set status = 'repossessed_or_reallocated' where sale_id = $1")
+        .bind(sale_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("update agent_commissions set voided_at = now() where sale_id = $1 and voided_at is null")
         .bind(sale_id)
         .execute(&mut *tx)
         .await?;
