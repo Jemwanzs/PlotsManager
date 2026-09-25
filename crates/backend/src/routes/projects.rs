@@ -5,7 +5,7 @@ use domain::{
     BulkImportResult, BulkImportRowError, CreatePlotInput, CreateProjectInput, Plot,
     PlotCommercialSummary, PlotLoanAccount, PlotSaleSummary, PlotWithColor, Project,
     ProjectSummary, UpdatePlotInput, PERM_PLOTS_BULK_IMPORT, PERM_PLOTS_CREATE, PERM_PLOTS_EDIT,
-    PERM_PROJECTS_CREATE,
+    PERM_PLOTS_TRANSACTIONS_CANCEL, PERM_PROJECTS_CREATE,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -31,6 +31,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/:project_id/plots/:plot_id/commercial-summary",
             get(get_plot_commercial_summary),
+        )
+        .route(
+            "/api/v1/projects/:project_id/plots/:plot_id/reallocate",
+            put(reallocate_plot),
         )
 }
 
@@ -415,6 +419,39 @@ async fn update_plot(
     Ok(Json(row.into_domain()?))
 }
 
+/// The other half of cancel/repossess (`routes/sales.rs`): frees a
+/// `Cancelled` or `Blocked` plot back to `Available` so it can be sold
+/// again. Deliberately per-plot rather than per-sale — a cancelled
+/// multi-plot sale's plots might get reallocated separately, on their
+/// own schedule, not necessarily all at once. Doesn't touch the old
+/// `plot_sales`/`plot_loan_accounts` rows — they stay as history.
+async fn reallocate_plot(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((project_id, plot_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Plot>, AppError> {
+    auth.require_permission(PERM_PLOTS_TRANSACTIONS_CANCEL)?;
+    ensure_project_in_org(&state, project_id, auth.organization_id).await?;
+
+    let row: Option<PlotRow> = sqlx::query_as(&format!(
+        r#"
+        update plots
+        set status = 'available', assigned_customer_id = null
+        where id = $1 and project_id = $2 and status in ('cancelled', 'blocked')
+        returning {PLOT_COLUMNS}
+        "#,
+    ))
+    .bind(plot_id)
+    .bind(project_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let row = row.ok_or_else(|| {
+        AppError::conflict("This plot isn't cancelled or blocked, so there's nothing to reallocate.")
+    })?;
+    Ok(Json(row.into_domain()?))
+}
+
 /// Best-effort bulk import (see `domain::BulkImportResult`'s module
 /// docs) — a CSV upload during tenant onboarding, parsed to
 /// `CreatePlotInput` rows client-side and posted here as JSON.
@@ -488,6 +525,9 @@ struct PlotCommercialRow {
     payment_mode: Option<String>,
     agreed_price: Option<Decimal>,
     sale_created_at: Option<DateTime<Utc>>,
+    sale_status: Option<String>,
+    sale_status_reason: Option<String>,
+    sale_status_changed_at: Option<DateTime<Utc>>,
     // loan account (null for a full-cash sale, or no sale at all)
     loan_id: Option<Uuid>,
     account_number: Option<String>,
@@ -525,7 +565,8 @@ async fn get_plot_commercial_summary(
             pl.dimension_unit, pl.asking_price, pl.minimum_price, pl.status, pl.map_feature_id,
             pl.assigned_customer_id, pl.created_at,
             ps.id as ps_id, ps.customer_id, c.full_name as customer_name, ps.payment_mode, ps.agreed_price,
-            ps.created_at as sale_created_at,
+            ps.created_at as sale_created_at, ps.status as sale_status, ps.status_reason as sale_status_reason,
+            ps.status_changed_at as sale_status_changed_at,
             pla.id as loan_id, pla.account_number, pla.sale_id, pla.principal, pla.interest_rate,
             pla.deposit_required, pla.deposit_paid, pla.instalment_amount, pla.repayment_frequency_days,
             pla.start_date, pla.status as loan_status, pla.amount_paid, pla.outstanding_balance,
@@ -608,11 +649,18 @@ async fn get_plot_commercial_summary(
             };
 
             Some(PlotSaleSummary {
+                sale_id: row.ps_id.expect("ps_id is Some whenever customer_id is Some — same left-joined row"),
                 customer_id,
                 customer_name,
                 payment_mode: from_pg("plot_sales.payment_mode", &payment_mode)?,
                 agreed_price,
                 created_at,
+                lifecycle_status: from_pg(
+                    "plot_sales.status",
+                    row.sale_status.as_deref().unwrap_or("active"),
+                )?,
+                status_reason: row.sale_status_reason.clone(),
+                status_changed_at: row.sale_status_changed_at,
                 loan_account,
                 loan_status_label,
                 loan_status_color,

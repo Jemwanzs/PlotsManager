@@ -3,7 +3,7 @@
 //! real API responses) need the *same* mapping — see the module docs on
 //! `api_types` for why that means it lives here, not in either crate.
 
-use crate::{ApprovalStatus, LeadStage, LoanAccountStatus, PlotStatus, QuotationStatus};
+use crate::{ApprovalStatus, LeadStage, LoanAccountStatus, PlotStatus, QuotationStatus, SaleLifecycleStatus};
 
 /// Matches the suggested defaults in docs/05-project-and-plot-management.md.
 /// Organisations can reconfigure both per docs/05 once `plot_status_config`
@@ -67,6 +67,14 @@ pub fn quotation_status_meta(status: QuotationStatus, is_expired: bool) -> (&'st
         QuotationStatus::Sent => ("Sent", "#38bdf8"),
         QuotationStatus::Accepted => ("Accepted", "#16a34a"),
         QuotationStatus::Rejected => ("Rejected", "#dc2626"),
+    }
+}
+
+pub fn sale_lifecycle_status_meta(status: SaleLifecycleStatus) -> (&'static str, &'static str) {
+    match status {
+        SaleLifecycleStatus::Active => ("Active", "#16a34a"),
+        SaleLifecycleStatus::Cancelled => ("Cancelled", "#78350f"),
+        SaleLifecycleStatus::Repossessed => ("Repossessed", "#111827"),
     }
 }
 

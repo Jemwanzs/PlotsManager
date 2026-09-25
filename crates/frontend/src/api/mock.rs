@@ -74,6 +74,25 @@ struct MockDb {
     title_records: Vec<domain::TitleRecord>,
     migration_batches: Vec<domain::MigrationBatch>,
     migration_staging_rows: Vec<domain::MigrationStagingRow>,
+    /// A sale's lifecycle beyond "exists" — absent means still `Active`
+    /// (the overwhelming majority). Mirrors `plot_sales.status`/
+    /// `status_reason`/`status_changed_at` (`database/migrations/
+    /// 0030_sale_lifecycle.sql`); kept as a side-table rather than
+    /// added to `PlotSale`/the `sale_plots` tuple directly since both
+    /// are read in many places that don't care about lifecycle state.
+    sale_lifecycle: HashMap<Uuid, (domain::SaleLifecycleStatus, Option<String>, chrono::DateTime<Utc>)>,
+}
+
+/// `Active` when a sale has no `sale_lifecycle` entry — the default
+/// every sale starts at and the overwhelming majority never leave.
+fn sale_lifecycle_of(
+    db: &MockDb,
+    sale_id: Uuid,
+) -> (domain::SaleLifecycleStatus, Option<String>, Option<chrono::DateTime<Utc>>) {
+    match db.sale_lifecycle.get(&sale_id) {
+        Some((status, reason, changed_at)) => (*status, reason.clone(), Some(*changed_at)),
+        None => (domain::SaleLifecycleStatus::Active, None, None),
+    }
 }
 
 /// Mirrors the real `documents` table (`database/migrations/
@@ -618,12 +637,17 @@ impl MockApi {
                     })
                     .collect();
 
+                let (lifecycle_status, status_reason, status_changed_at) = sale_lifecycle_of(&db, s.id);
                 Some(domain::PlotSaleSummary {
+                    sale_id: s.id,
                     customer_id: customer.id,
                     customer_name: customer.full_name.clone(),
                     payment_mode: s.payment_mode,
                     agreed_price: s.agreed_price,
                     created_at: s.created_at,
+                    lifecycle_status,
+                    status_reason,
+                    status_changed_at,
                     loan_account,
                     loan_status_label,
                     loan_status_color,
@@ -857,6 +881,89 @@ impl MockApi {
         }
 
         Ok(sale)
+    }
+
+    pub async fn cancel_sale(&self, sale_id: Uuid, input: domain::CancelSaleInput) -> Result<(), ApiError> {
+        settle(200).await;
+        let mut db = self.db.lock().unwrap();
+        if !db.sales.iter().any(|s| s.id == sale_id) {
+            return Err(ApiError::NotFound);
+        }
+        if sale_lifecycle_of(&db, sale_id).0 != domain::SaleLifecycleStatus::Active {
+            return Err(ApiError::InvalidCredentials(
+                "This sale has already been cancelled or repossessed.".to_string(),
+            ));
+        }
+        let reason = input.reason.filter(|s| !s.trim().is_empty());
+        db.sale_lifecycle.insert(sale_id, (domain::SaleLifecycleStatus::Cancelled, reason, Utc::now()));
+
+        let plot_ids: Vec<Uuid> = db.sale_plots.iter().filter(|(sid, _)| *sid == sale_id).map(|(_, p)| *p).collect();
+        for plot in db.plots.iter_mut().filter(|p| plot_ids.contains(&p.id)) {
+            plot.status = PlotStatus::Cancelled;
+            plot.assigned_customer_id = None;
+        }
+        for account in db.loan_accounts.iter_mut().filter(|l| l.sale_id == sale_id) {
+            account.status = LoanAccountStatus::Cancelled;
+        }
+        Ok(())
+    }
+
+    pub async fn repossess_sale(&self, sale_id: Uuid, input: domain::RepossessSaleInput) -> Result<(), ApiError> {
+        settle(200).await;
+        let mut db = self.db.lock().unwrap();
+        if !db.sales.iter().any(|s| s.id == sale_id) {
+            return Err(ApiError::NotFound);
+        }
+        if sale_lifecycle_of(&db, sale_id).0 != domain::SaleLifecycleStatus::Active {
+            return Err(ApiError::InvalidCredentials(
+                "This sale has already been cancelled or repossessed.".to_string(),
+            ));
+        }
+        match db.loan_accounts.iter().find(|l| l.sale_id == sale_id).map(|l| l.status) {
+            None => {
+                return Err(ApiError::InvalidCredentials(
+                    "This sale has no loan account — repossession only applies to Lipa Pole Pole sales that still owe a balance.".to_string(),
+                ));
+            }
+            Some(LoanAccountStatus::FullyPaid)
+            | Some(LoanAccountStatus::Cancelled)
+            | Some(LoanAccountStatus::Closed)
+            | Some(LoanAccountStatus::RepossessedOrReallocated) => {
+                return Err(ApiError::InvalidCredentials(
+                    "This loan account is already settled or closed — there's nothing to repossess.".to_string(),
+                ));
+            }
+            _ => {}
+        }
+        let reason = input.reason.filter(|s| !s.trim().is_empty());
+        db.sale_lifecycle.insert(sale_id, (domain::SaleLifecycleStatus::Repossessed, reason, Utc::now()));
+
+        let plot_ids: Vec<Uuid> = db.sale_plots.iter().filter(|(sid, _)| *sid == sale_id).map(|(_, p)| *p).collect();
+        for plot in db.plots.iter_mut().filter(|p| plot_ids.contains(&p.id)) {
+            plot.status = PlotStatus::Blocked;
+            plot.assigned_customer_id = None;
+        }
+        for account in db.loan_accounts.iter_mut().filter(|l| l.sale_id == sale_id) {
+            account.status = LoanAccountStatus::RepossessedOrReallocated;
+        }
+        Ok(())
+    }
+
+    pub async fn reallocate_plot(&self, project_id: Uuid, plot_id: Uuid) -> Result<Plot, ApiError> {
+        settle(150).await;
+        let mut db = self.db.lock().unwrap();
+        let plot = db.plots.iter_mut().find(|p| p.id == plot_id && p.project_id == project_id);
+        let Some(plot) = plot else {
+            return Err(ApiError::NotFound);
+        };
+        if !matches!(plot.status, PlotStatus::Cancelled | PlotStatus::Blocked) {
+            return Err(ApiError::InvalidCredentials(
+                "This plot isn't cancelled or blocked, so there's nothing to reallocate.".to_string(),
+            ));
+        }
+        plot.status = PlotStatus::Available;
+        plot.assigned_customer_id = None;
+        Ok(plot.clone())
     }
 
     pub async fn get_loan_account(&self, id: Uuid) -> Result<LoanAccountDetail, ApiError> {
@@ -3056,9 +3163,26 @@ fn execute_sale_locked(
         return Err(ApiError::NotFound);
     }
 
-    let already_sold = db.sales.iter().any(|s| s.plot_id == plot_id)
-        || db.sale_plots.iter().any(|(_, p)| *p == plot_id);
-    if already_sold {
+    // Mirrors the real backend's identical guard in
+    // `routes/sales.rs::execute_sale`: the partial-uniqueness fix only
+    // stops a *second active* sale on the same plot, not a brand new
+    // one on a `Cancelled`/`Blocked` plot left behind by a prior
+    // cancel/repossess — that needs its own check, directing the
+    // caller through `reallocate_plot` first.
+    if let Some(plot) = db.plots.iter().find(|p| p.id == plot_id) {
+        if matches!(plot.status, PlotStatus::Cancelled | PlotStatus::Blocked) {
+            return Err(ApiError::InvalidCredentials(
+                "This plot's previous sale was cancelled or repossessed — reallocate it before starting a new sale.".to_string(),
+            ));
+        }
+    }
+
+    let plot_has_active_sale = |db: &MockDb, id: Uuid| {
+        db.sale_plots.iter().any(|(sid, p)| {
+            *p == id && sale_lifecycle_of(db, *sid).0 == domain::SaleLifecycleStatus::Active
+        })
+    };
+    if plot_has_active_sale(db, plot_id) {
         return Err(ApiError::InvalidCredentials(
             "This plot already has an active sale.".to_string(),
         ));
@@ -3069,9 +3193,7 @@ fn execute_sale_locked(
                 "The same plot can't be listed as both the primary plot and an additional one.".to_string(),
             ));
         }
-        let extra_already_sold = db.sales.iter().any(|s| s.plot_id == extra_plot_id)
-            || db.sale_plots.iter().any(|(_, p)| *p == extra_plot_id);
-        if extra_already_sold {
+        if plot_has_active_sale(db, extra_plot_id) {
             return Err(ApiError::InvalidCredentials(
                 "One of the additional plots already has an active sale.".to_string(),
             ));
@@ -3185,7 +3307,9 @@ fn insert_bulk_sale_locked(db: &mut MockDb, input: &BulkSaleRow) -> Result<(), A
             ))
         })?;
 
-    if db.sales.iter().any(|s| s.plot_id == plot_id) {
+    if db.sale_plots.iter().any(|(sid, p)| {
+        *p == plot_id && sale_lifecycle_of(db, *sid).0 == domain::SaleLifecycleStatus::Active
+    }) {
         return Err(ApiError::InvalidCredentials(
             "This plot already has an active sale.".to_string(),
         ));
@@ -3797,5 +3921,6 @@ fn seed() -> MockDb {
         title_records: Vec::new(),
         migration_batches: Vec::new(),
         migration_staging_rows: Vec::new(),
+        sale_lifecycle: HashMap::new(),
     }
 }

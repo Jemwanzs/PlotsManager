@@ -18,7 +18,7 @@ use crate::format::{format_money, format_payment_mode};
 use domain::{
     MapFeature, MapPolygons, PaymentMode, PlotStatus, PERM_PLOTS_BULK_IMPORT, PERM_PLOTS_CREATE,
     PERM_PLOTS_EDIT, PERM_PLOTS_MAP_EDIT_BOUNDARIES, PERM_PLOTS_MAP_LINK, PERM_PLOTS_MAP_UPLOAD,
-    PERM_PLOTS_TRANSACTIONS_CREATE, PERM_QUOTES_CREATE,
+    PERM_PLOTS_TRANSACTIONS_CANCEL, PERM_PLOTS_TRANSACTIONS_CREATE, PERM_QUOTES_CREATE,
 };
 
 const ALL_STATUSES: &[PlotStatus] = &[
@@ -39,13 +39,32 @@ const ALL_STATUSES: &[PlotStatus] = &[
 /// Plots in these states have no sale attached yet — the only ones a new
 /// sale/reservation can be started from. Everything else already has an
 /// active `PlotSale` (see `plot_sales_one_active_per_plot` in
-/// database/migrations/0001_init.sql) and must go through a different
-/// workflow (cancellation, restructure, etc. — not built yet) to change.
+/// database/migrations/0001_init.sql) and must go through `cancel_sale`/
+/// `repossess_sale` (`can_cancel_sale` below) — or, once one of those has
+/// run, `reallocate_plot` (`can_reallocate` below) — to come back here.
 fn can_start_sale(status: PlotStatus) -> bool {
     matches!(
         status,
         PlotStatus::Available | PlotStatus::Selected | PlotStatus::TemporarilyHeld
     )
+}
+
+/// Plots with an active sale still in progress — eligible for
+/// `cancel_sale`/`repossess_sale`. `TransferInProgress`/`Transferred`
+/// are deliberately excluded: once a legal transfer has started,
+/// unwinding it needs a more formal process than this quick action.
+fn can_cancel_sale(status: PlotStatus) -> bool {
+    matches!(
+        status,
+        PlotStatus::Reserved | PlotStatus::Booked | PlotStatus::UnderApproval | PlotStatus::Sold
+    )
+}
+
+/// The two terminal states `cancel_sale`/`repossess_sale` leave a plot
+/// in — both eligible to be freed back to `Available` via
+/// `reallocate_plot`.
+fn can_reallocate(status: PlotStatus) -> bool {
+    matches!(status, PlotStatus::Cancelled | PlotStatus::Blocked)
 }
 
 /// A plain function, not a closure stored in a `let` — reactive view
@@ -113,6 +132,7 @@ pub fn ProjectDetail() -> impl IntoView {
         }
     });
 
+    let api_for_reallocate = api.clone();
     let plots = LocalResource::new(move || {
         let api = api.clone();
         async move {
@@ -323,7 +343,67 @@ pub fn ProjectDetail() -> impl IntoView {
                             <p>"Dimensions: " {dimensions_text}</p>
                             {pwc.plot.title_number.clone().map(|t| view! { <p>"Title: " {t}</p> })}
 
-                            <PlotCommercialPosition project_id=pwc.plot.project_id plot_id=plot_id />
+                            <PlotCommercialPosition
+                                project_id=pwc.plot.project_id
+                                plot_id=plot_id
+                                on_changed=move || {
+                                    selected.set(None);
+                                    plots.refetch();
+                                }
+                            />
+
+                            {can_reallocate(pwc.plot.status).then(|| {
+                                let can_cancel = has_permission(auth, PERM_PLOTS_TRANSACTIONS_CANCEL);
+                                let reallocate_error = RwSignal::new(None::<String>);
+                                let reallocating = RwSignal::new(false);
+                                let project_id_for_reallocate = pwc.plot.project_id;
+                                view! {
+                                    <div class="card form-card" style="margin-bottom: var(--space-5)">
+                                        <p class="mt-0">
+                                            "This plot's previous sale ended without completing — "
+                                            "reallocate it to make it available for a new sale."
+                                        </p>
+                                        {move || reallocate_error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+                                        {can_cancel.then(|| {
+                                            let api = api_for_reallocate.clone();
+                                            view! {
+                                                <button
+                                                    type="button"
+                                                    class="btn btn-primary"
+                                                    disabled=move || reallocating.get()
+                                                    on:click=move |_| {
+                                                        if reallocating.get() {
+                                                            return;
+                                                        }
+                                                        reallocate_error.set(None);
+                                                        reallocating.set(true);
+                                                        let api = api.clone();
+                                                        spawn_local(async move {
+                                                            match api.reallocate_plot(project_id_for_reallocate, plot_id).await {
+                                                                // Same ordering as `SaleLifecycleActions`: clear
+                                                                // `reallocating` before `selected.set(None)`, which
+                                                                // unmounts this button (and disposes its signals)
+                                                                // synchronously — writing to it after would panic.
+                                                                Ok(_) => {
+                                                                    reallocating.set(false);
+                                                                    selected.set(None);
+                                                                    plots.refetch();
+                                                                }
+                                                                Err(e) => {
+                                                                    reallocate_error.set(Some(format!("{e}")));
+                                                                    reallocating.set(false);
+                                                                }
+                                                            }
+                                                        });
+                                                    }
+                                                >
+                                                    {move || if reallocating.get() { "Reallocating…" } else { "Reallocate this plot" }}
+                                                </button>
+                                            }
+                                        })}
+                                    </div>
+                                }
+                            })}
 
                             <DocumentsPanel entity_type=domain::DocumentEntityType::Plot entity_id=plot_id />
 
@@ -963,7 +1043,11 @@ fn BulkPlotImport(project_id: Uuid, on_imported: impl Fn() + Clone + Send + 'sta
 /// single status would hide exactly the distinction this exists to
 /// show.
 #[component]
-fn PlotCommercialPosition(project_id: Uuid, plot_id: Uuid) -> impl IntoView {
+fn PlotCommercialPosition(
+    project_id: Uuid,
+    plot_id: Uuid,
+    on_changed: impl Fn() + Clone + Send + 'static,
+) -> impl IntoView {
     let api = use_api();
     let currency = use_currency();
 
@@ -977,6 +1061,7 @@ fn PlotCommercialPosition(project_id: Uuid, plot_id: Uuid) -> impl IntoView {
             <Suspense fallback=|| view! { <LoadingState label="Loading commercial position…" /> }>
                 {move || {
                     let currency = currency.get();
+                    let on_changed = on_changed.clone();
                     summary
                         .get()
                         .map(|wrapped| wrapped.take())
@@ -987,7 +1072,29 @@ fn PlotCommercialPosition(project_id: Uuid, plot_id: Uuid) -> impl IntoView {
                                 }.into_any(),
                                 Some(sale) => {
                                     let purchase_type = format_payment_mode(sale.payment_mode);
+                                    // Belt-and-suspenders: the sale's own lifecycle is the
+                                    // primary gate, `can_cancel_sale` the secondary one — a
+                                    // plot already `TransferInProgress`/`Transferred` never
+                                    // shows cancel/repossess even if its sale is somehow
+                                    // still `Active` in the data.
+                                    let is_active = sale.lifecycle_status == domain::SaleLifecycleStatus::Active
+                                        && can_cancel_sale(s.plot.status);
+                                    let sale_id = sale.sale_id;
+                                    let lifecycle_banner = (!is_active).then(|| {
+                                        let (label, color) = domain::sale_lifecycle_status_meta(sale.lifecycle_status);
+                                        let when = sale.status_changed_at.map(|d| d.format("%d %b %Y").to_string()).unwrap_or_default();
+                                        view! {
+                                            <div class="alert alert-warning" style="margin-bottom: var(--space-3)">
+                                                <p class="mt-0">
+                                                    <StatusBadge label=label.to_string() color=color.to_string() />
+                                                    " on " {when}
+                                                </p>
+                                                {sale.status_reason.clone().map(|r| view! { <p class="meta mt-0">"Reason: " {r}</p> })}
+                                            </div>
+                                        }
+                                    });
                                     view! {
+                                        {lifecycle_banner}
                                         <div class="form-grid-2 commercial-position-grid">
                                             <div>
                                                 <span class="meta">"Customer / Buyer"</span>
@@ -1078,6 +1185,9 @@ fn PlotCommercialPosition(project_id: Uuid, plot_id: Uuid) -> impl IntoView {
                                                 }
                                             }}
                                         </div>
+                                        {is_active.then(|| view! {
+                                            <SaleLifecycleActions sale_id=sale_id on_changed=on_changed.clone() />
+                                        })}
                                     }.into_any()
                                 }
                             },
@@ -1531,6 +1641,153 @@ fn TitleRecordsPanel(plot_id: Uuid) -> impl IntoView {
             </Suspense>
         </div>
     }
+}
+
+/// Cancel/repossess buttons for an *active* sale — see `domain::
+/// SaleLifecycleStatus`'s module docs and `routes/sales.rs::cancel_sale`/
+/// `repossess_sale`. Only rendered by `PlotCommercialPosition` when
+/// `sale.lifecycle_status == Active`; permission-gated on top of that
+/// (renders nothing for a caller without `PERM_PLOTS_TRANSACTIONS_CANCEL`,
+/// same "just don't show it" pattern as everywhere else in this file
+/// rather than showing a disabled button).
+#[component]
+fn SaleLifecycleActions(sale_id: Uuid, on_changed: impl Fn() + Clone + Send + 'static) -> impl IntoView {
+    let auth = use_auth();
+    if !has_permission(auth, PERM_PLOTS_TRANSACTIONS_CANCEL) {
+        return view! {}.into_any();
+    }
+    let api = use_api();
+
+    let cancel_open = RwSignal::new(false);
+    let repossess_open = RwSignal::new(false);
+    let cancel_reason = RwSignal::new(String::new());
+    let repossess_reason = RwSignal::new(String::new());
+    let error = RwSignal::new(None::<String>);
+    let saving = RwSignal::new(false);
+
+    let api_for_cancel = api.clone();
+    let on_changed_for_cancel = on_changed.clone();
+    let on_cancel = move |_| {
+        if saving.get() {
+            return;
+        }
+        error.set(None);
+        saving.set(true);
+        let api = api_for_cancel.clone();
+        let on_changed = on_changed_for_cancel.clone();
+        let reason = Some(cancel_reason.get()).filter(|s| !s.trim().is_empty());
+        spawn_local(async move {
+            match api.cancel_sale(sale_id, domain::CancelSaleInput { reason }).await {
+                // `saving.set(false)` before `on_changed()`, never after:
+                // the caller's `on_changed` sets `selected` to `None`,
+                // which unmounts this whole component (and disposes its
+                // signals) synchronously — writing to `saving` afterward
+                // panics ("tried to access a reactive value ... already
+                // been disposed").
+                Ok(_) => {
+                    saving.set(false);
+                    on_changed();
+                }
+                Err(e) => {
+                    error.set(Some(format!("{e}")));
+                    saving.set(false);
+                }
+            }
+        });
+    };
+
+    let api_for_repossess = api.clone();
+    let on_changed_for_repossess = on_changed.clone();
+    let on_repossess = move |_| {
+        if saving.get() {
+            return;
+        }
+        error.set(None);
+        saving.set(true);
+        let api = api_for_repossess.clone();
+        let on_changed = on_changed_for_repossess.clone();
+        let reason = Some(repossess_reason.get()).filter(|s| !s.trim().is_empty());
+        spawn_local(async move {
+            match api.repossess_sale(sale_id, domain::RepossessSaleInput { reason }).await {
+                Ok(_) => {
+                    saving.set(false);
+                    on_changed();
+                }
+                Err(e) => {
+                    error.set(Some(format!("{e}")));
+                    saving.set(false);
+                }
+            }
+        });
+    };
+
+    view! {
+        <div style="margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--color-border);">
+            {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+            <div style="display: flex; gap: var(--space-2); flex-wrap: wrap;">
+                <button
+                    type="button"
+                    class="btn btn-secondary btn-sm"
+                    on:click=move |_| cancel_open.update(|v| *v = !*v)
+                >
+                    {move || if cancel_open.get() { "Never mind" } else { "Cancel sale" }}
+                </button>
+                <button
+                    type="button"
+                    class="btn btn-danger btn-sm"
+                    on:click=move |_| repossess_open.update(|v| *v = !*v)
+                >
+                    {move || if repossess_open.get() { "Never mind" } else { "Mark as repossessed" }}
+                </button>
+            </div>
+            {move || if cancel_open.get() {
+                let on_cancel = on_cancel.clone();
+                view! {
+                    <div class="field" style="margin-top: var(--space-2)">
+                        <label for="cancel-sale-reason">"Reason (optional)"</label>
+                        <textarea
+                            id="cancel-sale-reason"
+                            prop:value=cancel_reason
+                            on:input=move |ev| cancel_reason.set(event_target_value(&ev))
+                        ></textarea>
+                    </div>
+                    <button
+                        type="button"
+                        class="btn btn-primary btn-sm"
+                        disabled=move || saving.get()
+                        on:click=on_cancel
+                    >
+                        {move || if saving.get() { "Cancelling…" } else { "Confirm cancellation" }}
+                    </button>
+                }.into_any()
+            } else {
+                view! {}.into_any()
+            }}
+            {move || if repossess_open.get() {
+                let on_repossess = on_repossess.clone();
+                view! {
+                    <div class="field" style="margin-top: var(--space-2)">
+                        <label for="repossess-sale-reason">"Reason (optional)"</label>
+                        <textarea
+                            id="repossess-sale-reason"
+                            prop:value=repossess_reason
+                            on:input=move |ev| repossess_reason.set(event_target_value(&ev))
+                        ></textarea>
+                    </div>
+                    <button
+                        type="button"
+                        class="btn btn-danger btn-sm"
+                        disabled=move || saving.get()
+                        on:click=on_repossess
+                    >
+                        {move || if saving.get() { "Repossessing…" } else { "Confirm repossession" }}
+                    </button>
+                }.into_any()
+            } else {
+                view! {}.into_any()
+            }}
+        </div>
+    }.into_any()
 }
 
 /// Starts a sale for the selected plot: pick a customer and payment mode,

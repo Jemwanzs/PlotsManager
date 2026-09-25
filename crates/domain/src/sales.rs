@@ -32,6 +32,21 @@ pub enum LoanAccountStatus {
     Closed,
 }
 
+/// A sale's own lifecycle, distinct from the plot's or the loan
+/// account's — added alongside both rather than folded into either,
+/// since "was this sale cancelled" is a fact about the transaction
+/// itself, and a plot or loan account can be re-created fresh against
+/// a new sale afterward. See `database/migrations/
+/// 0030_sale_lifecycle.sql`'s module docs for why `plot_sales`/
+/// `sale_plots`'s uniqueness constraints had to change to allow this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SaleLifecycleStatus {
+    Active,
+    Cancelled,
+    Repossessed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlotSale {
     pub id: Uuid,

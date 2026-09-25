@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     ApprovalRequest, AreaUnit, Customer, LeadStage, MapPolygons, Payment, PaymentMode, Plot,
-    PlotLoanAccount, PlotStatusCount, ProjectStatus, Quotation, User,
+    PlotLoanAccount, PlotStatusCount, ProjectStatus, Quotation, SaleLifecycleStatus, User,
 };
 
 /// The full commercial position of one plot — what shows in Plot
@@ -77,11 +77,20 @@ pub struct SalePlotRef {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlotSaleSummary {
+    pub sale_id: Uuid,
     pub customer_id: Uuid,
     pub customer_name: String,
     pub payment_mode: PaymentMode,
     pub agreed_price: Decimal,
     pub created_at: DateTime<Utc>,
+    /// Whether this sale is still live, or was cancelled/repossessed —
+    /// see `database/migrations/0030_sale_lifecycle.sql`. A cancelled/
+    /// repossessed sale's details still show here (historical record),
+    /// distinguished by this field and the two below rather than by
+    /// disappearing once terminated.
+    pub lifecycle_status: SaleLifecycleStatus,
+    pub status_reason: Option<String>,
+    pub status_changed_at: Option<DateTime<Utc>>,
     /// `None` for a full-cash sale — no loan account exists for one,
     /// it's paid in full the moment it's recorded (see
     /// `routes/sales.rs::execute_sale`'s own docs on why). Carries
@@ -392,6 +401,28 @@ pub struct RecordPaymentInput {
     pub amount: Decimal,
     pub payment_date: NaiveDate,
     pub method: String,
+}
+
+/// `POST /api/v1/sales/:id/cancel` — an administrative/mutual
+/// cancellation, no loan account required. Ends the sale on every plot
+/// it covers (primary and additional) and any linked loan account, but
+/// leaves the outstanding balance as-is on the loan account — a
+/// historical record of what was owed, not something this action
+/// forgives (see `crates/backend/src/routes/sales.rs::cancel_sale`'s
+/// own docs).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CancelSaleInput {
+    pub reason: Option<String>,
+}
+
+/// `POST /api/v1/sales/:id/repossess` — default-driven, requires an
+/// active (not already fully paid/closed/cancelled) loan account on
+/// the sale. Distinct from `CancelSaleInput`: repossession moves every
+/// plot on the sale to `Blocked` rather than `Cancelled`, signalling a
+/// pending-review state rather than a clean, immediately-resellable one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepossessSaleInput {
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

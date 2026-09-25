@@ -185,6 +185,27 @@ impl ApiClient {
         }
     }
 
+    pub async fn cancel_sale(&self, sale_id: Uuid, input: CancelSaleInput) -> Result<(), ApiError> {
+        match self {
+            Self::Mock(api) => api.cancel_sale(sale_id, input).await,
+            Self::Http(api) => api.cancel_sale(sale_id, input).await,
+        }
+    }
+
+    pub async fn repossess_sale(&self, sale_id: Uuid, input: RepossessSaleInput) -> Result<(), ApiError> {
+        match self {
+            Self::Mock(api) => api.repossess_sale(sale_id, input).await,
+            Self::Http(api) => api.repossess_sale(sale_id, input).await,
+        }
+    }
+
+    pub async fn reallocate_plot(&self, project_id: Uuid, plot_id: Uuid) -> Result<domain::Plot, ApiError> {
+        match self {
+            Self::Mock(api) => api.reallocate_plot(project_id, plot_id).await,
+            Self::Http(api) => api.reallocate_plot(project_id, plot_id).await,
+        }
+    }
+
     pub async fn get_loan_account(&self, id: Uuid) -> Result<LoanAccountDetail, ApiError> {
         match self {
             Self::Mock(api) => api.get_loan_account(id).await,

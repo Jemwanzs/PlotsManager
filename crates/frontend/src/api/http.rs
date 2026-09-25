@@ -37,7 +37,8 @@ use domain::{
     UpdateBranchInput, UpdateCustomerInput, UpdateLeadInput, UpdateMapPolygonsInput, UpdateOrganizationSettingsInput,
     UpdatePlotInput, UpdateRoleInput, UpdateTitleRecordInput, UpdateUserInput, UploadDocumentInput,
     CreateTitleRecordInput, TitleRecord, CreateMigrationBatchInput, MigrationBatch,
-    MigrationCommitResult, MigrationStagingRow, UpdateMigrationRowInput,
+    MigrationCommitResult, MigrationStagingRow, UpdateMigrationRowInput, CancelSaleInput,
+    RepossessSaleInput,
 };
 
 #[derive(Clone)]
@@ -292,6 +293,18 @@ impl HttpApi {
 
     pub async fn create_sale(&self, input: CreateSaleInput) -> Result<domain::PlotSale, ApiError> {
         self.post("/api/v1/sales", &input).await
+    }
+
+    pub async fn cancel_sale(&self, sale_id: Uuid, input: CancelSaleInput) -> Result<(), ApiError> {
+        self.post(&format!("/api/v1/sales/{sale_id}/cancel"), &input).await
+    }
+
+    pub async fn repossess_sale(&self, sale_id: Uuid, input: RepossessSaleInput) -> Result<(), ApiError> {
+        self.post(&format!("/api/v1/sales/{sale_id}/repossess"), &input).await
+    }
+
+    pub async fn reallocate_plot(&self, project_id: Uuid, plot_id: Uuid) -> Result<domain::Plot, ApiError> {
+        self.put(&format!("/api/v1/projects/{project_id}/plots/{plot_id}/reallocate"), &()).await
     }
 
     pub async fn get_loan_account(&self, id: Uuid) -> Result<LoanAccountDetail, ApiError> {

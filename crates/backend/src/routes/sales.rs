@@ -1,8 +1,9 @@
-use axum::{extract::State, routing::post, Json, Router};
+use axum::{extract::Path, extract::State, routing::post, Json, Router};
 use chrono::NaiveTime;
 use domain::{
-    AdditionalSaleCustomer, BulkImportResult, BulkImportRowError, BulkSaleRow, CreateSaleInput,
-    LoanAccountStatus, PaymentMode, PlotSale, PlotStatus, PERM_PLOTS_TRANSACTIONS_BULK_IMPORT,
+    AdditionalSaleCustomer, BulkImportResult, BulkImportRowError, BulkSaleRow, CancelSaleInput,
+    CreateSaleInput, LoanAccountStatus, PaymentMode, PlotSale, PlotStatus, RepossessSaleInput,
+    PERM_PLOTS_TRANSACTIONS_BULK_IMPORT, PERM_PLOTS_TRANSACTIONS_CANCEL,
     PERM_PLOTS_TRANSACTIONS_CREATE,
 };
 use rust_decimal::Decimal;
@@ -18,6 +19,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/sales", post(create_sale))
         .route("/api/v1/sales/bulk", post(bulk_create_sales))
+        .route("/api/v1/sales/:id/cancel", post(cancel_sale))
+        .route("/api/v1/sales/:id/repossess", post(repossess_sale))
 }
 
 /// The static repayment plan behind a Plot Loan Account — a deposit
@@ -151,18 +154,31 @@ pub(crate) async fn execute_sale(
         ));
     }
 
-    let plot_ok: bool = sqlx::query_scalar(
-        r#"select exists(
-            select 1 from plots pl join projects p on p.id = pl.project_id
-            where pl.id = $1 and p.organization_id = $2
-        )"#,
+    // The partial unique indexes (`plot_sales_one_active_per_plot`/
+    // `sale_plots_plot_uidx`, `database/migrations/0030_sale_lifecycle.sql`)
+    // only stop a *second active* sale on the same plot — they don't
+    // stop a brand new one on a plot that's `Cancelled`/`Blocked` from
+    // a prior cancel/repossess, since neither of those states leaves
+    // any *active* `plot_sales` row behind to collide with. That gap
+    // needs its own check: those two states must go through
+    // `routes/projects.rs::reallocate_plot` first, same as the
+    // frontend's own `can_start_sale` gate already assumes.
+    let plot_status: Option<String> = sqlx::query_scalar(
+        r#"select pl.status from plots pl join projects p on p.id = pl.project_id
+           where pl.id = $1 and p.organization_id = $2"#,
     )
     .bind(params.plot_id)
     .bind(organization_id)
-    .fetch_one(&mut **tx)
+    .fetch_optional(&mut **tx)
     .await?;
-    if !plot_ok {
-        return Err(AppError::NotFound);
+    match plot_status.as_deref() {
+        None => return Err(AppError::NotFound),
+        Some("cancelled") | Some("blocked") => {
+            return Err(AppError::conflict(
+                "This plot's previous sale was cancelled or repossessed — reallocate it before starting a new sale.",
+            ));
+        }
+        _ => {}
     }
 
     let customer_ok: bool = sqlx::query_scalar(
@@ -362,6 +378,169 @@ pub(crate) async fn execute_sale(
     .await?;
 
     sale.into_domain()
+}
+
+/// Administrative/mutual cancellation — the customer backs out, the
+/// sale was a data-entry mistake, both sides agree to unwind it. No
+/// loan account requirement (unlike `repossess_sale`): a full-cash
+/// sale can be cancelled too. Every plot on the sale (primary and
+/// additional) moves to `Cancelled` and is unassigned; a linked loan
+/// account (if any) moves to `Cancelled` too, its `outstanding_balance`
+/// left untouched — a historical record of what was owed, not
+/// something this action forgives (`finance:reverse`/waivers are the
+/// separate capability for that). See `database/migrations/
+/// 0030_sale_lifecycle.sql` for why `plot_sales`/`sale_plots` can now
+/// carry more than one row per plot over time.
+async fn cancel_sale(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(sale_id): Path<Uuid>,
+    Json(input): Json<CancelSaleInput>,
+) -> Result<Json<()>, AppError> {
+    auth.require_permission(PERM_PLOTS_TRANSACTIONS_CANCEL)?;
+
+    let mut tx = state.db.begin().await?;
+
+    let org_ok: bool = sqlx::query_scalar(
+        "select exists(select 1 from plot_sales where id = $1 and organization_id = $2)",
+    )
+    .bind(sale_id)
+    .bind(auth.organization_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !org_ok {
+        return Err(AppError::NotFound);
+    }
+
+    let reason = input.reason.as_deref().map(str::trim).filter(|s| !s.is_empty());
+
+    let updated: Option<Uuid> = sqlx::query_scalar(
+        r#"
+        update plot_sales set status = 'cancelled', status_reason = $1, status_changed_at = now(), status_changed_by = $2
+        where id = $3 and status = 'active'
+        returning id
+        "#,
+    )
+    .bind(reason)
+    .bind(auth.user_id)
+    .bind(sale_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if updated.is_none() {
+        return Err(AppError::conflict("This sale has already been cancelled or repossessed."));
+    }
+
+    sqlx::query("update sale_plots set status = 'cancelled' where sale_id = $1")
+        .bind(sale_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query(
+        r#"update plots set status = 'cancelled', assigned_customer_id = null
+           where id in (select plot_id from sale_plots where sale_id = $1)"#,
+    )
+    .bind(sale_id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query("update plot_loan_accounts set status = 'cancelled' where sale_id = $1")
+        .bind(sale_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(Json(()))
+}
+
+/// Default-driven repossession — requires an active (not already fully
+/// paid/closed/cancelled/already-repossessed) loan account on the
+/// sale, since repossessing only makes sense when money is still owed.
+/// Every plot on the sale moves to `Blocked` (not `Cancelled` — a
+/// deliberately distinct terminal state, signalling "pending review"
+/// rather than "cleanly available again"); the loan account moves to
+/// `RepossessedOrReallocated`, its `outstanding_balance` left as a
+/// historical record of what the customer still owed. Either terminal
+/// plot state is freed back to `Available` the same way, via
+/// `routes/projects.rs::reallocate_plot`.
+async fn repossess_sale(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(sale_id): Path<Uuid>,
+    Json(input): Json<RepossessSaleInput>,
+) -> Result<Json<()>, AppError> {
+    auth.require_permission(PERM_PLOTS_TRANSACTIONS_CANCEL)?;
+
+    let mut tx = state.db.begin().await?;
+
+    let org_ok: bool = sqlx::query_scalar(
+        "select exists(select 1 from plot_sales where id = $1 and organization_id = $2)",
+    )
+    .bind(sale_id)
+    .bind(auth.organization_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !org_ok {
+        return Err(AppError::NotFound);
+    }
+
+    let loan_status: Option<String> = sqlx::query_scalar(
+        "select status from plot_loan_accounts where sale_id = $1",
+    )
+    .bind(sale_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    match loan_status.as_deref() {
+        None => {
+            return Err(AppError::bad_request(
+                "This sale has no loan account — repossession only applies to Lipa Pole Pole sales that still owe a balance.",
+            ));
+        }
+        Some("fully_paid") | Some("cancelled") | Some("closed") | Some("repossessed_or_reallocated") => {
+            return Err(AppError::bad_request(
+                "This loan account is already settled or closed — there's nothing to repossess.",
+            ));
+        }
+        _ => {}
+    }
+
+    let reason = input.reason.as_deref().map(str::trim).filter(|s| !s.is_empty());
+
+    let updated: Option<Uuid> = sqlx::query_scalar(
+        r#"
+        update plot_sales set status = 'repossessed', status_reason = $1, status_changed_at = now(), status_changed_by = $2
+        where id = $3 and status = 'active'
+        returning id
+        "#,
+    )
+    .bind(reason)
+    .bind(auth.user_id)
+    .bind(sale_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if updated.is_none() {
+        return Err(AppError::conflict("This sale has already been cancelled or repossessed."));
+    }
+
+    sqlx::query("update sale_plots set status = 'repossessed' where sale_id = $1")
+        .bind(sale_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query(
+        r#"update plots set status = 'blocked', assigned_customer_id = null
+           where id in (select plot_id from sale_plots where sale_id = $1)"#,
+    )
+    .bind(sale_id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query("update plot_loan_accounts set status = 'repossessed_or_reallocated' where sale_id = $1")
+        .bind(sale_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(Json(()))
 }
 
 /// Best-effort bulk import of *historical* sales (tenant onboarding —

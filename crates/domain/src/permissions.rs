@@ -85,6 +85,13 @@ pub const PERM_PLOTS_MAP_EDIT_BOUNDARIES: &str = "plots:map.edit_boundaries";
 pub const PERM_PLOTS_MAP_LINK: &str = "plots:map.link";
 pub const PERM_PLOTS_TRANSACTIONS_CREATE: &str = "plots:transactions.create";
 pub const PERM_PLOTS_TRANSACTIONS_BULK_IMPORT: &str = "plots:transactions.bulk_import";
+/// Cancel a sale (administrative/mutual), repossess one (default-
+/// driven, requires a loan account), or reallocate a plot afterward
+/// (free it for a new sale) — `routes/sales.rs::cancel_sale`/
+/// `repossess_sale`, `routes/projects.rs::reallocate_plot`. One key
+/// for all three: they're the same sale-lifecycle-ending/resetting
+/// capability, not three separately grantable actions.
+pub const PERM_PLOTS_TRANSACTIONS_CANCEL: &str = "plots:transactions.cancel";
 
 // ---------------------------------------------------------------
 // Customers — core CRUD plus the lead/pipeline sub-feature
@@ -239,6 +246,7 @@ const REGISTRY: &[StaticPermissionDef] = &[
     StaticPermissionDef { key: PERM_PLOTS_MAP_LINK, label: "Link/unlink plots to map shapes", module: "Plots", feature: "Plot map", sensitive: false },
     StaticPermissionDef { key: PERM_PLOTS_TRANSACTIONS_CREATE, label: "Reserve/book a plot", module: "Plots", feature: "Plot transactions", sensitive: true },
     StaticPermissionDef { key: PERM_PLOTS_TRANSACTIONS_BULK_IMPORT, label: "Bulk import historical sales", module: "Plots", feature: "Plot transactions", sensitive: true },
+    StaticPermissionDef { key: PERM_PLOTS_TRANSACTIONS_CANCEL, label: "Cancel/repossess a sale, reallocate a plot", module: "Plots", feature: "Plot transactions", sensitive: true },
     StaticPermissionDef { key: PERM_TITLES_MANAGE, label: "Record/update title & ownership history", module: "Plots", feature: "Title tracking", sensitive: true },
 
     StaticPermissionDef { key: PERM_CUSTOMERS_VIEW, label: "View customers", module: "Customers", feature: "Customer management", sensitive: false },
