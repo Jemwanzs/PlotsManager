@@ -11,7 +11,7 @@ use crate::pages::{
     Dashboard, FinanceLoanAccounts, FinanceOverview, LoanAccountDetailPage, LoanStatementPage, Login,
     MigrationBatchDetailPage, Migrations, NewCustomer,
     NewProject, NotFound, PlatformOrganizationDetailPage, PlatformOrganizations, ProjectDetail,
-    ProjectsList, QuotationDetailPage, QuotationsList, RecentActivity, Reports, Roles, Settings,
+    ProjectsList, QuotationDetailPage, QuotationsList, ReceiptPage, RecentActivity, Reports, Roles, Settings,
     Signup, UsersAccess,
 };
 use crate::theme::{apply_theme, initial_theme, ThemeSignal};
@@ -108,6 +108,10 @@ pub fn App() -> impl IntoView {
                 <Route
                     path=(StaticSegment("loan-accounts"), ParamSegment("id"), StaticSegment("statement"))
                     view=|| view! { <AppShell><LoanStatementPage /></AppShell> }
+                />
+                <Route
+                    path=(StaticSegment("loan-accounts"), ParamSegment("id"), StaticSegment("payments"), ParamSegment("payment_id"), StaticSegment("receipt"))
+                    view=|| view! { <AppShell><ReceiptPage /></AppShell> }
                 />
                 <Route
                     path=StaticSegment("platform")

@@ -159,19 +159,28 @@ fn LoanAccountContent(
                         <thead>
                             <tr style="text-align: left; border-bottom: 1px solid var(--color-border);">
                                 <th style="padding: var(--space-3)">"Date"</th>
+                                <th style="padding: var(--space-3)">"Receipt #"</th>
                                 <th style="padding: var(--space-3)">"Method"</th>
                                 <th style="padding: var(--space-3)">"Amount"</th>
                                 <th style="padding: var(--space-3)">"Status"</th>
+                                <th style="padding: var(--space-3)"></th>
                             </tr>
                         </thead>
                         <tbody>
-                            {detail.payments.into_iter().map(|p| view! {
-                                <tr style="border-bottom: 1px solid var(--color-border);">
-                                    <td style="padding: var(--space-3)">{p.payment_date.to_string()}</td>
-                                    <td style="padding: var(--space-3)">{p.method}</td>
-                                    <td style="padding: var(--space-3)">{format_money(p.amount, &currency.get())}</td>
-                                    <td style="padding: var(--space-3)">{format_payment_status(p.status)}</td>
-                                </tr>
+                            {detail.payments.into_iter().map(|p| {
+                                let receipt_href = format!("/loan-accounts/{}/payments/{}/receipt", p.loan_account_id, p.id);
+                                view! {
+                                    <tr style="border-bottom: 1px solid var(--color-border);">
+                                        <td style="padding: var(--space-3)">{p.payment_date.to_string()}</td>
+                                        <td style="padding: var(--space-3)">{p.receipt_number.clone()}</td>
+                                        <td style="padding: var(--space-3)">{p.method}</td>
+                                        <td style="padding: var(--space-3)">{format_money(p.amount, &currency.get())}</td>
+                                        <td style="padding: var(--space-3)">{format_payment_status(p.status)}</td>
+                                        <td style="padding: var(--space-3)">
+                                            <A href=receipt_href attr:class="btn btn-secondary btn-sm">"Receipt"</A>
+                                        </td>
+                                    </tr>
+                                }
                             }).collect_view()}
                         </tbody>
                     </table>

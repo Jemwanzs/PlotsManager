@@ -130,6 +130,12 @@ pub struct Payment {
     pub captured_by: Uuid,
     pub verified_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    /// `"RCT-00001"`-style, a real Postgres sequence
+    /// (`payment_receipt_number_seq`, `database/migrations/
+    /// 0031_payment_receipts.sql`) — the per-payment proof-of-payment
+    /// reference, distinct from the loan statement (a running summary
+    /// across every transaction on the account).
+    pub receipt_number: String,
 }
 
 /// One row of a loan account's transaction ledger

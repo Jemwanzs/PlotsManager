@@ -159,6 +159,7 @@ struct PaymentRow {
     captured_by: Uuid,
     verified_by: Option<Uuid>,
     created_at: DateTime<Utc>,
+    receipt_number: String,
 }
 
 impl PaymentRow {
@@ -174,9 +175,12 @@ impl PaymentRow {
             captured_by: self.captured_by,
             verified_by: self.verified_by,
             created_at: self.created_at,
+            receipt_number: self.receipt_number,
         })
     }
 }
+
+const PAYMENT_COLUMNS: &str = "id, loan_account_id, amount, payment_date, method, external_reference, status, captured_by, verified_by, created_at, receipt_number";
 
 async fn get_loan_account(
     State(state): State<AppState>,
@@ -190,10 +194,9 @@ async fn get_loan_account(
         .await?;
     let row = row.ok_or(AppError::NotFound)?;
 
-    let payment_rows: Vec<PaymentRow> = sqlx::query_as(
-        "select id, loan_account_id, amount, payment_date, method, external_reference, status, captured_by, verified_by, created_at
-         from payments where loan_account_id = $1 order by payment_date desc, created_at desc",
-    )
+    let payment_rows: Vec<PaymentRow> = sqlx::query_as(&format!(
+        "select {PAYMENT_COLUMNS} from payments where loan_account_id = $1 order by payment_date desc, created_at desc",
+    ))
     .bind(id)
     .fetch_all(&state.db)
     .await?;
@@ -293,13 +296,13 @@ async fn record_payment(
         &allocation_order,
     );
 
-    let payment_row: PaymentRow = sqlx::query_as(
+    let payment_row: PaymentRow = sqlx::query_as(&format!(
         r#"
-        insert into payments (loan_account_id, amount, payment_date, method, status, captured_by, verified_by)
-        values ($1, $2, $3, $4, 'posted', $5, $5)
-        returning id, loan_account_id, amount, payment_date, method, external_reference, status, captured_by, verified_by, created_at
+        insert into payments (loan_account_id, amount, payment_date, method, status, captured_by, verified_by, receipt_number)
+        values ($1, $2, $3, $4, 'posted', $5, $5, 'RCT-' || lpad(nextval('payment_receipt_number_seq')::text, 5, '0'))
+        returning {PAYMENT_COLUMNS}
         "#,
-    )
+    ))
     .bind(id)
     .bind(input.amount)
     .bind(input.payment_date)
@@ -353,10 +356,19 @@ async fn record_payment(
         sqlx::query(
             r#"
             update plots set status = 'sold'
-            where id = (select pl.id from plots pl
-                        join plot_sales ps on ps.plot_id = pl.id
-                        join plot_loan_accounts pla on pla.sale_id = ps.id
-                        where pla.id = $1)
+            where id in (
+                -- Via `sale_plots` (every plot on the sale, primary or
+                -- additional — `database/migrations/
+                -- 0026_sale_plots_and_customers.sql`), not `plot_sales.
+                -- plot_id` directly, which only ever names the primary
+                -- plot: a multi-plot Lipa Pole Pole sale reaching
+                -- `FullyPaid` needs every one of its plots advanced,
+                -- not just the primary one.
+                select pl.id from plots pl
+                join sale_plots sp on sp.plot_id = pl.id
+                join plot_loan_accounts pla on pla.sale_id = sp.sale_id
+                where pla.id = $1
+            )
               and status in ('booked', 'reserved', 'selected', 'temporarily_held', 'under_approval')
             "#,
         )
@@ -785,10 +797,19 @@ async fn post_waiver(
         sqlx::query(
             r#"
             update plots set status = 'sold'
-            where id = (select pl.id from plots pl
-                        join plot_sales ps on ps.plot_id = pl.id
-                        join plot_loan_accounts pla on pla.sale_id = ps.id
-                        where pla.id = $1)
+            where id in (
+                -- Via `sale_plots` (every plot on the sale, primary or
+                -- additional — `database/migrations/
+                -- 0026_sale_plots_and_customers.sql`), not `plot_sales.
+                -- plot_id` directly, which only ever names the primary
+                -- plot: a multi-plot Lipa Pole Pole sale reaching
+                -- `FullyPaid` needs every one of its plots advanced,
+                -- not just the primary one.
+                select pl.id from plots pl
+                join sale_plots sp on sp.plot_id = pl.id
+                join plot_loan_accounts pla on pla.sale_id = sp.sale_id
+                where pla.id = $1
+            )
               and status in ('booked', 'reserved', 'selected', 'temporarily_held', 'under_approval')
             "#,
         )
@@ -978,10 +999,19 @@ async fn reverse_entry(
         sqlx::query(
             r#"
             update plots set status = 'sold'
-            where id = (select pl.id from plots pl
-                        join plot_sales ps on ps.plot_id = pl.id
-                        join plot_loan_accounts pla on pla.sale_id = ps.id
-                        where pla.id = $1)
+            where id in (
+                -- Via `sale_plots` (every plot on the sale, primary or
+                -- additional — `database/migrations/
+                -- 0026_sale_plots_and_customers.sql`), not `plot_sales.
+                -- plot_id` directly, which only ever names the primary
+                -- plot: a multi-plot Lipa Pole Pole sale reaching
+                -- `FullyPaid` needs every one of its plots advanced,
+                -- not just the primary one.
+                select pl.id from plots pl
+                join sale_plots sp on sp.plot_id = pl.id
+                join plot_loan_accounts pla on pla.sale_id = sp.sale_id
+                where pla.id = $1
+            )
               and status in ('booked', 'reserved', 'selected', 'temporarily_held', 'under_approval')
             "#,
         )

@@ -83,6 +83,33 @@ struct MockDb {
     sale_lifecycle: HashMap<Uuid, (domain::SaleLifecycleStatus, Option<String>, chrono::DateTime<Utc>)>,
 }
 
+/// Mirrors the real backend's identical fix in `routes/
+/// loan_accounts.rs` (`record_payment`/`post_waiver`/`reverse_entry`):
+/// a Lipa Pole Pole loan account reaching `FullyPaid` needs every plot
+/// on its sale advanced to `Sold`, not just the primary one — via
+/// `sale_plots`, not `PlotSale.plot_id` directly, which only ever
+/// names the primary plot. Forward-only, same guard as the real
+/// backend: a plot already past `Booked` (transfer in progress,
+/// blocked, cancelled, ...) is left alone.
+fn advance_plots_to_sold_locked(db: &mut MockDb, loan_account_id: Uuid) {
+    let Some(sale_id) = db.loan_accounts.iter().find(|l| l.id == loan_account_id).map(|l| l.sale_id) else {
+        return;
+    };
+    let plot_ids: Vec<Uuid> = db.sale_plots.iter().filter(|(sid, _)| *sid == sale_id).map(|(_, p)| *p).collect();
+    for plot in db.plots.iter_mut().filter(|p| plot_ids.contains(&p.id)) {
+        if matches!(
+            plot.status,
+            PlotStatus::Booked
+                | PlotStatus::Reserved
+                | PlotStatus::Selected
+                | PlotStatus::TemporarilyHeld
+                | PlotStatus::UnderApproval
+        ) {
+            plot.status = PlotStatus::Sold;
+        }
+    }
+}
+
 /// `Active` when a sale has no `sale_lifecycle` entry — the default
 /// every sale starts at and the overwhelming majority never leave.
 fn sale_lifecycle_of(
@@ -1243,6 +1270,7 @@ impl MockApi {
             account.status = domain::LoanAccountStatus::FullyPaid;
         }
         let new_balance = account.outstanding_balance;
+        let waiver_became_fully_paid = new_balance <= Decimal::ZERO;
 
         let (entry_type, interest_delta, penalty_delta) = match input.waiver_type {
             domain::WaiverType::Interest => (domain::LedgerEntryType::WaiverInterest, -input.amount, Decimal::ZERO),
@@ -1265,6 +1293,9 @@ impl MockApi {
             created_at: Utc::now(),
         };
         db.charges.push(entry.clone());
+        if waiver_became_fully_paid {
+            advance_plots_to_sold_locked(&mut db, input.loan_account_id);
+        }
         Ok(entry)
     }
 
@@ -1775,6 +1806,7 @@ impl MockApi {
             captured_by,
             verified_by: Some(captured_by),
             created_at: Utc::now(),
+            receipt_number: format!("RCT-{:05}", db.payments.len() + 1),
         };
 
         let account = db
@@ -1791,8 +1823,12 @@ impl MockApi {
         } else {
             account.status
         };
+        let became_fully_paid = account.status == LoanAccountStatus::FullyPaid;
 
         db.payments.push(payment.clone());
+        if became_fully_paid {
+            advance_plots_to_sold_locked(&mut db, input.loan_account_id);
+        }
         Ok(payment)
     }
 
@@ -3824,6 +3860,7 @@ fn seed() -> MockDb {
                 captured_by: demo_user.id,
                 verified_by: Some(demo_user.id),
                 created_at: Utc::now(),
+                receipt_number: format!("RCT-{:05}", payments.len() + 1),
             });
             payments.push(Payment {
                 id: Uuid::new_v4(),
@@ -3836,6 +3873,7 @@ fn seed() -> MockDb {
                 captured_by: demo_user.id,
                 verified_by: Some(demo_user.id),
                 created_at: Utc::now(),
+                receipt_number: format!("RCT-{:05}", payments.len() + 1),
             });
             loan_accounts.push(account);
         }
