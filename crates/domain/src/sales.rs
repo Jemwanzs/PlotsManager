@@ -262,3 +262,27 @@ pub struct PostWaiverInput {
 pub struct ReverseEntryInput {
     pub reason: String,
 }
+
+/// `POST /api/v1/loan-accounts/:id/repayment-holiday` — pushes every
+/// not-yet-fully-paid schedule entry's `due_date` forward by
+/// `holiday_days`, so an agreed pause doesn't get flagged as arrears.
+/// Doesn't touch `outstanding_balance`/`amount_paid` — nothing owed
+/// changes, only when it's next due.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplyRepaymentHolidayInput {
+    pub holiday_days: i32,
+    pub reason: Option<String>,
+}
+
+/// `POST /api/v1/loan-accounts/:id/restructure` — re-amortizes the
+/// remaining principal over a new instalment amount and/or frequency,
+/// replacing the not-yet-fully-paid tail of the schedule from
+/// `effective_date` (default: today) onward. Total owed is unchanged;
+/// only the forward calendar is.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestructureLoanInput {
+    pub new_instalment_amount: Decimal,
+    pub new_repayment_frequency_days: Option<i32>,
+    pub effective_date: Option<NaiveDate>,
+    pub reason: Option<String>,
+}

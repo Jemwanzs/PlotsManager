@@ -365,6 +365,24 @@ impl HttpApi {
         self.post(&path, &ReverseEntryInput { reason }).await
     }
 
+    pub async fn apply_repayment_holiday(
+        &self,
+        loan_account_id: Uuid,
+        input: domain::ApplyRepaymentHolidayInput,
+    ) -> Result<(), ApiError> {
+        let path = format!("/api/v1/loan-accounts/{loan_account_id}/repayment-holiday");
+        self.post(&path, &input).await
+    }
+
+    pub async fn restructure_loan(
+        &self,
+        loan_account_id: Uuid,
+        input: domain::RestructureLoanInput,
+    ) -> Result<(), ApiError> {
+        let path = format!("/api/v1/loan-accounts/{loan_account_id}/restructure");
+        self.post(&path, &input).await
+    }
+
     pub async fn list_platform_organizations(
         &self,
     ) -> Result<Vec<PlatformOrganizationSummary>, ApiError> {

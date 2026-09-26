@@ -145,6 +145,15 @@ pub const PERM_FINANCE_POST_CHARGES: &str = "finance:post_charges";
 /// trusted to record or charge isn't automatically trusted to reverse
 /// or forgive what's already posted.
 pub const PERM_FINANCE_REVERSE: &str = "finance:reverse";
+/// Granting a repayment holiday (pushing back not-yet-paid instalment
+/// due dates) or restructuring a loan (re-amortizing the remaining
+/// balance at a new instalment amount/frequency) —
+/// `routes/loan_accounts.rs::apply_repayment_holiday`/`restructure_loan`.
+/// Neither moves money (that's still `payments:record`/
+/// `finance:post_charges`/`finance:reverse`), but both change what a
+/// customer is obligated to pay and by when, so it's kept as its own
+/// sensitive key rather than folded into an existing one.
+pub const PERM_FINANCE_RESTRUCTURE: &str = "finance:restructure";
 
 // ---------------------------------------------------------------
 // Reports
@@ -268,6 +277,7 @@ const REGISTRY: &[StaticPermissionDef] = &[
     StaticPermissionDef { key: PERM_PAYMENTS_RECORD, label: "Record a payment", module: "Finance", feature: "Payments", sensitive: true },
     StaticPermissionDef { key: PERM_FINANCE_POST_CHARGES, label: "Post interest/penalty charges", module: "Finance", feature: "Payments", sensitive: true },
     StaticPermissionDef { key: PERM_FINANCE_REVERSE, label: "Reverse payments/charges, waive interest/penalty", module: "Finance", feature: "Payments", sensitive: true },
+    StaticPermissionDef { key: PERM_FINANCE_RESTRUCTURE, label: "Grant repayment holidays, restructure loans", module: "Finance", feature: "Payments", sensitive: true },
 
     StaticPermissionDef { key: PERM_REPORTS_SALES, label: "View sales report", module: "Reports", feature: "Reports", sensitive: false },
     StaticPermissionDef { key: PERM_REPORTS_INVENTORY, label: "View inventory report", module: "Reports", feature: "Reports", sensitive: false },

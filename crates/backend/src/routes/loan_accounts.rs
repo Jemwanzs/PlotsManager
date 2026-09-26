@@ -1,12 +1,13 @@
 use axum::extract::{Path, Query};
 use axum::routing::post;
 use axum::{extract::State, routing::get, Json, Router};
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use domain::{
-    ChargeType, LoanAccountDetail, LoanAccountStatus, LoanLedgerEntry, LoanStatement, Payment,
-    PaymentAllocationPreview, PlotLoanAccount, PostChargeInput, PostWaiverInput,
-    RecordPaymentInput, ReverseEntryInput, WaiverType, PERM_FINANCE_POST_CHARGES,
-    PERM_FINANCE_REVERSE, PERM_PAYMENTS_RECORD,
+    ApplyRepaymentHolidayInput, ChargeType, LoanAccountDetail, LoanAccountStatus, LoanLedgerEntry,
+    LoanStatement, Payment, PaymentAllocationPreview, PlotLoanAccount, PostChargeInput,
+    PostWaiverInput, RecordPaymentInput, RestructureLoanInput, ReverseEntryInput, WaiverType,
+    PERM_FINANCE_POST_CHARGES, PERM_FINANCE_RESTRUCTURE, PERM_FINANCE_REVERSE,
+    PERM_PAYMENTS_RECORD,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -31,6 +32,11 @@ pub fn router() -> Router<AppState> {
             "/api/v1/loan-accounts/:id/allocation-preview",
             get(preview_allocation),
         )
+        .route(
+            "/api/v1/loan-accounts/:id/repayment-holiday",
+            post(apply_repayment_holiday),
+        )
+        .route("/api/v1/loan-accounts/:id/restructure", post(restructure_loan))
 }
 
 /// Applies `amount` against penalty/interest/principal in whatever
@@ -1061,4 +1067,245 @@ async fn reverse_entry(
         created_by_name,
         created_at: entry_row.created_at,
     }))
+}
+
+/// Grants a repayment holiday: pushes every not-yet-fully-paid
+/// schedule entry's `due_date` forward by `holiday_days` (via
+/// `loan_schedule_entry_paid`, the same waterfall the account's own
+/// arrears view uses, so "not yet fully paid" here means exactly what
+/// it means everywhere else this account is displayed). Doesn't touch
+/// `outstanding_balance`/`amount_paid` — nothing owed changes, only
+/// when it's next due — and doesn't excuse arrears already accrued
+/// before the holiday. See `0033_loan_restructuring.sql`.
+async fn apply_repayment_holiday(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(input): Json<ApplyRepaymentHolidayInput>,
+) -> Result<Json<()>, AppError> {
+    auth.require_permission(PERM_FINANCE_RESTRUCTURE)?;
+
+    if input.holiday_days <= 0 {
+        return Err(AppError::bad_request(
+            "Enter a holiday length greater than zero days.",
+        ));
+    }
+    if input.holiday_days > 365 {
+        return Err(AppError::bad_request(
+            "A repayment holiday can't exceed 365 days.",
+        ));
+    }
+    let reason = input.reason.as_deref().map(str::trim).filter(|s| !s.is_empty());
+
+    let mut tx = state.db.begin().await?;
+
+    let status: Option<String> = sqlx::query_scalar(
+        r#"select pla.status from plot_loan_accounts pla
+           join plot_sales ps on ps.id = pla.sale_id
+           where pla.id = $1 and ps.organization_id = $2"#,
+    )
+    .bind(id)
+    .bind(auth.organization_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    match status.as_deref() {
+        None => return Err(AppError::NotFound),
+        Some("cancelled") | Some("closed") | Some("repossessed_or_reallocated") => {
+            return Err(AppError::conflict(
+                "This loan account is closed, cancelled, or repossessed — it can't be granted a repayment holiday.",
+            ));
+        }
+        _ => {}
+    }
+
+    sqlx::query(
+        r#"
+        update repayment_schedule_entries e
+        set due_date = e.due_date + $1::int
+        from loan_schedule_entry_paid p
+        where e.id = p.id and e.loan_account_id = $2 and p.paid_amount < p.total_due
+        "#,
+    )
+    .bind(input.holiday_days)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"insert into loan_repayment_holidays (loan_account_id, organization_id, holiday_days, reason, created_by)
+           values ($1, $2, $3, $4, $5)"#,
+    )
+    .bind(id)
+    .bind(auth.organization_id)
+    .bind(input.holiday_days)
+    .bind(reason)
+    .bind(auth.user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Json(()))
+}
+
+/// Restructures a loan: re-amortizes the remaining principal
+/// (`outstanding_balance` net of any outstanding interest/penalty —
+/// the same `principal_outstanding` computation `record_payment` uses)
+/// over a new instalment amount and/or frequency, replacing the
+/// not-yet-fully-paid tail of the schedule from `effective_date`
+/// (default: today) onward. Total owed doesn't change, only how it's
+/// spread out going forward. Instalments already fully paid are left
+/// alone, so past history/receipts stay intact.
+async fn restructure_loan(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(input): Json<RestructureLoanInput>,
+) -> Result<Json<()>, AppError> {
+    auth.require_permission(PERM_FINANCE_RESTRUCTURE)?;
+
+    if input.new_instalment_amount <= Decimal::ZERO {
+        return Err(AppError::bad_request(
+            "Enter a new instalment amount greater than zero.",
+        ));
+    }
+    if let Some(freq) = input.new_repayment_frequency_days {
+        if freq <= 0 {
+            return Err(AppError::bad_request(
+                "Enter a repayment frequency greater than zero days.",
+            ));
+        }
+    }
+    let reason = input.reason.as_deref().map(str::trim).filter(|s| !s.is_empty());
+
+    let mut tx = state.db.begin().await?;
+
+    let account: Option<(Decimal, Decimal, i32, String)> = sqlx::query_as(
+        r#"select pla.outstanding_balance, pla.instalment_amount, pla.repayment_frequency_days, pla.status
+           from plot_loan_accounts pla
+           join plot_sales ps on ps.id = pla.sale_id
+           where pla.id = $1 and ps.organization_id = $2
+           for update of pla"#,
+    )
+    .bind(id)
+    .bind(auth.organization_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (outstanding_balance, old_instalment_amount, old_frequency_days, status) =
+        account.ok_or(AppError::NotFound)?;
+
+    if matches!(status.as_str(), "cancelled" | "closed" | "repossessed_or_reallocated") {
+        return Err(AppError::conflict(
+            "This loan account is closed, cancelled, or repossessed — it can't be restructured.",
+        ));
+    }
+    if outstanding_balance <= Decimal::ZERO {
+        return Err(AppError::bad_request(
+            "This loan is already fully paid; there's nothing to restructure.",
+        ));
+    }
+
+    let (interest_outstanding, penalty_outstanding) = outstanding_components(&mut *tx, id).await?;
+    let principal_outstanding =
+        (outstanding_balance - interest_outstanding - penalty_outstanding).max(Decimal::ZERO);
+    let new_frequency_days = input.new_repayment_frequency_days.unwrap_or(old_frequency_days);
+
+    const MAX_INSTALMENTS: i64 = 360;
+    let instalments_needed = (principal_outstanding / input.new_instalment_amount).ceil();
+    if instalments_needed > Decimal::from(MAX_INSTALMENTS) {
+        return Err(AppError::bad_request(
+            "That instalment amount would take more than 360 instalments to clear the balance — enter a larger amount.",
+        ));
+    }
+
+    let last_fully_paid: i32 = sqlx::query_scalar(
+        r#"select coalesce(max(instalment_number), -1) from loan_schedule_entry_paid
+           where loan_account_id = $1 and paid_amount >= total_due"#,
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // The waterfall that decides what's "fully paid" allocates the
+    // account's `amount_paid` oldest-due-date-first across *every*
+    // schedule row (`loan_schedule_entry_paid`). If the freshly
+    // generated tail were allowed to start before the due date of the
+    // last kept (already fully paid) row, its earlier-dated instalments
+    // would jump the queue and consume the payment pot ahead of that
+    // kept row — silently un-paying an instalment that was genuinely
+    // covered, with no change in money owed. Flooring the anchor date
+    // at the kept tail's own last due date keeps the new schedule
+    // strictly after it, so restructuring a loan that's ahead of
+    // schedule can never retroactively look like it fell behind.
+    let last_kept_due_date: Option<NaiveDate> = if last_fully_paid >= 0 {
+        sqlx::query_scalar(
+            "select due_date from repayment_schedule_entries where loan_account_id = $1 and instalment_number = $2",
+        )
+        .bind(id)
+        .bind(last_fully_paid)
+        .fetch_optional(&mut *tx)
+        .await?
+    } else {
+        None
+    };
+    let requested_effective_date = input.effective_date.unwrap_or_else(|| Utc::now().date_naive());
+    let effective_date = match last_kept_due_date {
+        Some(floor) => requested_effective_date.max(floor),
+        None => requested_effective_date,
+    };
+
+    sqlx::query("delete from repayment_schedule_entries where loan_account_id = $1 and instalment_number > $2")
+        .bind(id)
+        .bind(last_fully_paid)
+        .execute(&mut *tx)
+        .await?;
+
+    let mut remaining = principal_outstanding;
+    let mut instalment_number = last_fully_paid + 1;
+    let mut due_date = effective_date;
+    while remaining > Decimal::ZERO {
+        due_date += Duration::days(new_frequency_days as i64);
+        let amount = remaining.min(input.new_instalment_amount);
+        sqlx::query(
+            r#"insert into repayment_schedule_entries
+                (loan_account_id, instalment_number, due_date, principal_due, interest_due, fees_due, total_due, amount_paid, status)
+               values ($1, $2, $3, $4, 0, 0, $4, 0, 'upcoming')"#,
+        )
+        .bind(id)
+        .bind(instalment_number)
+        .bind(due_date)
+        .bind(amount)
+        .execute(&mut *tx)
+        .await?;
+        remaining -= amount;
+        instalment_number += 1;
+    }
+
+    sqlx::query(
+        "update plot_loan_accounts set instalment_amount = $1, repayment_frequency_days = $2, status = 'restructured' where id = $3",
+    )
+        .bind(input.new_instalment_amount)
+        .bind(new_frequency_days)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query(
+        r#"insert into loan_restructures
+            (loan_account_id, organization_id, old_instalment_amount, new_instalment_amount,
+             old_repayment_frequency_days, new_repayment_frequency_days, reason, created_by)
+           values ($1, $2, $3, $4, $5, $6, $7, $8)"#,
+    )
+    .bind(id)
+    .bind(auth.organization_id)
+    .bind(old_instalment_amount)
+    .bind(input.new_instalment_amount)
+    .bind(old_frequency_days)
+    .bind(new_frequency_days)
+    .bind(reason)
+    .bind(auth.user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Json(()))
 }

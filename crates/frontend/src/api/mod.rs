@@ -281,6 +281,28 @@ impl ApiClient {
         }
     }
 
+    pub async fn apply_repayment_holiday(
+        &self,
+        loan_account_id: Uuid,
+        input: domain::ApplyRepaymentHolidayInput,
+    ) -> Result<(), ApiError> {
+        match self {
+            Self::Mock(api) => api.apply_repayment_holiday(loan_account_id, input).await,
+            Self::Http(api) => api.apply_repayment_holiday(loan_account_id, input).await,
+        }
+    }
+
+    pub async fn restructure_loan(
+        &self,
+        loan_account_id: Uuid,
+        input: domain::RestructureLoanInput,
+    ) -> Result<(), ApiError> {
+        match self {
+            Self::Mock(api) => api.restructure_loan(loan_account_id, input).await,
+            Self::Http(api) => api.restructure_loan(loan_account_id, input).await,
+        }
+    }
+
     pub async fn list_platform_organizations(
         &self,
     ) -> Result<Vec<PlatformOrganizationSummary>, ApiError> {

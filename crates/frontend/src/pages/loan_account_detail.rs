@@ -11,7 +11,8 @@ use crate::auth::{has_permission, use_api, use_auth, use_currency};
 use crate::components::{ErrorAlert, LoadingState, StatCard, StatusBadge};
 use crate::format::{format_money, format_payment_status};
 use domain::{
-    ChargeType, PostChargeInput, PostWaiverInput, WaiverType, PERM_FINANCE_POST_CHARGES,
+    ApplyRepaymentHolidayInput, ChargeType, PostChargeInput, PostWaiverInput,
+    RestructureLoanInput, WaiverType, PERM_FINANCE_POST_CHARGES, PERM_FINANCE_RESTRUCTURE,
     PERM_FINANCE_REVERSE, PERM_PAYMENTS_RECORD,
 };
 
@@ -63,6 +64,7 @@ fn LoanAccountContent(
     let can_record = has_permission(auth, PERM_PAYMENTS_RECORD);
     let can_post_charges = has_permission(auth, PERM_FINANCE_POST_CHARGES);
     let can_reverse = has_permission(auth, PERM_FINANCE_REVERSE);
+    let can_restructure = has_permission(auth, PERM_FINANCE_RESTRUCTURE);
     let account = detail.account.clone();
     let principal_outstanding = (account.outstanding_balance - detail.interest_outstanding - detail.penalty_outstanding).max(Decimal::ZERO);
     let project_href = format!("/projects/{}", detail.project_id);
@@ -140,6 +142,21 @@ fn LoanAccountContent(
             {can_reverse.then(|| view! {
                 <div class="card">
                     <WaiveForm loan_account_id=account.id on_waived=on_payment_recorded.clone() />
+                </div>
+            })}
+            {can_restructure.then(|| view! {
+                <div class="card">
+                    <RepaymentHolidayForm loan_account_id=account.id on_applied=on_payment_recorded.clone() />
+                </div>
+            })}
+            {can_restructure.then(|| view! {
+                <div class="card">
+                    <RestructureForm
+                        loan_account_id=account.id
+                        current_instalment_amount=account.instalment_amount
+                        current_frequency_days=account.repayment_frequency_days
+                        on_restructured=on_payment_recorded.clone()
+                    />
                 </div>
             })}
         </div>
@@ -685,6 +702,234 @@ fn WaiveForm(loan_account_id: Uuid, on_waived: impl Fn() + Clone + 'static) -> i
 
             <button type="submit" class="btn btn-secondary" disabled=submitting>
                 {move || if submitting.get() { "Waiving…" } else { "Waive" }}
+            </button>
+        </form>
+    }
+}
+
+#[component]
+fn RepaymentHolidayForm(loan_account_id: Uuid, on_applied: impl Fn() + Clone + 'static) -> impl IntoView {
+    let api = use_api();
+
+    let holiday_days = RwSignal::new(String::new());
+    let reason = RwSignal::new(String::new());
+    let error = RwSignal::new(None::<String>);
+    let submitting = RwSignal::new(false);
+
+    let on_submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        if submitting.get() {
+            return;
+        }
+        error.set(None);
+
+        let Ok(parsed_days) = holiday_days.get().trim().parse::<i32>() else {
+            error.set(Some("Enter a whole number of days.".to_string()));
+            return;
+        };
+        if parsed_days <= 0 {
+            error.set(Some("Holiday length must be greater than zero days.".to_string()));
+            return;
+        }
+        let reason_value = reason.get().trim().to_string();
+
+        submitting.set(true);
+        let api = api.clone();
+        let on_applied = on_applied.clone();
+        spawn_local(async move {
+            let result = api
+                .apply_repayment_holiday(
+                    loan_account_id,
+                    ApplyRepaymentHolidayInput {
+                        holiday_days: parsed_days,
+                        reason: (!reason_value.is_empty()).then_some(reason_value),
+                    },
+                )
+                .await;
+            match result {
+                Ok(_) => {
+                    holiday_days.set(String::new());
+                    reason.set(String::new());
+                    on_applied();
+                }
+                Err(e) => error.set(Some(format!("{e}"))),
+            }
+            submitting.set(false);
+        });
+    };
+
+    view! {
+        <form on:submit=on_submit>
+            <h3 class="mt-0">"Grant a repayment holiday"</h3>
+            <p class="text-muted" style="margin-top: calc(var(--space-2) * -1);">
+                "Pushes every not-yet-paid instalment's due date back by this many days. Nothing already owed changes."
+            </p>
+            {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+
+            <div class="field">
+                <label for="holiday-days">"Holiday length (days)"</label>
+                <input
+                    id="holiday-days"
+                    type="text"
+                    inputmode="numeric"
+                    required
+                    prop:value=holiday_days
+                    on:input=move |ev| holiday_days.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label for="holiday-reason">"Reason (optional)"</label>
+                <input
+                    id="holiday-reason"
+                    type="text"
+                    prop:value=reason
+                    on:input=move |ev| reason.set(event_target_value(&ev))
+                />
+            </div>
+
+            <button type="submit" class="btn btn-secondary" disabled=submitting>
+                {move || if submitting.get() { "Applying…" } else { "Grant holiday" }}
+            </button>
+        </form>
+    }
+}
+
+#[component]
+fn RestructureForm(
+    loan_account_id: Uuid,
+    current_instalment_amount: Decimal,
+    current_frequency_days: i32,
+    on_restructured: impl Fn() + Clone + 'static,
+) -> impl IntoView {
+    let api = use_api();
+
+    let instalment_amount = RwSignal::new(current_instalment_amount.to_string());
+    let frequency_days = RwSignal::new(current_frequency_days.to_string());
+    let effective_date = RwSignal::new(String::new());
+    let reason = RwSignal::new(String::new());
+    let error = RwSignal::new(None::<String>);
+    let submitting = RwSignal::new(false);
+
+    let on_submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        if submitting.get() {
+            return;
+        }
+        error.set(None);
+
+        let Ok(parsed_amount) = Decimal::from_str(instalment_amount.get().trim()) else {
+            error.set(Some("Enter a valid instalment amount.".to_string()));
+            return;
+        };
+        if parsed_amount <= Decimal::ZERO {
+            error.set(Some("Instalment amount must be greater than zero.".to_string()));
+            return;
+        }
+        let parsed_frequency = if frequency_days.get().trim().is_empty() {
+            None
+        } else {
+            match frequency_days.get().trim().parse::<i32>() {
+                Ok(f) if f > 0 => Some(f),
+                _ => {
+                    error.set(Some("Enter a valid repayment frequency in days.".to_string()));
+                    return;
+                }
+            }
+        };
+        let parsed_date = if effective_date.get().trim().is_empty() {
+            None
+        } else {
+            match chrono::NaiveDate::parse_from_str(effective_date.get().trim(), "%Y-%m-%d") {
+                Ok(d) => Some(d),
+                Err(_) => {
+                    error.set(Some("Enter a valid effective date (YYYY-MM-DD).".to_string()));
+                    return;
+                }
+            }
+        };
+        let reason_value = reason.get().trim().to_string();
+
+        submitting.set(true);
+        let api = api.clone();
+        let on_restructured = on_restructured.clone();
+        spawn_local(async move {
+            let result = api
+                .restructure_loan(
+                    loan_account_id,
+                    RestructureLoanInput {
+                        new_instalment_amount: parsed_amount,
+                        new_repayment_frequency_days: parsed_frequency,
+                        effective_date: parsed_date,
+                        reason: (!reason_value.is_empty()).then_some(reason_value),
+                    },
+                )
+                .await;
+            match result {
+                Ok(_) => {
+                    effective_date.set(String::new());
+                    reason.set(String::new());
+                    on_restructured();
+                }
+                Err(e) => error.set(Some(format!("{e}"))),
+            }
+            submitting.set(false);
+        });
+    };
+
+    view! {
+        <form on:submit=on_submit>
+            <h3 class="mt-0">"Restructure this loan"</h3>
+            <p class="text-muted" style="margin-top: calc(var(--space-2) * -1);">
+                "Re-amortizes the remaining balance at a new instalment amount and/or frequency, starting from the effective date. Total owed doesn't change."
+            </p>
+            {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+
+            <div class="field">
+                <label for="restructure-amount">"New instalment amount"</label>
+                <input
+                    id="restructure-amount"
+                    type="text"
+                    inputmode="numeric"
+                    required
+                    prop:value=instalment_amount
+                    on:input=move |ev| instalment_amount.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label for="restructure-frequency">"Repayment frequency (days)"</label>
+                <input
+                    id="restructure-frequency"
+                    type="text"
+                    inputmode="numeric"
+                    prop:value=frequency_days
+                    on:input=move |ev| frequency_days.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label for="restructure-date">"Effective date (defaults to today)"</label>
+                <input
+                    id="restructure-date"
+                    type="date"
+                    prop:value=effective_date
+                    on:input=move |ev| effective_date.set(event_target_value(&ev))
+                />
+            </div>
+
+            <div class="field">
+                <label for="restructure-reason">"Reason (optional)"</label>
+                <input
+                    id="restructure-reason"
+                    type="text"
+                    prop:value=reason
+                    on:input=move |ev| reason.set(event_target_value(&ev))
+                />
+            </div>
+
+            <button type="submit" class="btn btn-secondary" disabled=submitting>
+                {move || if submitting.get() { "Restructuring…" } else { "Restructure loan" }}
             </button>
         </form>
     }

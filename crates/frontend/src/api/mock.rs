@@ -1412,6 +1412,111 @@ impl MockApi {
         Ok(entry)
     }
 
+    /// Mirrors the real backend's `apply_repayment_holiday`
+    /// (`routes/loan_accounts.rs`): pushes every not-yet-fully-paid
+    /// instalment's due date forward, without touching what's owed.
+    /// The mock has no per-instalment schedule table (`with_live_schedule`
+    /// derives the whole calendar fresh from `start_date` every read) so
+    /// it achieves the same visible effect by shifting `start_date`
+    /// itself forward by `holiday_days` — already-paid entries are
+    /// consumed oldest-first regardless of their nominal date, so this
+    /// only ever changes what shows as "not yet paid".
+    pub async fn apply_repayment_holiday(
+        &self,
+        loan_account_id: Uuid,
+        input: domain::ApplyRepaymentHolidayInput,
+    ) -> Result<(), ApiError> {
+        settle(200).await;
+        if input.holiday_days <= 0 {
+            return Err(ApiError::InvalidCredentials(
+                "Enter a holiday length greater than zero days.".to_string(),
+            ));
+        }
+        if input.holiday_days > 365 {
+            return Err(ApiError::InvalidCredentials(
+                "A repayment holiday can't exceed 365 days.".to_string(),
+            ));
+        }
+
+        let mut db = self.db.lock().unwrap();
+        let account = db
+            .loan_accounts
+            .iter_mut()
+            .find(|la| la.id == loan_account_id)
+            .ok_or(ApiError::NotFound)?;
+        if matches!(
+            account.status,
+            domain::LoanAccountStatus::Cancelled
+                | domain::LoanAccountStatus::Closed
+                | domain::LoanAccountStatus::RepossessedOrReallocated
+        ) {
+            return Err(ApiError::InvalidCredentials(
+                "This loan account is closed, cancelled, or repossessed — it can't be granted a repayment holiday.".to_string(),
+            ));
+        }
+        account.start_date += chrono::Duration::days(input.holiday_days as i64);
+        Ok(())
+    }
+
+    /// Mirrors the real backend's `restructure_loan`: re-amortizes the
+    /// remaining balance at a new instalment amount/frequency. Since
+    /// the mock derives the whole schedule fresh from `instalment_amount`/
+    /// `repayment_frequency_days`/`start_date` on every read rather than
+    /// storing per-instalment rows, applying the new terms directly to
+    /// the account (and re-anchoring `start_date` at the effective date)
+    /// reproduces the same visible effect — a freshly re-amortized
+    /// calendar from that point on — without needing a second schedule
+    /// representation just for the mock.
+    pub async fn restructure_loan(
+        &self,
+        loan_account_id: Uuid,
+        input: domain::RestructureLoanInput,
+    ) -> Result<(), ApiError> {
+        settle(200).await;
+        if input.new_instalment_amount <= Decimal::ZERO {
+            return Err(ApiError::InvalidCredentials(
+                "Enter a new instalment amount greater than zero.".to_string(),
+            ));
+        }
+        if let Some(freq) = input.new_repayment_frequency_days {
+            if freq <= 0 {
+                return Err(ApiError::InvalidCredentials(
+                    "Enter a repayment frequency greater than zero days.".to_string(),
+                ));
+            }
+        }
+
+        let mut db = self.db.lock().unwrap();
+        let account = db
+            .loan_accounts
+            .iter_mut()
+            .find(|la| la.id == loan_account_id)
+            .ok_or(ApiError::NotFound)?;
+        if matches!(
+            account.status,
+            domain::LoanAccountStatus::Cancelled
+                | domain::LoanAccountStatus::Closed
+                | domain::LoanAccountStatus::RepossessedOrReallocated
+        ) {
+            return Err(ApiError::InvalidCredentials(
+                "This loan account is closed, cancelled, or repossessed — it can't be restructured.".to_string(),
+            ));
+        }
+        if account.outstanding_balance <= Decimal::ZERO {
+            return Err(ApiError::InvalidCredentials(
+                "This loan is already fully paid; there's nothing to restructure.".to_string(),
+            ));
+        }
+
+        account.instalment_amount = input.new_instalment_amount;
+        if let Some(freq) = input.new_repayment_frequency_days {
+            account.repayment_frequency_days = freq;
+        }
+        account.start_date = input.effective_date.unwrap_or_else(|| Utc::now().date_naive());
+        account.status = domain::LoanAccountStatus::Restructured;
+        Ok(())
+    }
+
     /// Finance → Loan Accounts: every receivable across every project,
     /// org-wide — the list `get_loan_account` above has no equivalent
     /// for, since until the Finance module nothing needed one.
