@@ -43,7 +43,7 @@ pub fn Dashboard() -> impl IntoView {
             // currency is stated, reactively, from `use_currency()`
             // (populated from Settings → General → Currency, not
             // hardcoded).
-            <div class="dashboard-currency">"Currency: " {move || currency.get()}</div>
+            <div class="currency-note">"Currency: " {move || currency.get()}</div>
         </div>
 
         <Suspense fallback=|| view! { <LoadingState label="Loading dashboard…" /> }>

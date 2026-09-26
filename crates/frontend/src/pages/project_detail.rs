@@ -14,7 +14,7 @@ use crate::api::{
 use crate::auth::{has_permission, use_api, use_auth, use_currency};
 use crate::components::{DocumentsPanel, EmptyState, ErrorAlert, LoadingState, StatusBadge};
 use crate::csv_import::{self, ParsedRow};
-use crate::format::{format_money, format_payment_mode};
+use crate::format::{format_amount, format_payment_mode};
 use domain::{
     MapFeature, MapPolygons, PaymentMode, PlotStatus, PERM_PLOTS_BULK_IMPORT, PERM_PLOTS_CREATE,
     PERM_PLOTS_EDIT, PERM_PLOTS_MAP_EDIT_BOUNDARIES, PERM_PLOTS_MAP_LINK, PERM_PLOTS_MAP_UPLOAD,
@@ -159,6 +159,7 @@ pub fn ProjectDetail() -> impl IntoView {
                         Ok(p) => {
                             let project_id_val = p.id;
                             let commission_rate = p.commission_rate_percent;
+                            let commission_reason = p.commission_rate_override_reason.clone();
                             view! {
                                 <div class="page-header">
                                     <div>
@@ -167,32 +168,36 @@ pub fn ProjectDetail() -> impl IntoView {
                                         <ProjectCommissionEditor
                                             project_id=project_id_val
                                             current_rate=commission_rate
+                                            current_reason=commission_reason
                                             on_saved=move || project.refetch()
                                         />
                                     </div>
-                                    <div style="display:flex; gap: var(--space-2);">
-                                        {can_bulk_import_plots.then(|| view! {
-                                            <button
-                                                class="btn btn-secondary"
-                                                on:click=move |_| {
-                                                    show_bulk_import.update(|v| *v = !*v);
-                                                    show_add_plot.set(false);
-                                                }
-                                            >
-                                                {move || if show_bulk_import.get() { "Cancel" } else { "Bulk import" }}
-                                            </button>
-                                        })}
-                                        {can_create_plot.then(|| view! {
-                                            <button
-                                                class="btn btn-secondary"
-                                                on:click=move |_| {
-                                                    show_add_plot.update(|v| *v = !*v);
-                                                    show_bulk_import.set(false);
-                                                }
-                                            >
-                                                {move || if show_add_plot.get() { "Cancel" } else { "+ Add plot" }}
-                                            </button>
-                                        })}
+                                    <div style="display:flex; flex-direction:column; align-items:flex-end; gap: var(--space-2);">
+                                        <div class="currency-note">"Currency: " {move || currency.get()}</div>
+                                        <div style="display:flex; gap: var(--space-2);">
+                                            {can_bulk_import_plots.then(|| view! {
+                                                <button
+                                                    class="btn btn-secondary"
+                                                    on:click=move |_| {
+                                                        show_bulk_import.update(|v| *v = !*v);
+                                                        show_add_plot.set(false);
+                                                    }
+                                                >
+                                                    {move || if show_bulk_import.get() { "Cancel" } else { "Bulk import" }}
+                                                </button>
+                                            })}
+                                            {can_create_plot.then(|| view! {
+                                                <button
+                                                    class="btn btn-secondary"
+                                                    on:click=move |_| {
+                                                        show_add_plot.update(|v| *v = !*v);
+                                                        show_bulk_import.set(false);
+                                                    }
+                                                >
+                                                    {move || if show_add_plot.get() { "Cancel" } else { "+ Add plot" }}
+                                                </button>
+                                            })}
+                                        </div>
                                     </div>
                                 </div>
 
@@ -306,7 +311,7 @@ pub fn ProjectDetail() -> impl IntoView {
                                                         {domain::format_dimensions(pwc.plot.side_1, pwc.plot.side_2, &pwc.plot.dimension_unit)
                                                             .map(|d| format!(" · {d}"))}
                                                     </span>
-                                                    <span class="plot-price">{format_money(pwc.plot.asking_price, &currency.get())}</span>
+                                                    <span class="plot-price">{format_amount(pwc.plot.asking_price)}</span>
                                                 </button>
                                             }
                                         })
@@ -340,11 +345,14 @@ pub fn ProjectDetail() -> impl IntoView {
                         <div class="card" style="margin-top: var(--space-4)">
                             <div class="page-header" style="margin-bottom: var(--space-3)">
                                 <h2 class="mt-0">{pwc.plot.plot_number.clone()}</h2>
-                                <StatusBadge label=pwc.status_label.clone() color=pwc.status_color.clone() />
+                                <div style="display:flex; gap: var(--space-2); align-items:center;">
+                                    <span class="currency-note">"Currency: " {move || currency.get()}</span>
+                                    <StatusBadge label=pwc.status_label.clone() color=pwc.status_color.clone() />
+                                </div>
                             </div>
                             <p>
                                 "Size: " {pwc.plot.size.to_string()} " acres · Asking price: "
-                                {format_money(pwc.plot.asking_price, &currency.get())}
+                                {format_amount(pwc.plot.asking_price)}
                             </p>
                             <p>"Dimensions: " {dimensions_text}</p>
                             {pwc.plot.title_number.clone().map(|t| view! { <p>"Title: " {t}</p> })}
@@ -1055,7 +1063,6 @@ fn PlotCommercialPosition(
     on_changed: impl Fn() + Clone + Send + 'static,
 ) -> impl IntoView {
     let api = use_api();
-    let currency = use_currency();
 
     let summary = LocalResource::new(move || {
         let api = api.clone();
@@ -1066,7 +1073,6 @@ fn PlotCommercialPosition(
         <div class="commercial-position">
             <Suspense fallback=|| view! { <LoadingState label="Loading commercial position…" /> }>
                 {move || {
-                    let currency = currency.get();
                     let on_changed = on_changed.clone();
                     summary
                         .get()
@@ -1112,7 +1118,7 @@ fn PlotCommercialPosition(
                                             </div>
                                             <div>
                                                 <span class="meta">"Selling Price"</span>
-                                                <p class="mt-0">{format_money(sale.agreed_price, &currency)}</p>
+                                                <p class="mt-0">{format_amount(sale.agreed_price)}</p>
                                             </div>
                                             {(!sale.co_buyers.is_empty()).then(|| {
                                                 let names: Vec<String> = sale.co_buyers.iter().map(|c| c.customer_name.clone()).collect();
@@ -1150,17 +1156,17 @@ fn PlotCommercialPosition(
                                                         <div>
                                                             <span class="meta">"Deposit"</span>
                                                             <p class="mt-0">
-                                                                {format_money(loan.deposit_paid, &currency)} " of "
-                                                                {format_money(loan.deposit_required, &currency)}
+                                                                {format_amount(loan.deposit_paid)} " of "
+                                                                {format_amount(loan.deposit_required)}
                                                             </p>
                                                         </div>
                                                         <div>
                                                             <span class="meta">"Total Paid"</span>
-                                                            <p class="mt-0">{format_money(loan.amount_paid, &currency)}</p>
+                                                            <p class="mt-0">{format_amount(loan.amount_paid)}</p>
                                                         </div>
                                                         <div>
                                                             <span class="meta">"Outstanding Balance"</span>
-                                                            <p class="mt-0">{format_money(loan.outstanding_balance, &currency)}</p>
+                                                            <p class="mt-0">{format_amount(loan.outstanding_balance)}</p>
                                                         </div>
                                                         <div>
                                                             <span class="meta">"Finance Status"</span>
@@ -1175,7 +1181,7 @@ fn PlotCommercialPosition(
                                                             view! {
                                                                 <div>
                                                                     <span class="meta">"Next Instalment"</span>
-                                                                    <p class="mt-0">{format_money(amount, &currency)} " due " {due.to_string()}</p>
+                                                                    <p class="mt-0">{format_amount(amount)} " due " {due.to_string()}</p>
                                                                 </div>
                                                             }
                                                         })}
@@ -1660,29 +1666,59 @@ fn TitleRecordsPanel(plot_id: Uuid) -> impl IntoView {
 fn ProjectCommissionEditor(
     project_id: Uuid,
     current_rate: Option<Decimal>,
+    current_reason: Option<String>,
     on_saved: impl Fn() + Clone + Send + 'static,
 ) -> impl IntoView {
     let auth = use_auth();
+    let api = use_api();
+
+    // The reference point every override is shown relative to — "5%
+    // -> 7%" tells the reader what they're actually changing, where a
+    // bare "7%" leaves them to remember (or go look up) what the
+    // org-wide default even is.
+    let settings = LocalResource::new({
+        let api = api.clone();
+        move || {
+            let api = api.clone();
+            async move { api.get_settings().await }
+        }
+    });
+    let default_rate_text = move || -> String {
+        settings
+            .get()
+            .and_then(|w| w.take().ok())
+            .map(|s| format!("{}%", s.default_commission_rate_percent))
+            .unwrap_or_else(|| "…".to_string())
+    };
+
     if !has_permission(auth, domain::PERM_SETTINGS_MANAGE_ORGANIZATION) {
         return view! {
-            <p class="meta mt-0">
-                {match current_rate {
-                    Some(r) => format!("Commission rate: {r}% (project override)"),
-                    None => "Commission rate: organization default".to_string(),
+            <div class="commission-editor">
+                {move || match current_rate {
+                    Some(r) => view! {
+                        <p class="meta mt-0 commission-summary">
+                            "Default Commission: " {default_rate_text()}
+                            " → Override Commission Rate: " <strong>{format!("{r}%")}</strong>
+                        </p>
+                    }.into_any(),
+                    None => view! {
+                        <p class="meta mt-0">"Commission rate: organization default (" {default_rate_text()} ")"</p>
+                    }.into_any(),
                 }}
-            </p>
+                {current_reason.clone().map(|r| view! { <p class="meta mt-0 commission-reason">"Reason for override: " {r}</p> })}
+            </div>
         }.into_any();
     }
-    let api = use_api();
 
     let open = RwSignal::new(false);
     let rate_value = RwSignal::new(current_rate.map(|r| r.to_string()).unwrap_or_default());
+    let reason_value = RwSignal::new(current_reason.clone().unwrap_or_default());
     let error = RwSignal::new(None::<String>);
     let saving = RwSignal::new(false);
 
     let api_for_save = api.clone();
     let on_saved_for_save = on_saved.clone();
-    let save = move |rate: Option<Decimal>| {
+    let save = move |rate: Option<Decimal>, reason: Option<String>| {
         if saving.get() {
             return;
         }
@@ -1691,7 +1727,16 @@ fn ProjectCommissionEditor(
         let api = api_for_save.clone();
         let on_saved = on_saved_for_save.clone();
         spawn_local(async move {
-            match api.update_project_commission(project_id, domain::UpdateProjectCommissionInput { commission_rate_percent: rate }).await {
+            match api
+                .update_project_commission(
+                    project_id,
+                    domain::UpdateProjectCommissionInput {
+                        commission_rate_percent: rate,
+                        commission_rate_override_reason: reason,
+                    },
+                )
+                .await
+            {
                 Ok(_) => {
                     saving.set(false);
                     open.set(false);
@@ -1705,66 +1750,119 @@ fn ProjectCommissionEditor(
         });
     };
 
+    let current_reason_for_summary = current_reason.clone();
+
     view! {
-        <p class="meta mt-0" style="display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap;">
-            {move || match current_rate {
-                Some(r) => format!("Commission rate: {r}% (project override)"),
-                None => "Commission rate: organization default".to_string(),
+        <div class="commission-editor">
+            {move || {
+                if open.get() {
+                    view! {}.into_any()
+                } else {
+                    match current_rate {
+                        Some(r) => view! {
+                            <>
+                                <p class="meta mt-0 commission-summary">
+                                    "Default Commission: " {default_rate_text()}
+                                    " → Override Commission Rate: " <strong>{format!("{r}%")}</strong>
+                                </p>
+                                {current_reason_for_summary.clone().map(|reason| view! {
+                                    <p class="meta mt-0 commission-reason">"Reason for override: " {reason}</p>
+                                })}
+                            </>
+                        }.into_any(),
+                        None => view! {
+                            <p class="meta mt-0">"Commission rate: organization default (" {default_rate_text()} ")"</p>
+                        }.into_any(),
+                    }
+                }
             }}
-            <button
-                type="button"
-                class="btn btn-secondary btn-sm"
-                on:click=move |_| open.update(|v| *v = !*v)
-            >
-                {move || if open.get() { "Never mind" } else { "Override" }}
-            </button>
-        </p>
-        {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
-        {move || if open.get() {
-            let save_for_set = save.clone();
-            let save_for_clear = save.clone();
-            view! {
-                <div style="display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; margin-bottom: var(--space-3);">
-                    <input
-                        type="text"
-                        inputmode="decimal"
-                        style="max-width: 120px;"
-                        prop:value=rate_value
-                        on:input=move |ev| rate_value.set(event_target_value(&ev))
-                    />
-                    <button
-                        type="button"
-                        class="btn btn-primary btn-sm"
-                        disabled=move || saving.get()
-                        on:click=move |_| {
-                            let Ok(rate) = Decimal::from_str(rate_value.get().trim()) else {
-                                error.set(Some("Enter a valid rate.".to_string()));
-                                return;
-                            };
-                            if rate < Decimal::ZERO || rate > Decimal::from(100) {
-                                error.set(Some("Rate must be between 0 and 100%.".to_string()));
-                                return;
-                            }
-                            save_for_set(Some(rate));
+            <div style="display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap;">
+                <button
+                    type="button"
+                    class="btn btn-secondary btn-sm"
+                    on:click=move |_| open.update(|v| *v = !*v)
+                >
+                    {move || {
+                        if open.get() {
+                            "Never mind"
+                        } else if current_rate.is_some() {
+                            "Edit Override"
+                        } else {
+                            "Override Commission Rate"
                         }
-                    >
-                        {move || if saving.get() { "Saving…" } else { "Save override" }}
-                    </button>
-                    {current_rate.is_some().then(|| view! {
+                    }}
+                </button>
+                {(current_rate.is_some()).then(|| {
+                    let save_for_clear = save.clone();
+                    view! {
                         <button
                             type="button"
                             class="btn btn-secondary btn-sm"
                             disabled=move || saving.get()
-                            on:click=move |_| save_for_clear(None)
+                            on:click=move |_| save_for_clear(None, None)
                         >
-                            "Clear override"
+                            "Remove Override / Restore Default"
                         </button>
-                    })}
-                </div>
-            }.into_any()
-        } else {
-            view! {}.into_any()
-        }}
+                    }
+                })}
+            </div>
+            {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+            {move || if open.get() {
+                let save_for_set = save.clone();
+                view! {
+                    <div class="commission-override-form">
+                        <p class="meta mt-0">"Override the default commission rate for this project."</p>
+                        <div class="field">
+                            <label>"Default Commission"</label>
+                            <p class="mt-0">{default_rate_text()}</p>
+                        </div>
+                        <div class="field">
+                            <label for="commission-override-rate">"Override Commission Rate (%)"</label>
+                            <input
+                                id="commission-override-rate"
+                                type="text"
+                                inputmode="decimal"
+                                style="max-width: 140px;"
+                                prop:value=rate_value
+                                on:input=move |ev| rate_value.set(event_target_value(&ev))
+                            />
+                        </div>
+                        <div class="field">
+                            <label for="commission-override-reason">"Reason for override (optional)"</label>
+                            <input
+                                id="commission-override-reason"
+                                type="text"
+                                placeholder="e.g. negotiated rate for this launch"
+                                prop:value=reason_value
+                                on:input=move |ev| reason_value.set(event_target_value(&ev))
+                            />
+                        </div>
+                        <p class="meta mt-0">"Applies to: this project"</p>
+                        <button
+                            type="button"
+                            class="btn btn-primary btn-sm"
+                            disabled=move || saving.get()
+                            on:click=move |_| {
+                                let Ok(rate) = Decimal::from_str(rate_value.get().trim()) else {
+                                    error.set(Some("Enter a valid rate.".to_string()));
+                                    return;
+                                };
+                                if rate < Decimal::ZERO || rate > Decimal::from(100) {
+                                    error.set(Some("Rate must be between 0 and 100%.".to_string()));
+                                    return;
+                                }
+                                let reason = reason_value.get().trim().to_string();
+                                save_for_set(Some(rate), (!reason.is_empty()).then_some(reason));
+                            }
+                        >
+                            {move || if saving.get() { "Saving…" } else { "Save override" }}
+                        </button>
+                    </div>
+                }.into_any()
+            } else {
+                view! {}.into_any()
+            }}
+        </div>
     }.into_any()
 }
 

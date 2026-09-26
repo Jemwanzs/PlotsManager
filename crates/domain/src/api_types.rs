@@ -249,6 +249,9 @@ pub struct UpdateProjectCommissionInput {
     /// `None` clears the override, falling back to the organization's
     /// default rate.
     pub commission_rate_percent: Option<Decimal>,
+    /// Ignored (and cleared) when `commission_rate_percent` is `None`
+    /// — a cleared override has nothing left to explain.
+    pub commission_rate_override_reason: Option<String>,
 }
 
 /// A new plot within a project. `plot_number` must be unique **within

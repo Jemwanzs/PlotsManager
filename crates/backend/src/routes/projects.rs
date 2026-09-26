@@ -109,10 +109,12 @@ struct ProjectRow {
     assigned_manager_id: Option<Uuid>,
     created_at: DateTime<Utc>,
     commission_rate_percent: Option<Decimal>,
+    commission_rate_override_reason: Option<String>,
 }
 
 const PROJECT_COLUMNS: &str = "id, organization_id, branch_id, name, code, location, original_title_number, \
-    total_size, area_unit, status, assigned_manager_id, created_at, commission_rate_percent";
+    total_size, area_unit, status, assigned_manager_id, created_at, commission_rate_percent, \
+    commission_rate_override_reason";
 
 impl ProjectRow {
     fn into_domain(self) -> Result<Project, AppError> {
@@ -130,6 +132,7 @@ impl ProjectRow {
             assigned_manager_id: self.assigned_manager_id,
             created_at: self.created_at,
             commission_rate_percent: self.commission_rate_percent,
+            commission_rate_override_reason: self.commission_rate_override_reason,
         })
     }
 }
@@ -227,15 +230,23 @@ async fn update_project_commission(
             ));
         }
     }
+    // A cleared override (`commission_rate_percent: None`) has nothing
+    // left to explain, so its reason is cleared alongside it rather
+    // than left behind as a stale note the UI would otherwise have to
+    // special-case away.
+    let reason = input.commission_rate_percent.and(
+        input.commission_rate_override_reason.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+    );
 
     let row: Option<ProjectRow> = sqlx::query_as(&format!(
         r#"
-        update projects set commission_rate_percent = $1
-        where id = $2 and organization_id = $3
+        update projects set commission_rate_percent = $1, commission_rate_override_reason = $2
+        where id = $3 and organization_id = $4
         returning {PROJECT_COLUMNS}
         "#,
     ))
     .bind(input.commission_rate_percent)
+    .bind(reason)
     .bind(id)
     .bind(auth.organization_id)
     .fetch_optional(&state.db)

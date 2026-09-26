@@ -40,6 +40,9 @@ pub struct Project {
     /// for every sale on this project — `None` means "use the org
     /// default" (see `domain::OrganizationSettings`'s doc comment).
     pub commission_rate_percent: Option<Decimal>,
+    /// Why the override was set, shown alongside it in the UI — always
+    /// `None` when `commission_rate_percent` is `None`.
+    pub commission_rate_override_reason: Option<String>,
 }
 
 /// One image plus one polygon set per project — the minimal v1 slice

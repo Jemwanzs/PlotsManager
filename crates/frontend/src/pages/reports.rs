@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::auth::{has_permission, use_api, use_auth, use_currency};
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatCard, StatusBadge};
-use crate::format::{format_money, format_payment_mode};
+use crate::format::{format_amount, format_money, format_payment_mode};
 use domain::{PERM_REPORTS_AGENT_PERFORMANCE, PERM_REPORTS_INVENTORY, PERM_REPORTS_SALES};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -213,9 +213,10 @@ fn SalesReportTab() -> impl IntoView {
                         }
                             .into_any(),
                         Ok(r) => view! {
+                            <div class="currency-note" style="margin-bottom: var(--space-3);">"Currency: " {currency.get()}</div>
                             <div class="stat-grid">
                                 <StatCard label="Sales" value=r.total_count.to_string() />
-                                <StatCard label="Total value" value=format_money(r.total_value, &currency.get()) />
+                                <StatCard label="Total value" value=format_amount(r.total_value) />
                             </div>
                             <div class="card">
                                 <div class="table-scroll">

@@ -483,6 +483,7 @@ impl MockApi {
             assigned_manager_id: Some(db.demo_user.id),
             created_at: Utc::now(),
             commission_rate_percent: None,
+            commission_rate_override_reason: None,
         };
         db.projects.push(project.clone());
         Ok(project)
@@ -504,6 +505,9 @@ impl MockApi {
         let mut db = self.db.lock().unwrap();
         let project = db.projects.iter_mut().find(|p| p.id == project_id).ok_or(ApiError::NotFound)?;
         project.commission_rate_percent = input.commission_rate_percent;
+        project.commission_rate_override_reason = input.commission_rate_percent.and(
+            input.commission_rate_override_reason.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
+        );
         Ok(project.clone())
     }
 
@@ -3863,6 +3867,7 @@ fn seed() -> MockDb {
             assigned_manager_id: Some(demo_user.id),
             created_at: Utc::now(),
             commission_rate_percent: None,
+            commission_rate_override_reason: None,
         });
 
         for n in 1..=plot_count {

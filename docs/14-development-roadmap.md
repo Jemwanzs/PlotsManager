@@ -148,7 +148,57 @@ verified Paystack webhook receiver exist
 the org sign-up flow that creates the first `organizations` row, or
 enforcement of subscription status against feature access.
 
-## Sequencing principle
+## UI/UX consistency — number/currency display, commission override clarity (2026-09-26)
+
+Raised via user feedback (screenshots of the loan account detail page
+and the project header's commission override control): repeating the
+currency code beside every figure in a tight grid wastes horizontal
+space and risks numbers wrapping mid-value, and "Override" as a bare
+button label doesn't say what's being overridden.
+
+**Done:**
+- `format::format_amount` (bare number, no currency code) is now the
+  default for every stat-card-style grid and dt/dd summary panel:
+  dashboard (already the reference implementation this pattern was
+  generalized from), Finance Overview (already correct), loan account
+  detail's stat grid, the Sales report's stat-card row, and project
+  detail's plot tiles + commercial-position panel. Each of those
+  sections now shows the currency exactly once via a shared
+  `.currency-note` badge (renamed from the dashboard-only
+  `.dashboard-currency` it started as) instead of repeating it per
+  figure.
+- `.stat-card .stat-value` uses `clamp()` for responsive font-sizing
+  and keeps `white-space: nowrap` (already present) so a figure never
+  breaks mid-number, only ever shrinks or (via nowrap) stays intact.
+- Left `format_money` (currency-inline) deliberately in two kinds of
+  place: (1) tables/lists where each row is scanned independently
+  (payment history, ledger entries, report rows, receipts' own line
+  items) — no redundancy to remove there, each row is its own
+  context; (2) printable/exportable documents (the payment receipt,
+  the loan statement) — these are meant to be viewed or shared
+  outside the surrounding app chrome (printed, screenshotted), where
+  restating the currency per figure is the more correct convention,
+  not a redundancy.
+- `ProjectCommissionEditor` (project detail page) rewritten: the bare
+  "Override" button is now "Override Commission Rate" (or "Edit
+  Override" once one is active); the summary line reads "Default
+  Commission: X% → Override Commission Rate: Y%" instead of a bare
+  percentage with no reference point; a new optional
+  `commission_rate_override_reason` (migration `0034`, stored on
+  `projects`, cleared automatically whenever the override itself is
+  cleared) is shown under the summary and captured in the edit form
+  alongside a static "Applies to: this project" line (the only scope
+  that exists today — no per-sale/per-agent override); "Clear
+  override" is now "Remove Override / Restore Default".
+
+**Deliberately not swept this pass** (isolated single/double money
+mentions on a page, not a repeated grid — the "where appropriate"
+carve-out the request itself named): customer detail, quotation
+detail/list, approvals list, recent activity, the org-wide loan
+accounts list. A future pass could still apply `.currency-note` there
+if a page grows more than one or two money mentions.
+
+
 
 Manual interactive map creation and manual payment capture ship first, as
 reliable operational systems; AI-assisted plan conversion and payment-

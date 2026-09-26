@@ -47,7 +47,7 @@ pub fn FinanceOverview() -> impl IntoView {
                 <h1>"Finance overview"</h1>
                 <p>"The organization's receivables at a glance — performing, non-performing, and fully paid."</p>
             </div>
-            <div class="dashboard-currency">"Currency: " {move || currency.get()}</div>
+            <div class="currency-note">"Currency: " {move || currency.get()}</div>
         </div>
 
         <Suspense fallback=|| view! { <LoadingState label="Loading finance data…" /> }>

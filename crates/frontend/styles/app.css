@@ -868,7 +868,13 @@ a {
 .page-header p {
   margin: 0;
 }
-.dashboard-currency {
+/* A single "Currency: KES" indicator, shown once per page/section so
+   individual figures (stat cards, summary panels) don't each need to
+   repeat the currency code — see `format::format_amount` and its own
+   doc comment. Also usable inline (not just as the page-header's
+   flex-item usage `align-self` implies) — see `.commercial-position-
+   grid`'s and `ProjectCommissionEditor`'s own call sites. */
+.currency-note {
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--color-primary);
@@ -1201,8 +1207,15 @@ a {
   letter-spacing: 0.03em;
   margin-bottom: var(--space-2);
 }
+/* `clamp()`, not a fixed size — a long figure (an 8-9 digit balance,
+   say) needs to shrink a little on a narrow phone width rather than
+   overflow its card; `white-space: nowrap` (below) stops it breaking
+   mid-number instead, which is the one thing it must never do (see
+   `format::format_amount`'s own doc comment on why the currency code
+   is dropped from these values in the first place — shorter strings
+   need less shrinking room to begin with). */
 .stat-card .stat-value {
-  font-size: 1.2rem;
+  font-size: clamp(0.95rem, 4.5vw, 1.2rem);
   font-weight: 700;
   white-space: nowrap;
 }
@@ -1210,6 +1223,7 @@ a {
   font-size: 0.76rem;
   color: var(--color-text-muted);
   margin-top: 2px;
+  white-space: nowrap;
 }
 @media (min-width: 900px) {
   .stat-card {
@@ -1217,7 +1231,7 @@ a {
     padding: var(--space-4);
   }
   .stat-card .stat-value {
-    font-size: 1.35rem;
+    font-size: clamp(1.05rem, 1.6vw, 1.35rem);
   }
 }
 
@@ -1269,6 +1283,30 @@ a {
 }
 .commercial-position-grid {
   row-gap: var(--space-3);
+}
+
+/* Project header's commission-rate override
+   (pages/project_detail.rs::ProjectCommissionEditor) — the "Default:
+   X% -> Override: Y%" summary line, its optional reason note below,
+   and the expanded edit form. */
+.commission-editor {
+  margin-top: var(--space-2);
+}
+.commission-summary {
+  font-size: 0.9rem;
+}
+.commission-summary strong {
+  color: var(--color-primary);
+}
+.commission-reason {
+  font-style: italic;
+}
+.commission-override-form {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  max-width: 420px;
 }
 
 .project-card {

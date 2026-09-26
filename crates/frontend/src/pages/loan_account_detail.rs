@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::api::{LoanAccountDetail, RecordPaymentInput};
 use crate::auth::{has_permission, use_api, use_auth, use_currency};
 use crate::components::{ErrorAlert, LoadingState, StatCard, StatusBadge};
-use crate::format::{format_money, format_payment_status};
+use crate::format::{format_amount, format_money, format_payment_status};
 use domain::{
     ApplyRepaymentHolidayInput, ChargeType, PostChargeInput, PostWaiverInput,
     RestructureLoanInput, WaiverType, PERM_FINANCE_POST_CHARGES, PERM_FINANCE_RESTRUCTURE,
@@ -83,34 +83,35 @@ fn LoanAccountContent(
                 </p>
             </div>
             <div style="display:flex; gap: var(--space-2); align-items: center;">
+                <span class="currency-note">"Currency: " {move || currency.get()}</span>
                 <A href=statement_href attr:class="btn btn-secondary">"View Statement"</A>
                 <StatusBadge label=detail.status_label.clone() color=detail.status_color.clone() />
             </div>
         </div>
 
         <div class="stat-grid">
-            <StatCard label="Principal" value=format_money(account.principal, &currency.get()) />
+            <StatCard label="Principal" value=format_amount(account.principal) />
             <StatCard
                 label="Deposit"
-                value=format_money(account.deposit_paid, &currency.get())
-                sub=format!("of {} required", format_money(account.deposit_required, &currency.get()))
+                value=format_amount(account.deposit_paid)
+                sub=format!("of {} required", format_amount(account.deposit_required))
             />
             <StatCard
                 label="Instalment"
-                value=format_money(account.instalment_amount, &currency.get())
+                value=format_amount(account.instalment_amount)
                 sub=format!("every {} days", account.repayment_frequency_days)
             />
-            <StatCard label="Amount paid" value=format_money(account.amount_paid, &currency.get()) />
+            <StatCard label="Amount paid" value=format_amount(account.amount_paid) />
             <StatCard
                 label="Outstanding balance"
-                value=format_money(account.outstanding_balance, &currency.get())
+                value=format_amount(account.outstanding_balance)
                 sub=account.interest_rate.map(|r| format!("{r}% interest")).unwrap_or_else(|| "Interest-free".to_string())
             />
             {account.next_instalment_due_date.map(|due| {
                 view! {
                     <StatCard
                         label="Next instalment"
-                        value=format_money(account.next_instalment_amount.unwrap_or_default(), &currency.get())
+                        value=format_amount(account.next_instalment_amount.unwrap_or_default())
                         sub=format!("due {due}")
                     />
                 }
