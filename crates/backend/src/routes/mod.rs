@@ -6,6 +6,7 @@ mod customers;
 mod dashboard;
 mod documents;
 mod finance;
+mod integrations;
 mod loan_accounts;
 mod migrations;
 mod platform;
@@ -30,6 +31,7 @@ pub fn router() -> Router<AppState> {
         .merge(auth::router())
         .merge(dashboard::router())
         .merge(finance::router())
+        .merge(integrations::router())
         .merge(projects::router())
         .merge(customers::router())
         .merge(sales::router())

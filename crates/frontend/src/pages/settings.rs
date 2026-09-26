@@ -16,8 +16,9 @@ use std::str::FromStr;
 use crate::auth::{has_permission, use_api, use_auth, use_currency};
 use crate::components::{ErrorAlert, LoadingState};
 use domain::{
-    ChargePolicy, FinancePolicy, NumberingConfigInput, OrganizationSettings, RateType,
-    UpdateOrganizationSettingsInput, PERM_SETTINGS_MANAGE_ORGANIZATION,
+    ChargePolicy, FinancePolicy, IntegrationCategory, IntegrationConfig, NumberingConfigInput,
+    OrganizationSettings, RateType, UpdateOrganizationSettingsInput, UpsertIntegrationConfigInput,
+    PERM_SETTINGS_MANAGE_INTEGRATIONS, PERM_SETTINGS_MANAGE_ORGANIZATION,
 };
 
 #[component]
@@ -54,6 +55,257 @@ pub fn Settings() -> impl IntoView {
                     })
             }}
         </Suspense>
+
+        <IntegrationsPanel />
+    }
+}
+
+/// Settings → Integrations — a per-category (SMS/email/WhatsApp/
+/// payment/banking/accounting) provider config, entirely independent
+/// of `SettingsForm` above (its own resource, its own save action per
+/// category) since it isn't part of `OrganizationSettings` at all —
+/// see `domain::integrations`'s module docs for why this exists ahead
+/// of any actual provider code plugging into it.
+#[component]
+fn IntegrationsPanel() -> impl IntoView {
+    let api = use_api();
+    let auth = use_auth();
+    let can_manage = has_permission(auth, PERM_SETTINGS_MANAGE_INTEGRATIONS);
+    let refresh = RwSignal::new(0u32);
+
+    let configs = LocalResource::new({
+        let api = api.clone();
+        move || {
+            refresh.get();
+            let api = api.clone();
+            async move { api.list_integration_configs().await }
+        }
+    });
+
+    view! {
+        <div class="card form-card" style="margin-top: var(--space-4); max-width: none;">
+            <h2 class="mt-0">"Integrations"</h2>
+            <p class="meta mt-0">
+                "Configure the credentials each provider category will use, ready for the "
+                "actual integration to plug in later — nothing here sends an SMS, email, "
+                "WhatsApp message, or payment yet."
+            </p>
+            {(!can_manage).then(|| view! {
+                <p class="meta mt-0">"You don't have permission to configure integrations — ask an admin."</p>
+            })}
+            <Suspense fallback=|| view! { <LoadingState label="Loading integrations…" /> }>
+                {move || {
+                    configs.get().map(|wrapped| wrapped.take()).map(|result| match result {
+                        Ok(list) => {
+                            view! {
+                                <div class="card-grid" style="margin-top: var(--space-3);">
+                                    {IntegrationCategory::ALL.iter().map(|&category| {
+                                        let existing = list.iter().find(|c| c.category == category).cloned();
+                                        view! {
+                                            <IntegrationCategoryCard
+                                                category=category
+                                                existing=existing
+                                                can_manage=can_manage
+                                                on_saved=move || refresh.update(|n| *n += 1)
+                                            />
+                                        }
+                                    }).collect_view()}
+                                </div>
+                            }.into_any()
+                        }
+                        Err(e) => view! { <ErrorAlert message=format!("Couldn't load integrations: {e}") /> }.into_any(),
+                    })
+                }}
+            </Suspense>
+        </div>
+    }
+}
+
+#[component]
+fn IntegrationCategoryCard(
+    category: IntegrationCategory,
+    existing: Option<IntegrationConfig>,
+    can_manage: bool,
+    on_saved: impl Fn() + Clone + 'static,
+) -> impl IntoView {
+    let api = use_api();
+
+    let is_configured = existing.is_some();
+    let provider_value = RwSignal::new(existing.as_ref().map(|c| c.provider.clone()).unwrap_or_default());
+    let enabled_value = RwSignal::new(existing.as_ref().is_some_and(|c| c.enabled));
+    let api_key_value = RwSignal::new(String::new());
+    let api_secret_value = RwSignal::new(String::new());
+    let config_value = RwSignal::new(
+        existing.as_ref().map(|c| c.config.to_string()).filter(|s| s != "{}").unwrap_or_default(),
+    );
+    let has_api_key = existing.as_ref().is_some_and(|c| c.has_api_key);
+    let has_api_secret = existing.as_ref().is_some_and(|c| c.has_api_secret);
+    let error = RwSignal::new(None::<String>);
+    let saving = RwSignal::new(false);
+    let removing = RwSignal::new(false);
+    let on_saved_for_remove = on_saved.clone();
+
+    let on_save = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        if saving.get() {
+            return;
+        }
+        error.set(None);
+
+        let provider = provider_value.get().trim().to_string();
+        if provider.is_empty() {
+            error.set(Some("Enter a provider name.".to_string()));
+            return;
+        }
+        let config_text = config_value.get();
+        let config = if config_text.trim().is_empty() {
+            serde_json::Value::Object(Default::default())
+        } else {
+            match serde_json::from_str(config_text.trim()) {
+                Ok(v) => v,
+                Err(_) => {
+                    error.set(Some("Additional config must be valid JSON (or left blank).".to_string()));
+                    return;
+                }
+            }
+        };
+        let api_key = api_key_value.get();
+        let api_secret = api_secret_value.get();
+
+        saving.set(true);
+        let api = api.clone();
+        let on_saved = on_saved.clone();
+        spawn_local(async move {
+            let result = api
+                .upsert_integration_config(
+                    category,
+                    UpsertIntegrationConfigInput {
+                        provider,
+                        enabled: enabled_value.get(),
+                        config,
+                        api_key: (!api_key.is_empty()).then_some(api_key),
+                        api_secret: (!api_secret.is_empty()).then_some(api_secret),
+                        extra_credentials: None,
+                    },
+                )
+                .await;
+            match result {
+                Ok(_) => {
+                    api_key_value.set(String::new());
+                    api_secret_value.set(String::new());
+                    on_saved();
+                }
+                Err(e) => error.set(Some(format!("{e}"))),
+            }
+            saving.set(false);
+        });
+    };
+
+    let api_for_remove = use_api();
+    let on_remove = move |_: leptos::ev::MouseEvent| {
+        if removing.get() {
+            return;
+        }
+        removing.set(true);
+        let api = api_for_remove.clone();
+        let on_saved = on_saved_for_remove.clone();
+        spawn_local(async move {
+            match api.delete_integration_config(category).await {
+                Ok(_) => on_saved(),
+                Err(e) => error.set(Some(format!("{e}"))),
+            }
+            removing.set(false);
+        });
+    };
+
+    view! {
+        <div class="card">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap: var(--space-2);">
+                <h3 class="mt-0">{category.label()}</h3>
+                {is_configured.then(|| {
+                    let (label, color) = if existing.as_ref().is_some_and(|c| c.enabled) {
+                        ("Enabled", "#16a34a")
+                    } else {
+                        ("Configured, disabled", "#6b7280")
+                    };
+                    view! { <span class="badge" style=format!("background-color: {color}")>{label}</span> }
+                })}
+            </div>
+            {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+            {if can_manage {
+                view! {
+                    <form on:submit=on_save>
+                        <div class="field">
+                            <label>"Provider"</label>
+                            <input
+                                type="text"
+                                placeholder="e.g. Africa's Talking, Twilio, Paystack, M-Pesa Daraja"
+                                prop:value=provider_value
+                                on:input=move |ev| provider_value.set(event_target_value(&ev))
+                            />
+                        </div>
+                        <div class="field">
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    prop:checked=enabled_value
+                                    on:change=move |ev| enabled_value.set(event_target_checked(&ev))
+                                    style="width:auto; margin-right: var(--space-2);"
+                                />
+                                "Enabled"
+                            </label>
+                        </div>
+                        <div class="field">
+                            <label>{if has_api_key { "API key (configured — leave blank to keep)" } else { "API key" }}</label>
+                            <input
+                                type="password"
+                                autocomplete="off"
+                                prop:value=api_key_value
+                                on:input=move |ev| api_key_value.set(event_target_value(&ev))
+                            />
+                        </div>
+                        <div class="field">
+                            <label>{if has_api_secret { "API secret (configured — leave blank to keep)" } else { "API secret" }}</label>
+                            <input
+                                type="password"
+                                autocomplete="off"
+                                prop:value=api_secret_value
+                                on:input=move |ev| api_secret_value.set(event_target_value(&ev))
+                            />
+                        </div>
+                        <div class="field">
+                            <label>"Additional config (JSON, optional)"</label>
+                            <textarea
+                                placeholder="{\"sender_id\": \"...\", \"webhook_url\": \"...\"}"
+                                prop:value=config_value
+                                on:input=move |ev| config_value.set(event_target_value(&ev))
+                            ></textarea>
+                        </div>
+                        <div style="display:flex; gap: var(--space-2);">
+                            <button type="submit" class="btn btn-primary btn-sm" disabled=move || saving.get()>
+                                {move || if saving.get() { "Saving…" } else { "Save" }}
+                            </button>
+                            {is_configured.then(|| view! {
+                                <button
+                                    type="button"
+                                    class="btn btn-secondary btn-sm"
+                                    disabled=move || removing.get()
+                                    on:click=on_remove
+                                >
+                                    {move || if removing.get() { "Removing…" } else { "Remove" }}
+                                </button>
+                            })}
+                        </div>
+                    </form>
+                }.into_any()
+            } else {
+                view! {
+                    <p class="meta">
+                        {if is_configured { format!("Provider: {}", existing.as_ref().unwrap().provider) } else { "Not configured".to_string() }}
+                    </p>
+                }.into_any()
+            }}
+        </div>
     }
 }
 

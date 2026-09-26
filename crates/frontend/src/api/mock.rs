@@ -83,6 +83,42 @@ struct MockDb {
     /// are read in many places that don't care about lifecycle state.
     sale_lifecycle: HashMap<Uuid, (domain::SaleLifecycleStatus, Option<String>, chrono::DateTime<Utc>)>,
     agent_commissions: Vec<MockAgentCommission>,
+    /// Mirrors `integration_configs` (`database/migrations/
+    /// 0035_integration_configs.sql`) — settings-driven third-party
+    /// integration config, no actual provider calls behind any of it
+    /// yet. Empty by default; nothing seeds a demo entry here since
+    /// there's no real credential to show.
+    integration_configs: Vec<MockIntegrationConfig>,
+}
+
+/// Mirrors the real `integration_configs` table — see
+/// `domain::IntegrationConfig`'s own doc comment on the write-only
+/// credential convention this preserves in the mock too.
+struct MockIntegrationConfig {
+    id: Uuid,
+    category: domain::IntegrationCategory,
+    provider: String,
+    enabled: bool,
+    config: serde_json::Value,
+    api_key: Option<String>,
+    api_secret: Option<String>,
+    extra_credentials: Option<serde_json::Value>,
+    updated_at: chrono::DateTime<Utc>,
+}
+
+fn mock_integration_config_to_domain(c: &MockIntegrationConfig) -> domain::IntegrationConfig {
+    domain::IntegrationConfig {
+        id: c.id,
+        category: c.category,
+        provider: c.provider.clone(),
+        enabled: c.enabled,
+        config: c.config.clone(),
+        has_api_key: c.api_key.as_deref().is_some_and(|s| !s.is_empty()),
+        has_api_secret: c.api_secret.as_deref().is_some_and(|s| !s.is_empty()),
+        has_extra_credentials: c.extra_credentials.as_ref().is_some_and(|v| !v.is_null()),
+        updated_at: c.updated_at,
+        updated_by_name: None,
+    }
 }
 
 /// Mirrors the real `agent_commissions` table (`database/migrations/
@@ -3115,6 +3151,66 @@ impl MockApi {
         Ok(build_settings(&db))
     }
 
+    pub async fn list_integration_configs(&self) -> Result<Vec<domain::IntegrationConfig>, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+        Ok(db.integration_configs.iter().map(mock_integration_config_to_domain).collect())
+    }
+
+    pub async fn upsert_integration_config(
+        &self,
+        category: domain::IntegrationCategory,
+        input: domain::UpsertIntegrationConfigInput,
+    ) -> Result<domain::IntegrationConfig, ApiError> {
+        settle(200).await;
+        let provider = input.provider.trim().to_string();
+        if provider.is_empty() {
+            return Err(ApiError::InvalidCredentials("Enter a provider name.".to_string()));
+        }
+
+        let mut db = self.db.lock().unwrap();
+        if let Some(existing) = db.integration_configs.iter_mut().find(|c| c.category == category) {
+            existing.provider = provider;
+            existing.enabled = input.enabled;
+            existing.config = input.config;
+            // Omitted (`None`) keeps the existing stored value; present
+            // (including an empty string / JSON null) replaces it —
+            // same tri-state convention the real backend's upsert uses.
+            if let Some(key) = input.api_key {
+                existing.api_key = Some(key);
+            }
+            if let Some(secret) = input.api_secret {
+                existing.api_secret = Some(secret);
+            }
+            if let Some(extra) = input.extra_credentials {
+                existing.extra_credentials = Some(extra);
+            }
+            existing.updated_at = Utc::now();
+            return Ok(mock_integration_config_to_domain(existing));
+        }
+
+        let config = MockIntegrationConfig {
+            id: Uuid::new_v4(),
+            category,
+            provider,
+            enabled: input.enabled,
+            config: input.config,
+            api_key: input.api_key,
+            api_secret: input.api_secret,
+            extra_credentials: input.extra_credentials,
+            updated_at: Utc::now(),
+        };
+        db.integration_configs.push(config);
+        Ok(mock_integration_config_to_domain(db.integration_configs.last().unwrap()))
+    }
+
+    pub async fn delete_integration_config(&self, category: domain::IntegrationCategory) -> Result<(), ApiError> {
+        settle(150).await;
+        let mut db = self.db.lock().unwrap();
+        db.integration_configs.retain(|c| c.category != category);
+        Ok(())
+    }
+
     pub async fn next_number(
         &self,
         entity_type: &str,
@@ -4147,5 +4243,6 @@ fn seed() -> MockDb {
         migration_staging_rows: Vec::new(),
         sale_lifecycle: HashMap::new(),
         agent_commissions: Vec::new(),
+        integration_configs: Vec::new(),
     }
 }

@@ -201,6 +201,12 @@ pub const PERM_CONFIGURE_APPROVALS: &str = "security:configure_approvals";
 // enforcement target in this registry's first rollout.
 // ---------------------------------------------------------------
 pub const PERM_SETTINGS_MANAGE_ORGANIZATION: &str = "settings:manage_organization";
+/// Configuring third-party integration credentials (SMS/email/
+/// WhatsApp/payment/banking/accounting providers — `routes/
+/// integrations.rs`) — kept distinct from `settings:manage_organization`
+/// since these are literal API secrets, a materially higher-stakes
+/// category than currency/timezone/numbering.
+pub const PERM_SETTINGS_MANAGE_INTEGRATIONS: &str = "settings:manage_integrations";
 
 // ---------------------------------------------------------------
 // Documents — the generic document vault (`routes/documents.rs`).
@@ -296,6 +302,7 @@ const REGISTRY: &[StaticPermissionDef] = &[
     StaticPermissionDef { key: PERM_CONFIGURE_APPROVALS, label: "Configure approval workflows", module: "Security", feature: "Policies", sensitive: true },
 
     StaticPermissionDef { key: PERM_SETTINGS_MANAGE_ORGANIZATION, label: "Manage organization settings", module: "Settings", feature: "Organization", sensitive: true },
+    StaticPermissionDef { key: PERM_SETTINGS_MANAGE_INTEGRATIONS, label: "Configure integration credentials (SMS/email/WhatsApp/payment/banking/accounting)", module: "Settings", feature: "Integrations", sensitive: true },
 
     StaticPermissionDef { key: PERM_DOCUMENTS_MANAGE, label: "Upload/delete documents", module: "Documents", feature: "Document vault", sensitive: true },
 

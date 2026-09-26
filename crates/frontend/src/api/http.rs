@@ -757,6 +757,27 @@ impl HttpApi {
         self.put("/api/v1/settings", &input).await
     }
 
+    pub async fn list_integration_configs(&self) -> Result<Vec<domain::IntegrationConfig>, ApiError> {
+        self.get("/api/v1/settings/integrations").await
+    }
+
+    pub async fn upsert_integration_config(
+        &self,
+        category: domain::IntegrationCategory,
+        input: domain::UpsertIntegrationConfigInput,
+    ) -> Result<domain::IntegrationConfig, ApiError> {
+        self.put(
+            &format!("/api/v1/settings/integrations/{}", category.as_str()),
+            &input,
+        )
+        .await
+    }
+
+    pub async fn delete_integration_config(&self, category: domain::IntegrationCategory) -> Result<(), ApiError> {
+        self.delete(&format!("/api/v1/settings/integrations/{}", category.as_str()))
+            .await
+    }
+
     pub async fn next_number(
         &self,
         entity_type: &str,

@@ -681,6 +681,31 @@ impl ApiClient {
         }
     }
 
+    pub async fn list_integration_configs(&self) -> Result<Vec<domain::IntegrationConfig>, ApiError> {
+        match self {
+            Self::Mock(api) => api.list_integration_configs().await,
+            Self::Http(api) => api.list_integration_configs().await,
+        }
+    }
+
+    pub async fn upsert_integration_config(
+        &self,
+        category: domain::IntegrationCategory,
+        input: domain::UpsertIntegrationConfigInput,
+    ) -> Result<domain::IntegrationConfig, ApiError> {
+        match self {
+            Self::Mock(api) => api.upsert_integration_config(category, input).await,
+            Self::Http(api) => api.upsert_integration_config(category, input).await,
+        }
+    }
+
+    pub async fn delete_integration_config(&self, category: domain::IntegrationCategory) -> Result<(), ApiError> {
+        match self {
+            Self::Mock(api) => api.delete_integration_config(category).await,
+            Self::Http(api) => api.delete_integration_config(category).await,
+        }
+    }
+
     /// Atomically issues and returns the next auto-generated number for
     /// `entity_type` ("plot" or "project") — used by the "Auto-generate"
     /// affordance on the create-plot/create-project forms.
