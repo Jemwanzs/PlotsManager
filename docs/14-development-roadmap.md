@@ -198,7 +198,7 @@ detail/list, approvals list, recent activity, the org-wide loan
 accounts list. A future pass could still apply `.currency-note` there
 if a page grows more than one or two money mentions.
 
-
+## Sequencing principle
 
 Manual interactive map creation and manual payment capture ship first, as
 reliable operational systems; AI-assisted plan conversion and payment-

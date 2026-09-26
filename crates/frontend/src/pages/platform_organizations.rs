@@ -4,6 +4,7 @@ use leptos_router::components::A;
 use crate::api::PlatformOrganizationSummary;
 use crate::auth::use_api;
 use crate::components::{EmptyState, ErrorAlert, LoadingState, StatusBadge};
+use crate::format::organization_status_meta;
 
 #[component]
 pub fn PlatformOrganizations() -> impl IntoView {
@@ -56,11 +57,7 @@ pub fn PlatformOrganizations() -> impl IntoView {
 #[component]
 fn TenantCard(org: PlatformOrganizationSummary) -> impl IntoView {
     let href = format!("/platform/{}", org.id);
-    let (status_label, status_color) = if org.status == "deactivated" {
-        ("Deactivated".to_string(), "#dc2626".to_string())
-    } else {
-        ("Active".to_string(), "#16a34a".to_string())
-    };
+    let (status_label, status_color) = organization_status_meta(&org.status);
 
     let plan_line = match (org.subscription_status.as_deref(), org.trial_ends_at) {
         (Some("trialing"), Some(ends)) => {
@@ -74,7 +71,7 @@ fn TenantCard(org: PlatformOrganizationSummary) -> impl IntoView {
         <A href=href attr:class="project-card card">
             <div class="page-header" style="margin-bottom: var(--space-2)">
                 <h3 class="mt-0">{org.name.clone()}</h3>
-                <StatusBadge label=status_label color=status_color />
+                <StatusBadge label=status_label.to_string() color=status_color.to_string() />
             </div>
             <div class="meta">{org.code.clone()} " · " {org.plan_name.clone().unwrap_or_else(|| "No plan".to_string())}</div>
             <p class="mt-0">

@@ -2561,8 +2561,12 @@ fn MapUploadForm(project_id: Uuid, on_uploaded: impl Fn() + Clone + 'static) -> 
 /// Existing Plot" panel below the map, this component's core addition
 /// — a shape no longer needs a plot picked before it can be drawn (see
 /// `domain::MapFeature`'s module docs for why). In edit mode, clicking
-/// the image places a boundary point and clicking an existing polygon
-/// (draft or linked) removes it.
+/// the image places a boundary point; clicking an existing *unlinked*
+/// polygon discards it from the local draft (nothing was saved yet);
+/// clicking a *linked* one unlinks it server-side immediately (`PUT
+/// .../unlink`, `ApiClient::unlink_map_feature`) rather than deleting
+/// it locally, since that shape and link are already persisted — this
+/// keeps the drawn boundary intact for relinking instead of losing it.
 #[component]
 fn MapCanvas(
     project_id: Uuid,
@@ -2587,6 +2591,12 @@ fn MapCanvas(
     let draft_label = RwSignal::new(String::new());
     let selected_draft: RwSignal<Option<MapFeature>> = RwSignal::new(None);
     let plots_for_draft_panel = plots.clone();
+    // A dedicated clone for the polygon-click handlers below: the
+    // `<Show>` block earlier in this view captures the outer `api` by
+    // move (per its own comment on why), so anything referencing `api`
+    // after that point needs its own pre-move clone rather than the
+    // original binding.
+    let api_for_polygons = api.clone();
     let error = RwSignal::new(None::<String>);
     let saving = RwSignal::new(false);
     let replacing = RwSignal::new(false);
@@ -2651,7 +2661,7 @@ fn MapCanvas(
         <div style="display:flex; justify-content: space-between; align-items:center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-2);">
             <p class="meta mt-0">
                 {move || if edit_mode.get() {
-                    "Click the image to place boundary points; click an existing shape to remove it."
+                    "Click the image to place boundary points; click an existing unlinked shape to remove it, or a linked one to unlink it (its boundary is kept for relinking)."
                 } else {
                     "Click a shape to view its plot — or, if it isn't linked to one yet, to create or link one."
                 }}
@@ -2795,10 +2805,12 @@ fn MapCanvas(
                                 .join(" ");
                             let color = feature_color(&plots, f.plot_id);
                             let fid = f.id.clone();
+                            let is_linked = f.plot_id.is_some();
                             let plot_for_select = f.plot_id.and_then(|id| plots.iter().find(|p| p.plot.id == id)).cloned();
                             let feature_for_draft = f.clone();
                             let (cx, cy) = polygon_centroid(&f.points);
                             let label = f.label.clone();
+                            let api_for_click = api_for_polygons.clone();
                             // Draft shapes get a dashed outline — visually
                             // distinct from a real, coloured-by-status plot
                             // (`domain::plot_status_meta`'s palette never
@@ -2816,8 +2828,27 @@ fn MapCanvas(
                                     on:click=move |ev: leptos::ev::MouseEvent| {
                                         ev.stop_propagation();
                                         if edit_mode.get() {
-                                            let fid = fid.clone();
-                                            features.update(|list| list.retain(|x| x.id != fid));
+                                            if is_linked {
+                                                // A linked shape is already saved server-side —
+                                                // discarding it from the local draft array (like
+                                                // an unsaved unlinked one) would delete the
+                                                // boundary outright next "Save map". Unlinking
+                                                // through the dedicated endpoint instead clears
+                                                // just the plot_id, keeping the drawn shape
+                                                // intact so it can be relinked to a different
+                                                // plot (see routes/project_map.rs::unlink_feature).
+                                                let fid = fid.clone();
+                                                let api = api_for_click.clone();
+                                                spawn_local(async move {
+                                                    match api.unlink_map_feature(project_id, &fid).await {
+                                                        Ok(_) => refresh.update(|n| *n += 1),
+                                                        Err(e) => error.set(Some(format!("{e}"))),
+                                                    }
+                                                });
+                                            } else {
+                                                let fid = fid.clone();
+                                                features.update(|list| list.retain(|x| x.id != fid));
+                                            }
                                         } else if let Some(p) = plot_for_select.clone() {
                                             selected.set(Some(p));
                                         } else {

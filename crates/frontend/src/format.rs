@@ -31,6 +31,31 @@ pub fn format_ledger_entry_type(entry_type: LedgerEntryType) -> &'static str {
     }
 }
 
+/// `organizations.status` (`database/migrations/0015_tenant_onboarding.sql`'s
+/// check constraint) is plain `text`, not a shared domain enum — the
+/// backend never branches on more than a couple of these values by
+/// name (`routes/platform.rs`), so it was never worth the round trip
+/// through `to_pg`/`from_pg` the way every other status column in this
+/// app gets. That's exactly why the platform admin pages need this:
+/// without it, every status other than `"deactivated"` silently fell
+/// back to a green "Active" badge — including `pending_approval` and
+/// `rejected`, which is actively misleading (a tenant stuck awaiting
+/// review looked identical to one already trading).
+pub fn organization_status_meta(status: &str) -> (&'static str, &'static str) {
+    match status {
+        "active" | "trial_active" | "subscription_active" => ("Active", "#16a34a"),
+        "pending_approval" => ("Pending Approval", "#d97706"),
+        "trial_expired" => ("Trial Expired", "#ea580c"),
+        "payment_due" => ("Payment Due", "#f59e0b"),
+        "suspended" => ("Suspended", "#dc2626"),
+        "termination_requested" => ("Termination Requested", "#c2410c"),
+        "terminated" => ("Terminated", "#374151"),
+        "rejected" => ("Rejected", "#7f1d1d"),
+        "deactivated" => ("Deactivated", "#dc2626"),
+        _ => ("Unknown", "#6b7280"),
+    }
+}
+
 /// "KES 1,234,500" — `Decimal`'s own `Display` has no thousands
 /// separator, and every money value in this app needs one. The space
 /// is a non-breaking one: a narrow stat tile will otherwise wrap

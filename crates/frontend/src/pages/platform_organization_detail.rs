@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::api::ApiClient;
 use crate::auth::use_api;
 use crate::components::{ErrorAlert, LoadingState, StatusBadge};
+use crate::format::organization_status_meta;
 
 /// A free function, not a closure capturing component state, because
 /// it's called from inside `<Suspense>`'s reactive render closure
@@ -43,6 +44,61 @@ fn trigger_status_change(
     });
 }
 
+/// "Approve & Start Trial" — see `routes/platform.rs::approve_organization`'s
+/// own doc comment for why the trial clock starts at approval, not at
+/// the original sign-up.
+fn trigger_approve(
+    api: ApiClient,
+    id: Uuid,
+    action_error: RwSignal<Option<String>>,
+    working: RwSignal<bool>,
+    refresh: RwSignal<u32>,
+) {
+    if working.get() {
+        return;
+    }
+    action_error.set(None);
+    working.set(true);
+    spawn_local(async move {
+        match api.approve_organization(id).await {
+            Ok(_) => refresh.update(|n| *n += 1),
+            Err(e) => action_error.set(Some(format!("{e}"))),
+        }
+        working.set(false);
+    });
+}
+
+fn trigger_reject(
+    api: ApiClient,
+    id: Uuid,
+    reason: String,
+    action_error: RwSignal<Option<String>>,
+    working: RwSignal<bool>,
+    reject_open: RwSignal<bool>,
+    refresh: RwSignal<u32>,
+) {
+    if working.get() {
+        return;
+    }
+    let reason = reason.trim().to_string();
+    if reason.is_empty() {
+        action_error.set(Some("Enter a reason for rejecting this application.".to_string()));
+        return;
+    }
+    action_error.set(None);
+    working.set(true);
+    spawn_local(async move {
+        match api.reject_organization(id, reason).await {
+            Ok(_) => {
+                reject_open.set(false);
+                refresh.update(|n| *n += 1);
+            }
+            Err(e) => action_error.set(Some(format!("{e}"))),
+        }
+        working.set(false);
+    });
+}
+
 #[component]
 pub fn PlatformOrganizationDetailPage() -> impl IntoView {
     let api = use_api();
@@ -52,11 +108,13 @@ pub fn PlatformOrganizationDetailPage() -> impl IntoView {
 
     let action_error = RwSignal::new(None::<String>);
     let working = RwSignal::new(false);
-    // Bumped after a successful deactivate/reactivate to force the detail
-    // resource to refetch — LocalResource has no manual `.refetch()`, so
-    // this extra signal in its source tuple is the idiomatic way to
-    // trigger one.
+    // Bumped after a successful deactivate/reactivate/approve/reject to
+    // force the detail resource to refetch — LocalResource has no manual
+    // `.refetch()`, so this extra signal in its source tuple is the
+    // idiomatic way to trigger one.
     let refresh = RwSignal::new(0u32);
+    let reject_open = RwSignal::new(false);
+    let reject_reason = RwSignal::new(String::new());
 
     let detail = LocalResource::new({
         let api = api.clone();
@@ -82,11 +140,8 @@ pub fn PlatformOrganizationDetailPage() -> impl IntoView {
                     .map(|result| match result {
                         Ok(d) => {
                             let is_deactivated = d.summary.status == "deactivated";
-                            let (status_label, status_color) = if is_deactivated {
-                                ("Deactivated".to_string(), "#dc2626".to_string())
-                            } else {
-                                ("Active".to_string(), "#16a34a".to_string())
-                            };
+                            let is_pending = d.summary.status == "pending_approval";
+                            let (status_label, status_color) = organization_status_meta(&d.summary.status);
                             let plan_line = match (d.summary.subscription_status.as_deref(), d.summary.trial_ends_at) {
                                 (Some("trialing"), Some(ends)) => {
                                     format!("Trialing — ends {}", ends.format("%b %d, %Y at %H:%M UTC"))
@@ -114,12 +169,56 @@ pub fn PlatformOrganizationDetailPage() -> impl IntoView {
                                         <p>{d.summary.code.clone()} " · " {plan_line}</p>
                                     </div>
                                     <div style="display:flex; gap: var(--space-2); align-items:center">
-                                        <StatusBadge label=status_label color=status_color />
+                                        <StatusBadge label=status_label.to_string() color=status_color.to_string() />
                                         {if is_own_org {
                                             view! {
                                                 <span class="meta" title="The platform owner's own organization can't be deactivated.">
                                                     "Platform owner's organization"
                                                 </span>
+                                            }
+                                                .into_any()
+                                        } else if is_pending {
+                                            let api_approve = api_for_click.clone();
+                                            let api_reject = api_for_click.clone();
+                                            view! {
+                                                <button
+                                                    class="btn btn-primary"
+                                                    disabled=move || working.get()
+                                                    on:click=move |_| trigger_approve(
+                                                        api_approve.clone(), tenant_id, action_error, working, refresh,
+                                                    )
+                                                >
+                                                    "Approve & Start Trial"
+                                                </button>
+                                                <button
+                                                    class="btn btn-danger"
+                                                    disabled=move || working.get()
+                                                    on:click=move |_| reject_open.update(|v| *v = !*v)
+                                                >
+                                                    {move || if reject_open.get() { "Never mind" } else { "Reject" }}
+                                                </button>
+                                                {move || reject_open.get().then(|| {
+                                                    let api_reject = api_reject.clone();
+                                                    view! {
+                                                        <input
+                                                            type="text"
+                                                            placeholder="Reason for rejecting"
+                                                            style="max-width: 220px;"
+                                                            prop:value=reject_reason
+                                                            on:input=move |ev| reject_reason.set(event_target_value(&ev))
+                                                        />
+                                                        <button
+                                                            class="btn btn-danger"
+                                                            disabled=move || working.get()
+                                                            on:click=move |_| trigger_reject(
+                                                                api_reject.clone(), tenant_id, reject_reason.get(),
+                                                                action_error, working, reject_open, refresh,
+                                                            )
+                                                        >
+                                                            "Confirm rejection"
+                                                        </button>
+                                                    }
+                                                })}
                                             }
                                                 .into_any()
                                         } else if is_deactivated {
@@ -155,6 +254,22 @@ pub fn PlatformOrganizationDetailPage() -> impl IntoView {
                                 </div>
 
                                 {move || action_error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+
+                                {d.summary.rejected_reason.clone().map(|reason| view! {
+                                    <div class="alert alert-warning" style="margin-bottom: var(--space-3)">
+                                        <p class="mt-0">
+                                            "Rejected"
+                                            {d.summary.rejected_at.map(|at| format!(" on {}", at.format("%b %d, %Y"))).unwrap_or_default()}
+                                            ": " {reason}
+                                        </p>
+                                    </div>
+                                })}
+                                {d.summary.approved_by_name.clone().map(|name| view! {
+                                    <p class="meta mt-0" style="margin-bottom: var(--space-3);">
+                                        "Approved by " {name}
+                                        {d.summary.approved_at.map(|at| format!(" on {}", at.format("%b %d, %Y"))).unwrap_or_default()}
+                                    </p>
+                                })}
 
                                 <h2>"Users"</h2>
                                 <div class="card">
