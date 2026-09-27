@@ -116,12 +116,19 @@ with a price-approval gate below a configured minimum —
 `routes/approvals.rs`), and agent commissions (per-project override
 over an org-wide default, accrued at sale creation, voided on
 cancel/repossess — `routes/sales.rs`, `0032_agent_commissions.sql`)
-are all built and wired end-to-end. Not built: a real customer 360°
-view — `CustomerDetail` today is just the customer's profile fields
-plus their sale history (`api_types.rs::CustomerDetail`), with no
-document attachments, no communications log, and no cross-sale
-financial rollup (total paid/outstanding across every loan account
-the customer holds) in one place.
+are all built and wired end-to-end. **Customer 360° view (corrected
+2026-09-27 — my own 2026-09-26 note here was wrong about document
+attachments, which were already built): now real.** `CustomerDetail`
+carries a cross-sale financial rollup (`total_agreed_value`/
+`total_paid`/`total_outstanding`, a Full Cash sale counted as paid in
+full since it has no loan account to sum) and each sale's own
+paid/outstanding when it has one, shown as a stat-card row on the
+customer page (`routes/customers.rs::get_customer`,
+`pages/customer_detail.rs`); document attachments were already wired
+via the generic `DocumentsPanel` (`entity_type: Customer`) before this
+correction, not missing. Genuinely still not built: a communications
+log (no such concept exists anywhere yet — would need a new table, not
+just a query).
 
 ## Phase 6 — Payments and Transfers
 Nests the payments delivery sequence:

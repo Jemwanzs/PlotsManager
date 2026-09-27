@@ -8,8 +8,8 @@ use uuid::Uuid;
 use crate::api::{lead_stage_meta, ApiClient, ApiError, LeadStage, UpdateLeadInput};
 use crate::auth::{has_permission, use_api, use_auth, use_currency};
 use domain::{CustomerType, UpdateCustomerInput, PERM_CUSTOMERS_EDIT, PERM_CUSTOMERS_LEADS_UPDATE};
-use crate::components::{DocumentsPanel, EmptyState, ErrorAlert, LoadingState, StatusBadge};
-use crate::format::{format_money, format_payment_mode};
+use crate::components::{DocumentsPanel, EmptyState, ErrorAlert, LoadingState, StatCard, StatusBadge};
+use crate::format::{format_amount, format_money, format_payment_mode};
 
 fn customer_type_value(t: CustomerType) -> &'static str {
     match t {
@@ -198,6 +198,19 @@ pub fn CustomerDetail() -> impl IntoView {
                                     </div>
                                     <StatusBadge label=stage_label.to_string() color=stage_color.to_string() />
                                 </div>
+
+                                {(!d.sales.is_empty()).then(|| view! {
+                                    <div>
+                                        <div style="display:flex; justify-content:flex-end; margin-bottom: var(--space-2);">
+                                            <span class="currency-note">"Currency: " {currency.get()}</span>
+                                        </div>
+                                        <div class="stat-grid">
+                                            <StatCard label="Total agreed value" value=format_amount(d.total_agreed_value) />
+                                            <StatCard label="Total paid" value=format_amount(d.total_paid) />
+                                            <StatCard label="Total outstanding" value=format_amount(d.total_outstanding) />
+                                        </div>
+                                    </div>
+                                })}
 
                                 <div class="card form-card" style="margin-bottom: var(--space-5)">
                                     <div class="page-header" style="margin-bottom: var(--space-3)">
@@ -433,14 +446,30 @@ pub fn CustomerDetail() -> impl IntoView {
                                             .into_iter()
                                             .map(|sale| {
                                                 // A Lipa Pole Pole sale has a loan account — that's the
-                                                // more useful destination (payment history/capture)
-                                                // than the project. A Full Cash sale has neither yet
-                                                // (docs/08 §2.1 payment tracking isn't built), so it
-                                                // just links back to the project for now.
+                                                // more useful destination (payment history/capture,
+                                                // receipts, the running statement) than the project. A
+                                                // Full Cash sale has no loan account (there's nothing to
+                                                // capture against — see `PlotCommercialPosition`'s "Paid
+                                                // in full (cash)"), so it just links back to the project.
                                                 let href = sale
                                                     .loan_account_id
                                                     .map(|id| format!("/loan-accounts/{id}"))
                                                     .unwrap_or_else(|| format!("/projects/{}", sale.project_id));
+                                                let payment_line = match (sale.amount_paid, sale.outstanding_balance) {
+                                                    (Some(paid), Some(outstanding)) => {
+                                                        format!(
+                                                            "{} · paid {} · outstanding {}",
+                                                            format_payment_mode(sale.payment_mode),
+                                                            format_amount(paid),
+                                                            format_amount(outstanding),
+                                                        )
+                                                    }
+                                                    _ => format!(
+                                                        "{} · {}",
+                                                        format_payment_mode(sale.payment_mode),
+                                                        format_money(sale.agreed_price, &currency.get()),
+                                                    ),
+                                                };
                                                 view! {
                                                     <A href=href attr:class="project-card card">
                                                         <div class="page-header" style="margin-bottom: var(--space-2)">
@@ -448,10 +477,7 @@ pub fn CustomerDetail() -> impl IntoView {
                                                             <StatusBadge label=sale.status_label.clone() color=sale.status_color.clone() />
                                                         </div>
                                                         <div class="meta">{sale.project_name.clone()}</div>
-                                                        <p class="mt-0">
-                                                            {format_payment_mode(sale.payment_mode)} " · "
-                                                            {format_money(sale.agreed_price, &currency.get())}
-                                                        </p>
+                                                        <p class="mt-0">{payment_line}</p>
                                                     </A>
                                                 }
                                             })

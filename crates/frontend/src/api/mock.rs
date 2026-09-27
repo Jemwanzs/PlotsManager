@@ -916,7 +916,7 @@ impl MockApi {
         // a co-buyer sees the sale too — mirrors the real backend's
         // `get_customer` (see `database/migrations/
         // 0026_sale_plots_and_customers.sql`).
-        let sales = db
+        let sales: Vec<CustomerSaleView> = db
             .sales
             .iter()
             .filter(|s| db.sale_customers.iter().any(|(sale_id, cid, _)| *sale_id == s.id && *cid == id))
@@ -924,11 +924,7 @@ impl MockApi {
                 let plot = db.plots.iter().find(|p| p.id == sale.plot_id)?;
                 let project = db.projects.iter().find(|pr| pr.id == plot.project_id)?;
                 let (label, color) = status_meta(plot.status);
-                let loan_account_id = db
-                    .loan_accounts
-                    .iter()
-                    .find(|la| la.sale_id == sale.id)
-                    .map(|la| la.id);
+                let loan_account = db.loan_accounts.iter().find(|la| la.sale_id == sale.id);
                 Some(CustomerSaleView {
                     sale_id: sale.id,
                     plot_id: plot.id,
@@ -939,12 +935,24 @@ impl MockApi {
                     agreed_price: sale.agreed_price,
                     status_label: label.to_string(),
                     status_color: color.to_string(),
-                    loan_account_id,
+                    loan_account_id: loan_account.map(|la| la.id),
+                    amount_paid: loan_account.map(|la| la.amount_paid),
+                    outstanding_balance: loan_account.map(|la| la.outstanding_balance),
                 })
             })
             .collect();
 
-        Ok(CustomerDetail { customer, sales })
+        // Same rollup rule as the real backend's `get_customer`: a
+        // Full Cash sale has no loan account to sum, so it counts as
+        // fully paid at its own `agreed_price`.
+        let total_agreed_value: Decimal = sales.iter().map(|s| s.agreed_price).sum();
+        let total_paid: Decimal = sales
+            .iter()
+            .map(|s| s.amount_paid.unwrap_or(s.agreed_price))
+            .sum();
+        let total_outstanding: Decimal = sales.iter().filter_map(|s| s.outstanding_balance).sum();
+
+        Ok(CustomerDetail { customer, sales, total_agreed_value, total_paid, total_outstanding })
     }
 
     /// Reserves a plot for a customer — the first step of the sales

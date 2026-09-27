@@ -393,6 +393,8 @@ struct CustomerSaleRow {
     agreed_price: rust_decimal::Decimal,
     plot_status: String,
     loan_account_id: Option<Uuid>,
+    amount_paid: Option<rust_decimal::Decimal>,
+    outstanding_balance: Option<rust_decimal::Decimal>,
 }
 
 async fn get_customer(
@@ -416,7 +418,7 @@ async fn get_customer(
         r#"
         select ps.id as sale_id, pl.id as plot_id, pr.id as project_id, pl.plot_number,
             pr.name as project_name, ps.payment_mode, ps.agreed_price, pl.status as plot_status,
-            pla.id as loan_account_id
+            pla.id as loan_account_id, pla.amount_paid, pla.outstanding_balance
         from plot_sales ps
         join sale_customers sc on sc.sale_id = ps.id
         join plots pl on pl.id = ps.plot_id
@@ -429,6 +431,26 @@ async fn get_customer(
     .bind(id)
     .fetch_all(&state.db)
     .await?;
+
+    // Rolled up here rather than left for the frontend to sum, so
+    // every caller (today just this page) sees the same "customer
+    // 360" totals computed the same way — a Full Cash sale has no
+    // loan account to sum, so it counts as fully paid at its own
+    // `agreed_price`, matching `PlotCommercialPosition`'s "Paid in
+    // full (cash)" label for a single sale.
+    let mut total_agreed_value = rust_decimal::Decimal::ZERO;
+    let mut total_paid = rust_decimal::Decimal::ZERO;
+    let mut total_outstanding = rust_decimal::Decimal::ZERO;
+    for r in &sale_rows {
+        total_agreed_value += r.agreed_price;
+        match (r.amount_paid, r.outstanding_balance) {
+            (Some(paid), Some(outstanding)) => {
+                total_paid += paid;
+                total_outstanding += outstanding;
+            }
+            _ => total_paid += r.agreed_price,
+        }
+    }
 
     let sales = sale_rows
         .into_iter()
@@ -446,6 +468,8 @@ async fn get_customer(
                 status_label: label.to_string(),
                 status_color: color.to_string(),
                 loan_account_id: r.loan_account_id,
+                amount_paid: r.amount_paid,
+                outstanding_balance: r.outstanding_balance,
             })
         })
         .collect::<Result<Vec<_>, AppError>>()?;
@@ -453,5 +477,8 @@ async fn get_customer(
     Ok(Json(CustomerDetail {
         customer: customer_row.into_domain()?,
         sales,
+        total_agreed_value,
+        total_paid,
+        total_outstanding,
     }))
 }

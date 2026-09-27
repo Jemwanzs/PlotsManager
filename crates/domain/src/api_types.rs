@@ -320,12 +320,28 @@ pub struct CustomerSaleView {
     /// itself is keyed to `loan_account_id`, not a sale, so there's
     /// nothing to link for cash sales yet).
     pub loan_account_id: Option<Uuid>,
+    /// Only set alongside `loan_account_id` — lets a plot card show
+    /// payment progress without a second round trip to the loan
+    /// account itself.
+    pub amount_paid: Option<Decimal>,
+    pub outstanding_balance: Option<Decimal>,
 }
 
+/// `GET /api/v1/customers/:id` — the "customer 360" financial glance
+/// (`total_paid`/`total_outstanding`) neither the plot list nor any
+/// single loan account shows on its own: rolled up across every sale
+/// this customer is on, primary buyer or co-buyer alike. A Full Cash
+/// sale has no loan account to sum, so it counts as fully paid at its
+/// `agreed_price` for this rollup — the same assumption
+/// `PlotCommercialPosition`'s "Paid in full (cash)" label already
+/// makes for a single sale.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CustomerDetail {
     pub customer: Customer,
     pub sales: Vec<CustomerSaleView>,
+    pub total_agreed_value: Decimal,
+    pub total_paid: Decimal,
+    pub total_outstanding: Decimal,
 }
 
 /// Only `full_name` is truly required — the legacy system
