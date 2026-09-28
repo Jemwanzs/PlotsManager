@@ -81,6 +81,24 @@ impl ApiClient {
         }
     }
 
+    pub async fn list_customer_activities(&self, customer_id: Uuid) -> Result<Vec<domain::CustomerActivity>, ApiError> {
+        match self {
+            Self::Mock(api) => api.list_customer_activities(customer_id).await,
+            Self::Http(api) => api.list_customer_activities(customer_id).await,
+        }
+    }
+
+    pub async fn log_customer_activity(
+        &self,
+        customer_id: Uuid,
+        input: domain::LogCustomerActivityInput,
+    ) -> Result<domain::CustomerActivity, ApiError> {
+        match self {
+            Self::Mock(api) => api.log_customer_activity(customer_id, input).await,
+            Self::Http(api) => api.log_customer_activity(customer_id, input).await,
+        }
+    }
+
     pub async fn dashboard_analytics(&self) -> Result<domain::DashboardAnalytics, ApiError> {
         match self {
             Self::Mock(api) => api.dashboard_analytics().await,

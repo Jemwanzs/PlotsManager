@@ -38,14 +38,18 @@ substantially built (see each phase's own corrected status below):
 Phase 4 (AI-assisted plan conversion), Phase 6D (real payment-provider
 integrations — mobile-money/banking, automated reconciliation, a
 customer self-service portal), Phase 7's GIS/satellite mapping and
-SMS/email/WhatsApp/accounting integrations, notifications/work queues,
-a real customer-360 financial view, numbering *pattern* configuration
-(sequences are already real), and the least-privilege RLS-subject
+SMS/email/WhatsApp/accounting integrations, a communications log
+(no such concept exists anywhere yet), map versioning (a deliberate
+v1 scope cut, not an oversight), the Captured → Verified → Posted
+payment approval lifecycle (an open product question, not a known
+gap — see Phase 6's own note), and the least-privilege RLS-subject
 Postgres role (still an explicitly deferred hardening item, not a
 blocker). Per the 2026-09-26 decision, every integration in that list
 is deliberately sequenced *after* building the settings-driven
 plug-in-configuration infrastructure they'll all be wired through —
-see the new section below.
+see the new section below. Notifications/work queues and the
+customer-360 financial view shipped 2026-09-27/28 — see their own
+entries below.
 
 ## Phase 1 — Discovery and Legacy Analysis
 Analyse the Excel/VBA system, extract business rules, document current
@@ -75,11 +79,15 @@ approval/rejection before it can trial (`0015_tenant_onboarding.sql`,
 2026-09-26, see this doc's earlier entry). The mock API layer
 (`crates/frontend/src/api/mock.rs`) still exists and is kept in lock-
 step with the real backend, but as a local-dev/offline convenience, not
-the frontend's actual data source. Not built: numbering config (plot/
-project number *sequences* are real and race-safe, but the
-prefix/pattern itself isn't yet admin-configurable) and the
-least-privilege RLS-subject Postgres role (still deferred hardening,
-not a blocker).
+the frontend's actual data source. **Numbering config (corrected
+2026-09-28 — my own 2026-09-26 note here was wrong): already fully
+built**, not a gap — prefix, "include year", "include project code"
+(plots only), digit padding, and the next number to issue are all
+admin-editable per entity type from Settings, with a live preview
+(`domain::format_sequence_number`, `pages/settings.rs`) computed from
+the same fields the backend actually uses to generate the next real
+number. Genuinely not built: the least-privilege RLS-subject Postgres
+role (still deferred hardening, not a blocker).
 
 ## Phase 3 — Interactive Maps
 Upload project plans; manual polygon drawing; plot-to-map linking;
@@ -157,12 +165,17 @@ cancellation/repossession + plot reallocation
 (`0030_sale_lifecycle.sql`), loan restructures and repayment holidays
 (`0033_loan_restructuring.sql`), agent commissions (see Phase 5 above),
 and title-record tracking (`routes/title_records.rs`) as the
-transfer-readiness piece. **Phase B**: arrears ageing exists
-(`days_in_arrears`, a 7-day grace period, on every loan account and the
-dashboard's non-performing-loans aggregate), the Executive dashboard
-and a report library (Sales, Inventory, Agent Performance) are built;
-notifications/work queues and a unified customer-360 financial view are
-not (see Phase 5's note). The Captured → Verified → Posted payment
+transfer-readiness piece. **Phase B, now fully built (2026-09-27/28)**:
+arrears ageing (`days_in_arrears`, a 7-day grace period, on every loan
+account and the dashboard's non-performing-loans aggregate), the
+Executive dashboard and a report library (Sales, Inventory, Agent
+Performance), a work queue aggregating arrears/expiring quotations/
+pending approvals/lead follow-ups into one dashboard panel
+(`routes/work_queue.rs`, `domain::work_queue`), and a customer-360
+financial rollup (`routes/customers.rs::get_customer`). A
+communications log is a separate, still-unbuilt item — see Phase 5's
+note; no such concept exists anywhere in this app yet. The Captured →
+Verified → Posted payment
 approval lifecycle from the original spec was never built — every
 payment posts immediately; whether that's still wanted now that real
 roles/permissions exist is an open product question, not a known gap.

@@ -220,6 +220,18 @@ impl HttpApi {
         self.get("/api/v1/work-queue").await
     }
 
+    pub async fn list_customer_activities(&self, customer_id: Uuid) -> Result<Vec<domain::CustomerActivity>, ApiError> {
+        self.get(&format!("/api/v1/customers/{customer_id}/activities")).await
+    }
+
+    pub async fn log_customer_activity(
+        &self,
+        customer_id: Uuid,
+        input: domain::LogCustomerActivityInput,
+    ) -> Result<domain::CustomerActivity, ApiError> {
+        self.post(&format!("/api/v1/customers/{customer_id}/activities"), &input).await
+    }
+
     pub async fn list_projects(&self) -> Result<Vec<ProjectSummary>, ApiError> {
         self.get("/api/v1/projects").await
     }

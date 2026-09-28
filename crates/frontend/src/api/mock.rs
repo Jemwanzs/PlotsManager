@@ -89,6 +89,12 @@ struct MockDb {
     /// yet. Empty by default; nothing seeds a demo entry here since
     /// there's no real credential to show.
     integration_configs: Vec<MockIntegrationConfig>,
+    /// Mirrors `customer_activities` (`database/migrations/
+    /// 0036_customer_activities.sql`) — a customer's communications
+    /// log, append-only. `domain::CustomerActivity` stored directly
+    /// (unlike `MockIntegrationConfig`, nothing here is a secret that
+    /// needs a write-only wrapper).
+    customer_activities: Vec<domain::CustomerActivity>,
 }
 
 /// Mirrors the real `integration_configs` table — see
@@ -1055,6 +1061,47 @@ impl MockApi {
         let total_outstanding: Decimal = sales.iter().filter_map(|s| s.outstanding_balance).sum();
 
         Ok(CustomerDetail { customer, sales, total_agreed_value, total_paid, total_outstanding })
+    }
+
+    pub async fn list_customer_activities(&self, customer_id: Uuid) -> Result<Vec<domain::CustomerActivity>, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+        let mut activities: Vec<domain::CustomerActivity> = db
+            .customer_activities
+            .iter()
+            .filter(|a| a.customer_id == customer_id)
+            .cloned()
+            .collect();
+        activities.sort_by(|a, b| b.occurred_at.cmp(&a.occurred_at));
+        Ok(activities)
+    }
+
+    pub async fn log_customer_activity(
+        &self,
+        customer_id: Uuid,
+        input: domain::LogCustomerActivityInput,
+    ) -> Result<domain::CustomerActivity, ApiError> {
+        settle(200).await;
+        let summary = input.summary.trim().to_string();
+        if summary.is_empty() {
+            return Err(ApiError::InvalidCredentials("Enter a summary for this activity.".to_string()));
+        }
+
+        let mut db = self.db.lock().unwrap();
+        if !db.customers.iter().any(|c| c.id == customer_id) {
+            return Err(ApiError::NotFound);
+        }
+        let activity = domain::CustomerActivity {
+            id: Uuid::new_v4(),
+            customer_id,
+            activity_type: input.activity_type,
+            summary,
+            occurred_at: input.occurred_at.unwrap_or_else(Utc::now),
+            created_by_name: db.demo_user.full_name.clone(),
+            created_at: Utc::now(),
+        };
+        db.customer_activities.push(activity.clone());
+        Ok(activity)
     }
 
     /// Reserves a plot for a customer — the first step of the sales
@@ -4354,5 +4401,6 @@ fn seed() -> MockDb {
         sale_lifecycle: HashMap::new(),
         agent_commissions: Vec::new(),
         integration_configs: Vec::new(),
+        customer_activities: Vec::new(),
     }
 }

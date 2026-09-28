@@ -488,12 +488,151 @@ pub fn CustomerDetail() -> impl IntoView {
                             }}
 
                             <DocumentsPanel entity_type=domain::DocumentEntityType::Customer entity_id=customer_id />
+
+                            <ActivityLogPanel customer_id=customer_id />
                         }
                             .into_any()
                         }
                         Err(e) => view! { <ErrorAlert message=format!("Couldn't load this customer: {e}") /> }
                             .into_any(),
                     })
+            }}
+        </Suspense>
+    }
+}
+
+fn activity_type_from_value(v: &str) -> domain::ActivityType {
+    match v {
+        "call" => domain::ActivityType::Call,
+        "email" => domain::ActivityType::Email,
+        "sms" => domain::ActivityType::Sms,
+        "whatsapp" => domain::ActivityType::Whatsapp,
+        "meeting" => domain::ActivityType::Meeting,
+        "site_visit" => domain::ActivityType::SiteVisit,
+        "other" => domain::ActivityType::Other,
+        _ => domain::ActivityType::Note,
+    }
+}
+
+/// A customer's communications log — append-only (see
+/// `domain::CustomerActivity`'s own doc comment on why), self-contained
+/// with its own resource/refresh rather than tied to the parent page's,
+/// the same pattern `DocumentsPanel` already uses right above it.
+#[component]
+fn ActivityLogPanel(customer_id: Uuid) -> impl IntoView {
+    let api = use_api();
+    let auth = use_auth();
+    let can_log = has_permission(auth, PERM_CUSTOMERS_EDIT);
+    let refresh = RwSignal::new(0u32);
+
+    let activities = LocalResource::new({
+        let api = api.clone();
+        move || {
+            refresh.get();
+            let api = api.clone();
+            async move { api.list_customer_activities(customer_id).await }
+        }
+    });
+
+    let activity_type = RwSignal::new("call".to_string());
+    let summary = RwSignal::new(String::new());
+    let error = RwSignal::new(None::<String>);
+    let saving = RwSignal::new(false);
+
+    let on_submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        if saving.get() {
+            return;
+        }
+        error.set(None);
+        let summary_value = summary.get().trim().to_string();
+        if summary_value.is_empty() {
+            error.set(Some("Enter a summary.".to_string()));
+            return;
+        }
+        saving.set(true);
+        let api = api.clone();
+        spawn_local(async move {
+            let result = api
+                .log_customer_activity(
+                    customer_id,
+                    domain::LogCustomerActivityInput {
+                        activity_type: activity_type_from_value(&activity_type.get()),
+                        summary: summary_value,
+                        occurred_at: None,
+                    },
+                )
+                .await;
+            match result {
+                Ok(_) => {
+                    summary.set(String::new());
+                    refresh.update(|n| *n += 1);
+                }
+                Err(e) => error.set(Some(format!("{e}"))),
+            }
+            saving.set(false);
+        });
+    };
+
+    view! {
+        <h2 style="margin-top: var(--space-5)">"Communications log"</h2>
+        {can_log.then(|| view! {
+            <form on:submit=on_submit class="card form-card" style="margin-bottom: var(--space-4);">
+                {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+                <div style="display:flex; gap: var(--space-3); flex-wrap: wrap; align-items:flex-end;">
+                    <div class="field" style="margin-bottom:0; max-width: 180px;">
+                        <label for="activity-type">"Type"</label>
+                        <select id="activity-type" prop:value=activity_type on:change=move |ev| activity_type.set(event_target_value(&ev))>
+                            <option value="call">"Call"</option>
+                            <option value="email">"Email"</option>
+                            <option value="sms">"SMS"</option>
+                            <option value="whatsapp">"WhatsApp"</option>
+                            <option value="meeting">"Meeting"</option>
+                            <option value="site_visit">"Site Visit"</option>
+                            <option value="note">"Note"</option>
+                            <option value="other">"Other"</option>
+                        </select>
+                    </div>
+                    <div class="field" style="margin-bottom:0; flex: 1; min-width: 220px;">
+                        <label for="activity-summary">"Summary"</label>
+                        <input
+                            id="activity-summary"
+                            type="text"
+                            placeholder="e.g. Called to confirm site visit for Saturday"
+                            prop:value=summary
+                            on:input=move |ev| summary.set(event_target_value(&ev))
+                        />
+                    </div>
+                    <button type="submit" class="btn btn-primary" disabled=move || saving.get()>
+                        {move || if saving.get() { "Logging…" } else { "Log" }}
+                    </button>
+                </div>
+            </form>
+        })}
+        <Suspense fallback=|| view! { <LoadingState label="Loading activity log…" /> }>
+            {move || {
+                activities.get().map(|wrapped| wrapped.take()).map(|result| match result {
+                    Ok(list) if list.is_empty() => view! {
+                        <p class="meta">"No activity logged yet."</p>
+                    }.into_any(),
+                    Ok(list) => view! {
+                        <div style="display:flex; flex-direction:column; gap: var(--space-2);">
+                            {list.into_iter().map(|a| {
+                                view! {
+                                    <div class="card" style="padding: var(--space-3);">
+                                        <div style="display:flex; justify-content:space-between; align-items:center; gap: var(--space-2);">
+                                            <span class="badge" style="background-color: var(--color-primary);">{a.activity_type.label()}</span>
+                                            <span class="meta">{a.occurred_at.format("%b %d, %Y at %H:%M").to_string()}</span>
+                                        </div>
+                                        <p class="mt-0" style="margin-top: var(--space-2);">{a.summary}</p>
+                                        <span class="meta">"Logged by " {a.created_by_name}</span>
+                                    </div>
+                                }
+                            }).collect_view()}
+                        </div>
+                    }.into_any(),
+                    Err(e) => view! { <ErrorAlert message=format!("Couldn't load activity log: {e}") /> }.into_any(),
+                })
             }}
         </Suspense>
     }

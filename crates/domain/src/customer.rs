@@ -89,3 +89,64 @@ pub struct UpdateCustomerInput {
     pub next_of_kin_id_number: Option<String>,
     pub next_of_kin_address: Option<String>,
 }
+
+/// What kind of interaction a `CustomerActivity` records — free-text
+/// summaries alone (the old single `Customer::notes` field) can't be
+/// scanned at a glance the way a typed, dated history can.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityType {
+    Call,
+    Email,
+    Sms,
+    Whatsapp,
+    Meeting,
+    SiteVisit,
+    Note,
+    Other,
+}
+
+impl ActivityType {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Call => "Call",
+            Self::Email => "Email",
+            Self::Sms => "SMS",
+            Self::Whatsapp => "WhatsApp",
+            Self::Meeting => "Meeting",
+            Self::SiteVisit => "Site Visit",
+            Self::Note => "Note",
+            Self::Other => "Other",
+        }
+    }
+}
+
+/// One entry in a customer's communications log
+/// (`database/migrations/0036_customer_activities.sql`) — the "customer
+/// 360" gap the roadmap flagged as genuinely missing: `Customer::notes`
+/// is a single current-state field, not a history of what actually
+/// happened and when. Append-only, like every other ledger/audit trail
+/// in this app (`loan_ledger_entries`, `audit_log`) — a mistake gets a
+/// corrective follow-up entry, not a silent edit of the record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomerActivity {
+    pub id: Uuid,
+    pub customer_id: Uuid,
+    pub activity_type: ActivityType,
+    pub summary: String,
+    pub occurred_at: DateTime<Utc>,
+    pub created_by_name: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// `POST /api/v1/customers/:id/activities`. `occurred_at` is optional —
+/// logging a call as it happens needs no timestamp entry at all
+/// (defaults to now), but logging one after the fact (a site visit
+/// written up the next morning) needs to be dated when it actually
+/// happened, not when someone got around to typing it in.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogCustomerActivityInput {
+    pub activity_type: ActivityType,
+    pub summary: String,
+    pub occurred_at: Option<DateTime<Utc>>,
+}

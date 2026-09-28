@@ -3,10 +3,10 @@ use axum::routing::post;
 use axum::{extract::State, routing::get, Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
 use domain::{
-    BulkImportResult, BulkImportRowError, Customer, CustomerDetail, CustomerSaleView,
-    CustomerSummary, CreateCustomerInput, UpdateCustomerInput, UpdateLeadInput,
-    PERM_CUSTOMERS_BULK_IMPORT, PERM_CUSTOMERS_CREATE, PERM_CUSTOMERS_EDIT,
-    PERM_CUSTOMERS_LEADS_UPDATE,
+    BulkImportResult, BulkImportRowError, Customer, CustomerActivity, CustomerDetail,
+    CustomerSaleView, CustomerSummary, CreateCustomerInput, LogCustomerActivityInput,
+    UpdateCustomerInput, UpdateLeadInput, PERM_CUSTOMERS_BULK_IMPORT, PERM_CUSTOMERS_CREATE,
+    PERM_CUSTOMERS_EDIT, PERM_CUSTOMERS_LEADS_UPDATE, PERM_CUSTOMERS_VIEW,
 };
 use uuid::Uuid;
 
@@ -21,6 +21,10 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/customers/bulk", post(bulk_create_customers))
         .route("/api/v1/customers/:id", get(get_customer).put(update_customer))
         .route("/api/v1/customers/:id/stage", post(update_lead))
+        .route(
+            "/api/v1/customers/:id/activities",
+            get(list_activities).post(log_activity),
+        )
 }
 
 #[derive(sqlx::FromRow)]
@@ -481,4 +485,116 @@ async fn get_customer(
         total_paid,
         total_outstanding,
     }))
+}
+
+#[derive(sqlx::FromRow)]
+struct CustomerActivityRow {
+    id: Uuid,
+    customer_id: Uuid,
+    activity_type: String,
+    summary: String,
+    occurred_at: DateTime<Utc>,
+    created_by_name: String,
+    created_at: DateTime<Utc>,
+}
+
+impl CustomerActivityRow {
+    fn into_domain(self) -> Result<CustomerActivity, AppError> {
+        Ok(CustomerActivity {
+            id: self.id,
+            customer_id: self.customer_id,
+            activity_type: from_pg("customer_activities.activity_type", &self.activity_type)?,
+            summary: self.summary,
+            occurred_at: self.occurred_at,
+            created_by_name: self.created_by_name,
+            created_at: self.created_at,
+        })
+    }
+}
+
+const CUSTOMER_ACTIVITY_QUERY: &str = r#"
+    select ca.id, ca.customer_id, ca.activity_type, ca.summary, ca.occurred_at,
+        u.full_name as created_by_name, ca.created_at
+    from customer_activities ca
+    join users u on u.id = ca.created_by
+"#;
+
+async fn list_activities(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<CustomerActivity>>, AppError> {
+    auth.require_permission(PERM_CUSTOMERS_VIEW)?;
+
+    // Confirms the customer is actually in this org before returning
+    // anything — without this, an activity list for a customer_id from
+    // a different tenant would 200 with an empty array instead of
+    // 404ing, silently leaking "this id exists" across tenants.
+    let exists: bool = sqlx::query_scalar("select exists(select 1 from customers where id = $1 and organization_id = $2)")
+        .bind(id)
+        .bind(auth.organization_id)
+        .fetch_one(&state.db)
+        .await?;
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+
+    let rows: Vec<CustomerActivityRow> = sqlx::query_as(&format!(
+        "{CUSTOMER_ACTIVITY_QUERY} where ca.customer_id = $1 order by ca.occurred_at desc, ca.created_at desc"
+    ))
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(
+        rows.into_iter()
+            .map(CustomerActivityRow::into_domain)
+            .collect::<Result<Vec<_>, AppError>>()?,
+    ))
+}
+
+async fn log_activity(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(input): Json<LogCustomerActivityInput>,
+) -> Result<Json<CustomerActivity>, AppError> {
+    auth.require_permission(PERM_CUSTOMERS_EDIT)?;
+
+    let summary = input.summary.trim();
+    if summary.is_empty() {
+        return Err(AppError::bad_request("Enter a summary for this activity."));
+    }
+
+    let exists: bool = sqlx::query_scalar("select exists(select 1 from customers where id = $1 and organization_id = $2)")
+        .bind(id)
+        .bind(auth.organization_id)
+        .fetch_one(&state.db)
+        .await?;
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+
+    let new_id: Uuid = sqlx::query_scalar(
+        r#"
+        insert into customer_activities (organization_id, customer_id, activity_type, summary, occurred_at, created_by)
+        values ($1, $2, $3, $4, coalesce($5, now()), $6)
+        returning id
+        "#,
+    )
+    .bind(auth.organization_id)
+    .bind(id)
+    .bind(to_pg(&input.activity_type))
+    .bind(summary)
+    .bind(input.occurred_at)
+    .bind(auth.user_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    let row: CustomerActivityRow = sqlx::query_as(&format!("{CUSTOMER_ACTIVITY_QUERY} where ca.id = $1"))
+        .bind(new_id)
+        .fetch_one(&state.db)
+        .await?;
+
+    Ok(Json(row.into_domain()?))
 }
