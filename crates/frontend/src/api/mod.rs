@@ -74,6 +74,13 @@ impl ApiClient {
         }
     }
 
+    pub async fn work_queue(&self) -> Result<domain::WorkQueue, ApiError> {
+        match self {
+            Self::Mock(api) => api.work_queue().await,
+            Self::Http(api) => api.work_queue().await,
+        }
+    }
+
     pub async fn dashboard_analytics(&self) -> Result<domain::DashboardAnalytics, ApiError> {
         match self {
             Self::Mock(api) => api.dashboard_analytics().await,

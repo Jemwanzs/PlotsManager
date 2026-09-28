@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos_router::components::A;
 use rust_decimal::prelude::ToPrimitive;
 
 use crate::api::DashboardSummary;
@@ -45,6 +46,8 @@ pub fn Dashboard() -> impl IntoView {
             // hardcoded).
             <div class="currency-note">"Currency: " {move || currency.get()}</div>
         </div>
+
+        <WorkQueuePanel />
 
         <Suspense fallback=|| view! { <LoadingState label="Loading dashboard…" /> }>
             {move || {
@@ -107,6 +110,78 @@ pub fn Dashboard() -> impl IntoView {
                         Ok(a) => view! { <ProjectBarCard analytics=a /> }.into_any(),
                         Err(e) => view! { <ErrorAlert message=format!("{e}") /> }.into_any(),
                     })
+            }}
+        </Suspense>
+    }
+}
+
+/// "What needs my attention today" — loans in arrears, quotations
+/// about to expire, pending price approvals, leads with a follow-up
+/// due, and (platform owner only) tenant applications awaiting
+/// review, in one list instead of five separate reports nobody
+/// checks daily (`GET /api/v1/work-queue`, `domain::work_queue`'s
+/// module docs). Capped to the 8 most urgent — a triage list, not a
+/// replacement for the full reports each category still has its own
+/// page for.
+const WORK_QUEUE_DISPLAY_LIMIT: usize = 8;
+
+#[component]
+fn WorkQueuePanel() -> impl IntoView {
+    let api = use_api();
+    let currency = use_currency();
+
+    let queue = LocalResource::new({
+        let api = api.clone();
+        move || {
+            let api = api.clone();
+            async move { api.work_queue().await }
+        }
+    });
+
+    view! {
+        <Suspense fallback=|| view! { <LoadingState label="Loading work queue…" /> }>
+            {move || {
+                queue.get().map(|wrapped| wrapped.take()).map(|result| match result {
+                    Ok(q) if q.items.is_empty() => view! {
+                        <div class="card" style="margin-bottom: var(--space-4);">
+                            <h2 class="mt-0">"Work queue"</h2>
+                            <p class="meta mt-0">"Nothing needs attention right now — you're all caught up."</p>
+                        </div>
+                    }.into_any(),
+                    Ok(q) => {
+                        let total = q.items.len();
+                        let shown: Vec<_> = q.items.into_iter().take(WORK_QUEUE_DISPLAY_LIMIT).collect();
+                        let remaining = total.saturating_sub(shown.len());
+                        view! {
+                            <div class="card" style="margin-bottom: var(--space-4);">
+                                <div class="page-header" style="margin-bottom: var(--space-3);">
+                                    <h2 class="mt-0">"Work queue"</h2>
+                                    <span class="currency-note">"Currency: " {currency.get()}</span>
+                                </div>
+                                <div style="display:flex; flex-direction:column; gap: var(--space-2);">
+                                    {shown.into_iter().map(|item| {
+                                        let (label, color) = (item.kind.label(), item.kind.color());
+                                        let amount_text = item.amount.map(format_amount);
+                                        view! {
+                                            <A href=item.href attr:class="work-queue-item">
+                                                <span class="badge" style=format!("background-color: {color}")>{label}</span>
+                                                <span class="work-queue-item-title">{item.title}</span>
+                                                <span class="meta">{item.subtitle}</span>
+                                                {amount_text.map(|a| view! { <strong class="work-queue-item-amount">{a}</strong> })}
+                                            </A>
+                                        }
+                                    }).collect_view()}
+                                </div>
+                                {(remaining > 0).then(|| view! {
+                                    <p class="meta mt-0" style="margin-top: var(--space-3);">
+                                        {format!("+{remaining} more — check the relevant report for the full list.")}
+                                    </p>
+                                })}
+                            </div>
+                        }.into_any()
+                    }
+                    Err(e) => view! { <ErrorAlert message=format!("Couldn't load the work queue: {e}") /> }.into_any(),
+                })
             }}
         </Suspense>
     }

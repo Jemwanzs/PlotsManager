@@ -20,6 +20,7 @@ mod settings;
 mod terms;
 mod title_records;
 mod users;
+mod work_queue;
 
 use axum::Router;
 
@@ -49,4 +50,5 @@ pub fn router() -> Router<AppState> {
         .merge(documents::router())
         .merge(title_records::router())
         .merge(migrations::router())
+        .merge(work_queue::router())
 }

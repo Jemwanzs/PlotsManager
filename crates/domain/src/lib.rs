@@ -24,6 +24,7 @@ pub mod sales;
 pub mod status_meta;
 pub mod title_record;
 pub mod user;
+pub mod work_queue;
 
 pub use api_types::*;
 pub use approval::*;
@@ -42,3 +43,4 @@ pub use sales::*;
 pub use status_meta::*;
 pub use title_record::*;
 pub use user::*;
+pub use work_queue::*;

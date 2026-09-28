@@ -216,6 +216,10 @@ impl HttpApi {
         self.get("/api/v1/dashboard/analytics").await
     }
 
+    pub async fn work_queue(&self) -> Result<domain::WorkQueue, ApiError> {
+        self.get("/api/v1/work-queue").await
+    }
+
     pub async fn list_projects(&self) -> Result<Vec<ProjectSummary>, ApiError> {
         self.get("/api/v1/projects").await
     }

@@ -460,6 +460,108 @@ impl MockApi {
         })
     }
 
+    /// Mirrors the real backend's `GET /api/v1/work-queue` — see
+    /// `domain::work_queue`'s module docs. No `organizations` list or
+    /// multi-user roster exists in the mock (platform admin and
+    /// multi-agent attribution are real-backend-only simplifications
+    /// already established elsewhere in this file — `agent_performance_
+    /// report`'s own note), so the tenant-pending-approval category is
+    /// always empty here and "requested by" always attributes to the
+    /// one demo user.
+    pub async fn work_queue(&self) -> Result<domain::WorkQueue, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+        let today = Utc::now().date_naive();
+        const LOOKAHEAD_DAYS: i64 = 7;
+        let mut items = Vec::new();
+
+        for account in db.loan_accounts.iter().cloned().map(with_live_schedule) {
+            if account.days_in_arrears <= 0 {
+                continue;
+            }
+            let customer_name = db
+                .sales
+                .iter()
+                .find(|s| s.id == account.sale_id)
+                .and_then(|s| db.customers.iter().find(|c| c.id == s.customer_id))
+                .map(|c| c.full_name.clone())
+                .unwrap_or_else(|| "Unknown customer".to_string());
+            items.push(domain::WorkQueueItem {
+                kind: domain::WorkQueueItemKind::LoanArrears,
+                title: format!("{} — {}", account.account_number, customer_name),
+                subtitle: format!("{} day(s) overdue", account.days_in_arrears),
+                amount: Some(account.outstanding_balance),
+                href: format!("/loan-accounts/{}", account.id),
+                due_date: None,
+                days_overdue: Some(account.days_in_arrears),
+            });
+        }
+
+        for q in db.quotations.iter().filter(|q| {
+            q.status == QuotationStatus::Sent
+                && q.valid_until >= today
+                && q.valid_until <= today + chrono::Duration::days(LOOKAHEAD_DAYS)
+        }) {
+            let plot_number = db.plots.iter().find(|p| p.id == q.plot_id).map(|p| p.plot_number.clone()).unwrap_or_default();
+            let customer_name = db.customers.iter().find(|c| c.id == q.customer_id).map(|c| c.full_name.clone()).unwrap_or_default();
+            let days_left = (q.valid_until - today).num_days();
+            items.push(domain::WorkQueueItem {
+                kind: domain::WorkQueueItemKind::QuotationExpiring,
+                title: format!("{plot_number} — {customer_name}"),
+                subtitle: if days_left <= 0 { "Expires today".to_string() } else { format!("Expires in {days_left} day(s)") },
+                amount: Some(q.quoted_price),
+                href: format!("/quotations/{}", q.id),
+                due_date: Some(q.valid_until),
+                days_overdue: None,
+            });
+        }
+
+        for ar in db.approval_requests.iter().filter(|ar| ar.status == domain::ApprovalStatus::Pending) {
+            let plot_number = db.plots.iter().find(|p| p.id == ar.plot_id).map(|p| p.plot_number.clone()).unwrap_or_default();
+            let customer_name = db.customers.iter().find(|c| c.id == ar.customer_id).map(|c| c.full_name.clone()).unwrap_or_default();
+            items.push(domain::WorkQueueItem {
+                kind: domain::WorkQueueItemKind::ApprovalPending,
+                title: format!("{plot_number} — {customer_name}"),
+                subtitle: format!("Requested by {}", db.demo_user.full_name),
+                amount: Some(ar.agreed_price),
+                href: "/approvals".to_string(),
+                due_date: None,
+                days_overdue: None,
+            });
+        }
+
+        for c in db.customers.iter().filter(|c| {
+            c.stage != LeadStage::Lost
+                && c.next_follow_up_at.is_some_and(|d| d <= today + chrono::Duration::days(LOOKAHEAD_DAYS))
+        }) {
+            let due = c.next_follow_up_at.unwrap();
+            let days_overdue = (today - due).num_days();
+            items.push(domain::WorkQueueItem {
+                kind: domain::WorkQueueItemKind::LeadFollowUp,
+                title: c.full_name.clone(),
+                subtitle: if days_overdue > 0 {
+                    format!("Follow-up overdue by {days_overdue} day(s)")
+                } else if days_overdue == 0 {
+                    "Follow-up due today".to_string()
+                } else {
+                    format!("Follow-up due in {} day(s)", -days_overdue)
+                },
+                amount: None,
+                href: format!("/customers/{}", c.id),
+                due_date: Some(due),
+                days_overdue: (days_overdue > 0).then_some(days_overdue as i32),
+            });
+        }
+
+        items.sort_by(|a, b| {
+            let a_key = (std::cmp::Reverse(a.days_overdue.unwrap_or(0).max(0)), a.due_date.unwrap_or(NaiveDate::MAX));
+            let b_key = (std::cmp::Reverse(b.days_overdue.unwrap_or(0).max(0)), b.due_date.unwrap_or(NaiveDate::MAX));
+            a_key.cmp(&b_key)
+        });
+
+        Ok(domain::WorkQueue { items })
+    }
+
     pub async fn list_projects(&self) -> Result<Vec<ProjectSummary>, ApiError> {
         settle(150).await;
         let db = self.db.lock().unwrap();
