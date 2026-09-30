@@ -38,9 +38,12 @@ substantially built (see each phase's own corrected status below):
 Phase 4 (AI-assisted plan conversion), Phase 6D (real payment-provider
 integrations — mobile-money/banking, automated reconciliation, a
 customer self-service portal), Phase 7's GIS/satellite mapping and
-SMS/email/WhatsApp/accounting integrations, a communications log
-(no such concept exists anywhere yet), map versioning (a deliberate
-v1 scope cut, not an oversight), the Captured → Verified → Posted
+SMS/email/WhatsApp/accounting integrations, a real plan-selection UI
+for signup (today's form only takes a free-text "preferred package"
+string — see Platform billing's own note), map *versioning* (a
+deliberate v1 scope cut, not an oversight — its search/filter/zoom
+toolbar shipped 2026-09-30 and is a separate item, see Phase 3's own
+note), the Captured → Verified → Posted
 payment approval lifecycle (an open product question, not a known
 gap — see Phase 6's own note), and the least-privilege RLS-subject
 Postgres role (still an explicitly deferred hardening item, not a
@@ -99,12 +102,18 @@ MapCanvas` — image upload, freehand polygon drawing/deletion,
 status-coloured shapes, "Create Plot"/"Link Existing Plot"/"Unlink"
 for a drawn shape (a shape no longer needs a plot picked up front —
 see `domain::MapFeature`'s module docs), all authenticated and
-permission-gated (`PERM_PLOTS_MAP_UPLOAD/EDIT_BOUNDARIES/LINK`). Not
+permission-gated (`PERM_PLOTS_MAP_UPLOAD/EDIT_BOUNDARIES/LINK`). A
+search/status-filter/zoom toolbar shipped 2026-09-30 (pure client-side,
+`pages/project_detail.rs::MapCanvas` — search matches a shape's label
+or its linked plot number, status filters to plots in that state, both
+dim non-matching shapes rather than hiding them; zoom scales the image
+to an explicit pixel width off its normal "fit" size, and the wrapping
+container's native scroll handles panning once zoomed past its
+`max-height`/`max-width`, so no drag-to-pan handler was needed). Not
 built: map *versioning* (one image + one polygon set per project,
 no draft/pending-approval revision history — a deliberate v1 scope
 decision per `database/migrations/0009_project_map.sql`'s own module
-comment) and a dedicated search/filter/pan/zoom toolbar beyond the
-browser's own image panning.
+comment, not reversed by the toolbar work above).
 
 ## Phase 4 — AI-Assisted Plan Conversion
 Image enhancement; OCR; boundary detection; plot-number recognition;
@@ -134,9 +143,11 @@ paid/outstanding when it has one, shown as a stat-card row on the
 customer page (`routes/customers.rs::get_customer`,
 `pages/customer_detail.rs`); document attachments were already wired
 via the generic `DocumentsPanel` (`entity_type: Customer`) before this
-correction, not missing. Genuinely still not built: a communications
-log (no such concept exists anywhere yet — would need a new table, not
-just a query).
+correction, not missing. **Communications log: now built (2026-09-28)**
+— an append-only `customer_activities` table
+(`0036_customer_activities.sql`), call/email/sms/whatsapp/meeting/
+site_visit/note/other, listed and logged from a new panel on the
+customer page.
 
 ## Phase 6 — Payments and Transfers
 Nests the payments delivery sequence:
@@ -173,8 +184,8 @@ Performance), a work queue aggregating arrears/expiring quotations/
 pending approvals/lead follow-ups into one dashboard panel
 (`routes/work_queue.rs`, `domain::work_queue`), and a customer-360
 financial rollup (`routes/customers.rs::get_customer`). A
-communications log is a separate, still-unbuilt item — see Phase 5's
-note; no such concept exists anywhere in this app yet. The Captured →
+communications log — a separate item from Phase 5's note — is also now
+built (2026-09-28). The Captured →
 Verified → Posted payment
 approval lifecycle from the original spec was never built — every
 payment posts immediately; whether that's still wanted now that real
@@ -207,9 +218,18 @@ in the product roadmap above — it can and should move independently.
 **Status**: schema (`subscription_plans`, `organization_subscriptions`,
 `billing_invoices`, `billing_webhook_events`) and a working, signature-
 verified Paystack webhook receiver exist
-(`crates/backend/src/paystack.rs`). Not built: any plan-selection UI,
-the org sign-up flow that creates the first `organizations` row, or
-enforcement of subscription status against feature access.
+(`crates/backend/src/paystack.rs`). **Corrected 2026-09-28 — this
+section's own earlier claim was wrong about two of its three items:**
+the org sign-up flow (`POST /api/v1/auth/signup`, `pages/signup.rs`)
+and enforcement of subscription/trial status against feature access
+(`tenant_gate::check`, run on login and on every authenticated
+request) were already both built. Genuinely not built: a real
+plan-selection UI backed by `subscription_plans` (pricing tiers a
+signing-up org can actually choose) — today's signup form only takes a
+free-text "preferred package" string. Deliberately not built yet
+either: actually wiring a chosen plan to a live Paystack subscription,
+since that's checkout/payment integration, in the same deferred bucket
+as the rest of Phase 6D/7's provider work.
 
 ## UI/UX consistency — number/currency display, commission override clarity (2026-09-26)
 

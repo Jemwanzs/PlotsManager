@@ -2590,6 +2590,19 @@ fn MapCanvas(
     let draft_points: RwSignal<Vec<(f64, f64)>> = RwSignal::new(Vec::new());
     let draft_label = RwSignal::new(String::new());
     let selected_draft: RwSignal<Option<MapFeature>> = RwSignal::new(None);
+    // Search/filter/zoom toolbar state — pure client-side, no backend
+    // involvement (see the roadmap doc's Phase 3 note this fills in).
+    // `base_display_width` is the image's rendered width at its normal
+    // "fit the container" size (captured off `on_image_load`'s
+    // `getBoundingClientRect`, so it already reflects `max-width:100%`),
+    // multiplied by `zoom` to get an explicit pixel width once zoomed —
+    // panning is then just the wrapping div's native scroll once that
+    // width exceeds its `max-width`/`max-height`, no drag-handler needed.
+    let search_term = RwSignal::new(String::new());
+    let status_filter: RwSignal<Option<PlotStatus>> = RwSignal::new(None);
+    let zoom = RwSignal::new(1.0_f64);
+    let base_display_width: RwSignal<Option<f64>> = RwSignal::new(None);
+    let img_ref: NodeRef<leptos::html::Img> = NodeRef::new();
     let plots_for_draft_panel = plots.clone();
     // A dedicated clone for the polygon-click handlers below: the
     // `<Show>` block earlier in this view captures the outer `api` by
@@ -2601,18 +2614,46 @@ fn MapCanvas(
     let saving = RwSignal::new(false);
     let replacing = RwSignal::new(false);
 
+    let capture_dims = move |img: &web_sys::HtmlImageElement| {
+        let w = img.natural_width() as f64;
+        let h = img.natural_height() as f64;
+        if w > 0.0 && h > 0.0 {
+            img_dims.set((w, h));
+        }
+        let rendered_width = img.get_bounding_client_rect().width();
+        if rendered_width > 0.0 {
+            base_display_width.set(Some(rendered_width));
+        }
+    };
+
     let on_image_load = move |ev: leptos::ev::Event| {
         if let Some(img) = ev
             .target()
             .and_then(|t| t.dyn_into::<web_sys::HtmlImageElement>().ok())
         {
-            let w = img.natural_width() as f64;
-            let h = img.natural_height() as f64;
-            if w > 0.0 && h > 0.0 {
-                img_dims.set((w, h));
-            }
+            capture_dims(&img);
         }
     };
+
+    // `on:load` alone misses an already-cached image: the browser can
+    // fire `load` before this handler is even attached (e.g. re-mounting
+    // `MapCanvas` after "Save map" reloads the same image URL), leaving
+    // `base_display_width` stuck at `None` and zoom a no-op forever.
+    // Checking `.complete()` once the `<img>` mounts catches that case —
+    // but the element has just been inserted, so measuring in the same
+    // tick can still race the browser's own layout pass and read a
+    // width of 0 (confirmed via manual CDP testing); yielding one tick
+    // with `TimeoutFuture::new(0)` first gives layout time to settle.
+    Effect::new(move |_| {
+        if let Some(img) = img_ref.get() {
+            if img.complete() {
+                spawn_local(async move {
+                    gloo_timers::future::TimeoutFuture::new(0).await;
+                    capture_dims(&img);
+                });
+            }
+        }
+    });
 
     let on_svg_click = move |ev: leptos::ev::MouseEvent| {
         if !edit_mode.get() {
@@ -2692,6 +2733,78 @@ fn MapCanvas(
                     </button>
                 })}
             </div>
+        </div>
+
+        <div class="card" style="margin-bottom: var(--space-3); display:flex; gap: var(--space-3); align-items:flex-end; flex-wrap:wrap;">
+            <div class="field" style="margin-bottom:0; min-width:200px;">
+                <label for="map-search">"Search"</label>
+                <input
+                    id="map-search"
+                    type="text"
+                    placeholder="Plot number or shape label"
+                    prop:value=search_term
+                    on:input=move |ev| search_term.set(event_target_value(&ev))
+                />
+            </div>
+            <div class="field" style="margin-bottom:0; min-width:170px;">
+                <label for="map-status-filter">"Status"</label>
+                <select
+                    id="map-status-filter"
+                    on:change=move |ev| {
+                        let v = event_target_value(&ev);
+                        status_filter.set(
+                            v.parse::<usize>().ok().and_then(|i| ALL_STATUSES.get(i).copied()),
+                        );
+                    }
+                >
+                    <option value="">"All statuses"</option>
+                    {ALL_STATUSES
+                        .iter()
+                        .enumerate()
+                        .map(|(i, s)| {
+                            let (label, _color) = status_meta(*s);
+                            view! { <option value=i.to_string()>{label}</option> }
+                        })
+                        .collect_view()}
+                </select>
+            </div>
+            <div style="display:flex; gap: var(--space-2); align-items:center;">
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    on:click=move |_| zoom.update(|z| *z = (*z / 1.25).max(0.5))
+                >
+                    "−"
+                </button>
+                <span class="meta" style="min-width: 3.5em; text-align:center;">
+                    {move || format!("{:.0}%", zoom.get() * 100.0)}
+                </span>
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    on:click=move |_| zoom.update(|z| *z = (*z * 1.25).min(4.0))
+                >
+                    "+"
+                </button>
+                <button type="button" class="btn btn-secondary" on:click=move |_| zoom.set(1.0)>
+                    "Reset zoom"
+                </button>
+            </div>
+            {move || {
+                (!search_term.get().trim().is_empty() || status_filter.get().is_some()).then(|| view! {
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        on:click=move |_| {
+                            search_term.set(String::new());
+                            status_filter.set(None);
+                        }
+                    >
+                        "Clear filters"
+                    </button>
+                })
+            }}
+            <span class="meta">"Scroll the map to pan once zoomed in."</span>
         </div>
 
         <Show when=move || edit_mode.get() && can_edit_boundaries>
@@ -2777,11 +2890,22 @@ fn MapCanvas(
             }
         </Show>
 
-        <div style="position:relative; max-width: 100%; display:inline-block; line-height:0;">
+        <div style="position:relative; max-width: 100%; max-height: 75vh; overflow:auto; display:inline-block; line-height:0;">
             <img
+                node_ref=img_ref
                 src=image_url
                 on:load=on_image_load
-                style="display:block; max-width:100%; height:auto; border-radius: var(--radius, 8px);"
+                style=move || {
+                    let z = zoom.get();
+                    match base_display_width.get() {
+                        Some(bw) if (z - 1.0).abs() > 0.001 => format!(
+                            "display:block; width:{:.1}px; height:auto; border-radius: var(--radius, 8px);",
+                            bw * z
+                        ),
+                        _ => "display:block; max-width:100%; height:auto; border-radius: var(--radius, 8px);"
+                            .to_string(),
+                    }
+                }
             />
             <svg
                 on:click=on_svg_click
@@ -2817,6 +2941,31 @@ fn MapCanvas(
                             // produces this neutral grey) so nobody mistakes
                             // an unconfigured shape for an available one.
                             let dash = if f.plot_id.is_none() { "6,4" } else { "" };
+                            // The search/status toolbar dims non-matching
+                            // shapes rather than removing them — removing
+                            // would perturb click coordinate math and make
+                            // a shape briefly unreachable while a filter is
+                            // active. Non-matches stay clickable in edit
+                            // mode (so a filtered-out shape can still be
+                            // deleted/unlinked while editing) but not
+                            // otherwise, so an accidental click on a dimmed
+                            // shape doesn't select or quote the wrong plot.
+                            let search_q = search_term.get().trim().to_lowercase();
+                            let status_q = status_filter.get();
+                            let matches_search = search_q.is_empty()
+                                || label.as_deref().map(|l| l.to_lowercase().contains(&search_q)).unwrap_or(false)
+                                || plot_for_select
+                                    .as_ref()
+                                    .map(|p| p.plot.plot_number.to_lowercase().contains(&search_q))
+                                    .unwrap_or(false);
+                            let matches_status = status_q
+                                .map(|s| plot_for_select.as_ref().map(|p| p.plot.status == s).unwrap_or(false))
+                                .unwrap_or(true);
+                            let dim = !(matches_search && matches_status);
+                            let shape_opacity = if dim { "0.15" } else { "1" };
+                            let pointer_events = if dim && !edit_mode.get() { "none" } else { "auto" };
+                            let polygon_style =
+                                format!("cursor:pointer; opacity:{shape_opacity}; pointer-events:{pointer_events};");
                             view! {
                                 <polygon
                                     points=points_attr
@@ -2824,7 +2973,7 @@ fn MapCanvas(
                                     stroke=color.clone()
                                     stroke-width="2"
                                     stroke-dasharray=dash
-                                    style="cursor:pointer;"
+                                    style=polygon_style
                                     on:click=move |ev: leptos::ev::MouseEvent| {
                                         ev.stop_propagation();
                                         if edit_mode.get() {
@@ -2868,7 +3017,7 @@ fn MapCanvas(
                                         font-weight="700"
                                         text-anchor="middle"
                                         dominant-baseline="middle"
-                                        style="pointer-events:none;"
+                                        style=format!("pointer-events:none; opacity:{shape_opacity};")
                                     >
                                         {text}
                                     </text>
