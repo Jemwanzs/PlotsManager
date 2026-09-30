@@ -80,6 +80,43 @@ impl AuthUser {
     }
 }
 
+/// A per-request transaction already switched to the least-privilege
+/// `app_user` Postgres role (`database/migrations/0037_app_user_role.sql`)
+/// with `app.current_organization_id` set to the caller's org, so every
+/// query run on `tx` is subject to RLS for real — not just the
+/// application-level `where organization_id = $1` every handler already
+/// writes (docs/10-database-and-security-design.md: RLS is a second,
+/// independent layer behind that, not a replacement for it). `SET LOCAL`
+/// and `SET LOCAL ROLE` are both transaction-scoped and revert
+/// automatically at commit/rollback, so there's no risk of this leaking
+/// onto a later request that reuses the same pooled connection. Callers
+/// must `tx.commit().await?` on every success path — an uncommitted
+/// transaction silently rolls back on drop rather than erroring, so a
+/// missed commit reads as "nothing happened," not a crash.
+pub struct TenantTx {
+    pub auth: AuthUser,
+    pub tx: sqlx::Transaction<'static, sqlx::Postgres>,
+}
+
+#[async_trait]
+impl FromRequestParts<AppState> for TenantTx {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let auth = AuthUser::from_request_parts(parts, state).await?;
+        let mut tx = state.db.begin().await?;
+        sqlx::query("select set_config('app.current_organization_id', $1, true)")
+            .bind(auth.organization_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("set local role app_user").execute(&mut *tx).await?;
+        Ok(TenantTx { auth, tx })
+    }
+}
+
 #[derive(sqlx::FromRow)]
 struct TenantGateRow {
     status: String,

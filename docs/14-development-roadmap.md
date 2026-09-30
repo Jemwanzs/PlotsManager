@@ -45,9 +45,10 @@ deliberate v1 scope cut, not an oversight — its search/filter/zoom
 toolbar shipped 2026-09-30 and is a separate item, see Phase 3's own
 note), the Captured → Verified → Posted
 payment approval lifecycle (an open product question, not a known
-gap — see Phase 6's own note), and the least-privilege RLS-subject
-Postgres role (still an explicitly deferred hardening item, not a
-blocker). Per the 2026-09-26 decision, every integration in that list
+gap — see Phase 6's own note), and the remaining 22 of 24 backend
+route files' migration to the least-privilege `app_user` RLS role
+(infrastructure + a two-file pilot shipped 2026-10-01 — see docs/10's
+own note). Per the 2026-09-26 decision, every integration in that list
 is deliberately sequenced *after* building the settings-driven
 plug-in-configuration infrastructure they'll all be wired through —
 see the new section below. Notifications/work queues and the
@@ -89,8 +90,19 @@ built**, not a gap — prefix, "include year", "include project code"
 admin-editable per entity type from Settings, with a live preview
 (`domain::format_sequence_number`, `pages/settings.rs`) computed from
 the same fields the backend actually uses to generate the next real
-number. Genuinely not built: the least-privilege RLS-subject Postgres
-role (still deferred hardening, not a blocker).
+number. The least-privilege RLS-subject Postgres role — see docs/10's
+own note — now has real infrastructure (2026-10-01): `app_user`
+(`database/migrations/0037_app_user_role.sql`, `nologin nobypassrls`,
+switched into per-request via `set local role` in
+`crates/backend/src/extractors.rs::TenantTx` — no new credentials, no
+second connection pool) and two of 24 route files
+(`customers.rs`, `sales.rs`) actually running under it, verified
+against a local Postgres that RLS blocks cross-tenant rows even with
+the application's own `where organization_id = $1` deliberately
+stripped out. The other 22 files are unconverted and still work
+exactly as before (correct today via that same app-level filter, just
+without RLS as a second layer yet) — each is its own later, low-risk,
+one-file pass, same shape as this one.
 
 ## Phase 3 — Interactive Maps
 Upload project plans; manual polygon drawing; plot-to-map linking;
@@ -310,6 +322,30 @@ warnings instead of assuming they were inert placeholders.
   shape now unlink it server-side instead of deleting it locally;
   unlinked (draft) shapes still discard locally as before, since
   nothing was saved for them yet.
+
+## Known bug: migrations can't run against a genuinely empty database (found 2026-10-01)
+
+Found while testing the `app_user` RLS role change against a brand-new
+local Postgres database rather than an already-seeded one — every
+database this project has ever migrated (dev or production) already
+had at least one `payments` row by the time
+`database/migrations/0031_payment_receipts.sql` ran, so this was never
+exercised before. That migration's backfill ends with
+`select setval('payment_receipt_number_seq', (select count(*) from
+payments), true);` — on an empty `payments` table `count(*)` is `0`,
+and Postgres sequences reject `setval(seq, 0)` by default (`minvalue`
+is `1`), so the whole migration run aborts. **Can't be fixed in place**:
+0031 already succeeded in production, and `sqlx::migrate!` tracks
+applied migrations by a checksum of the file's contents — editing it
+would mismatch that checksum and break the *next* deploy everywhere
+it's already applied, a far worse outcome than leaving the bug as
+documented, known technical debt. A real fix needs either a deliberate
+migration-history squash at a major version boundary, or a one-time
+manual `setval` before first boot on any environment starting from
+true scratch (a disaster-recovery restore, a new local dev clone,
+etc.) — not something to improvise mid-task. No impact on any
+already-running environment (dev or production), since both already
+have payment rows.
 
 ## Integration infrastructure — settings-driven, before any provider (2026-09-26)
 

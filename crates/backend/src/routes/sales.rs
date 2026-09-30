@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use super::approvals::gate_price;
 use crate::error::AppError;
-use crate::extractors::AuthUser;
+use crate::extractors::{AuthUser, TenantTx};
 use crate::pg_enum::to_pg;
 use crate::state::AppState;
 
@@ -68,15 +68,19 @@ async fn insert_repayment_schedule<'e, E: sqlx::PgExecutor<'e>>(
 /// (same 10% deposit / 12-instalment Plot Loan Account default for Lipa
 /// Pole Pole) so the UI behaves identically against either.
 async fn create_sale(
+    TenantTx { auth, mut tx }: TenantTx,
     State(state): State<AppState>,
-    auth: AuthUser,
     Json(input): Json<CreateSaleInput>,
 ) -> Result<Json<PlotSale>, AppError> {
     auth.require_permission(PERM_PLOTS_TRANSACTIONS_CREATE)?;
 
     // Below the plot's minimum_price? gate_price records/consumes an
     // approval before we ever open the sale transaction — see its docs
-    // on why that has to happen against the pool, not this tx.
+    // on why that has to happen against the pool, not this tx. Still
+    // takes `&state.db` (the raw, BYPASSRLS pool) rather than `tx`
+    // deliberately — it's shared with quotations.rs::accept_quotation,
+    // not yet converted to TenantTx, and its own isolation reasoning
+    // predates and is independent of the RLS-role switch here.
     let approval_id = gate_price(
         &state.db,
         auth.organization_id,
@@ -89,8 +93,6 @@ async fn create_sale(
         None,
     )
     .await?;
-
-    let mut tx = state.db.begin().await?;
 
     let sale = execute_sale(
         &mut tx,
@@ -425,14 +427,11 @@ pub(crate) async fn execute_sale(
 /// 0030_sale_lifecycle.sql` for why `plot_sales`/`sale_plots` can now
 /// carry more than one row per plot over time.
 async fn cancel_sale(
-    State(state): State<AppState>,
-    auth: AuthUser,
+    TenantTx { auth, mut tx }: TenantTx,
     Path(sale_id): Path<Uuid>,
     Json(input): Json<CancelSaleInput>,
 ) -> Result<Json<()>, AppError> {
     auth.require_permission(PERM_PLOTS_TRANSACTIONS_CANCEL)?;
-
-    let mut tx = state.db.begin().await?;
 
     let org_ok: bool = sqlx::query_scalar(
         "select exists(select 1 from plot_sales where id = $1 and organization_id = $2)",
@@ -501,14 +500,11 @@ async fn cancel_sale(
 /// plot state is freed back to `Available` the same way, via
 /// `routes/projects.rs::reallocate_plot`.
 async fn repossess_sale(
-    State(state): State<AppState>,
-    auth: AuthUser,
+    TenantTx { auth, mut tx }: TenantTx,
     Path(sale_id): Path<Uuid>,
     Json(input): Json<RepossessSaleInput>,
 ) -> Result<Json<()>, AppError> {
     auth.require_permission(PERM_PLOTS_TRANSACTIONS_CANCEL)?;
-
-    let mut tx = state.db.begin().await?;
 
     let org_ok: bool = sqlx::query_scalar(
         "select exists(select 1 from plot_sales where id = $1 and organization_id = $2)",
@@ -590,7 +586,15 @@ async fn repossess_sale(
 /// see `domain::BulkSaleRow`'s module docs for why this is a separate
 /// path from `execute_sale`, which is for a fresh reservation made
 /// today). A CSV upload parsed client-side to `BulkSaleRow` rows and
-/// posted here.
+/// posted here. Deliberately still on the raw pool (`State<AppState>`),
+/// not `TenantTx`: `insert_bulk_sale` opens its own transaction *per
+/// row* so one row's constraint conflict (a plot re-imported that
+/// already has a sale — an expected, individually-handled case, not a
+/// bug) doesn't poison a shared transaction and roll back every row
+/// around it. `TenantTx` hands out one transaction for the whole
+/// request, which is the wrong shape for that per-row isolation; this
+/// stays a candidate for its own row-scoped `TenantTx`-style role
+/// switch later, not today's per-file pass.
 async fn bulk_create_sales(
     State(state): State<AppState>,
     auth: AuthUser,

@@ -1,6 +1,6 @@
 use axum::extract::Path;
 use axum::routing::post;
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{routing::get, Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
 use domain::{
     BulkImportResult, BulkImportRowError, Customer, CustomerActivity, CustomerDetail,
@@ -11,7 +11,7 @@ use domain::{
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::extractors::AuthUser;
+use crate::extractors::TenantTx;
 use crate::pg_enum::{from_pg, to_pg};
 use crate::state::AppState;
 
@@ -160,8 +160,7 @@ impl CustomerSummaryRow {
 }
 
 async fn list_customers(
-    State(state): State<AppState>,
-    auth: AuthUser,
+    TenantTx { auth, mut tx }: TenantTx,
 ) -> Result<Json<Vec<CustomerSummary>>, AppError> {
     let rows: Vec<CustomerSummaryRow> = sqlx::query_as(
         r#"
@@ -179,8 +178,9 @@ async fn list_customers(
         "#,
     )
     .bind(auth.organization_id)
-    .fetch_all(&state.db)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     let summaries = rows
         .into_iter()
@@ -191,19 +191,23 @@ async fn list_customers(
 }
 
 async fn create_customer(
-    State(state): State<AppState>,
-    auth: AuthUser,
+    TenantTx { auth, mut tx }: TenantTx,
     Json(input): Json<CreateCustomerInput>,
 ) -> Result<Json<Customer>, AppError> {
     auth.require_permission(PERM_CUSTOMERS_CREATE)?;
-    Ok(Json(insert_customer(&state, auth.organization_id, auth.user_id, &input).await?))
+    let customer = insert_customer(&mut tx, auth.organization_id, auth.user_id, &input).await?;
+    tx.commit().await?;
+    Ok(Json(customer))
 }
 
 /// The single-row validation-and-insert `create_customer` and
 /// `bulk_create_customers` both go through, so a bulk CSV import
-/// can't drift from what adding one customer by hand enforces.
+/// can't drift from what adding one customer by hand enforces. Takes
+/// an open connection (the caller's `TenantTx`) rather than its own
+/// `&AppState`/pool so it composes into the caller's transaction
+/// instead of opening a second one.
 async fn insert_customer(
-    state: &AppState,
+    conn: &mut sqlx::PgConnection,
     organization_id: Uuid,
     agent_id: Uuid,
     input: &CreateCustomerInput,
@@ -220,7 +224,7 @@ async fn insert_customer(
         )
         .bind(organization_id)
         .bind(id_number)
-        .fetch_one(&state.db)
+        .fetch_one(&mut *conn)
         .await?;
         if duplicate {
             return Err(AppError::conflict(
@@ -247,7 +251,7 @@ async fn insert_customer(
     .bind(id_number)
     .bind(agent_id)
     .bind(source)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *conn)
     .await?;
 
     row.into_domain()
@@ -256,9 +260,13 @@ async fn insert_customer(
 /// Best-effort bulk import (see `domain::BulkImportResult`'s module
 /// docs) — a CSV upload during tenant onboarding, parsed to
 /// `CreateCustomerInput` rows client-side and posted here as JSON.
+/// Every row shares this one transaction/RLS-scoped role switch; each
+/// row's own validation failures (duplicate ID, blank name) are
+/// caught by `insert_customer`'s own app-level checks before any SQL
+/// runs, not by a failed statement, so one bad row can't abort the
+/// transaction for the rows after it.
 async fn bulk_create_customers(
-    State(state): State<AppState>,
-    auth: AuthUser,
+    TenantTx { auth, mut tx }: TenantTx,
     Json(inputs): Json<Vec<CreateCustomerInput>>,
 ) -> Result<Json<BulkImportResult>, AppError> {
     auth.require_permission(PERM_CUSTOMERS_BULK_IMPORT)?;
@@ -266,7 +274,7 @@ async fn bulk_create_customers(
     let mut created = 0u32;
     let mut errors = Vec::new();
     for (idx, input) in inputs.iter().enumerate() {
-        match insert_customer(&state, auth.organization_id, auth.user_id, input).await {
+        match insert_customer(&mut tx, auth.organization_id, auth.user_id, input).await {
             Ok(_) => created += 1,
             Err(e) => errors.push(BulkImportRowError {
                 row: idx as u32 + 1,
@@ -274,6 +282,7 @@ async fn bulk_create_customers(
             }),
         }
     }
+    tx.commit().await?;
 
     Ok(Json(BulkImportResult { created, errors }))
 }
@@ -283,8 +292,7 @@ async fn bulk_create_customers(
 /// full-name/ID-number validation `insert_customer` does, since both
 /// are the same record just at different points in its life.
 async fn update_customer(
-    State(state): State<AppState>,
-    auth: AuthUser,
+    TenantTx { auth, mut tx }: TenantTx,
     Path(id): Path<Uuid>,
     Json(input): Json<UpdateCustomerInput>,
 ) -> Result<Json<Customer>, AppError> {
@@ -303,7 +311,7 @@ async fn update_customer(
         .bind(auth.organization_id)
         .bind(id_number)
         .bind(id)
-        .fetch_one(&state.db)
+        .fetch_one(&mut *tx)
         .await?;
         if duplicate {
             return Err(AppError::conflict(
@@ -344,7 +352,7 @@ async fn update_customer(
     .bind(clean(&input.next_of_kin_address))
     .bind(id)
     .bind(auth.organization_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| match &e {
         sqlx::Error::Database(db_err)
@@ -354,13 +362,13 @@ async fn update_customer(
         }
         _ => AppError::from(e),
     })?;
+    tx.commit().await?;
 
     Ok(Json(row.ok_or(AppError::NotFound)?.into_domain()?))
 }
 
 async fn update_lead(
-    State(state): State<AppState>,
-    auth: AuthUser,
+    TenantTx { auth, mut tx }: TenantTx,
     Path(id): Path<Uuid>,
     Json(input): Json<UpdateLeadInput>,
 ) -> Result<Json<Customer>, AppError> {
@@ -380,8 +388,9 @@ async fn update_lead(
     .bind(notes)
     .bind(id)
     .bind(auth.organization_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     Ok(Json(row.ok_or(AppError::NotFound)?.into_domain()?))
 }
@@ -402,8 +411,7 @@ struct CustomerSaleRow {
 }
 
 async fn get_customer(
-    State(state): State<AppState>,
-    auth: AuthUser,
+    TenantTx { auth, mut tx }: TenantTx,
     Path(id): Path<Uuid>,
 ) -> Result<Json<CustomerDetail>, AppError> {
     let customer_row: Option<CustomerRow> = sqlx::query_as(&format!(
@@ -411,7 +419,7 @@ async fn get_customer(
     ))
     .bind(id)
     .bind(auth.organization_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&mut *tx)
     .await?;
     let customer_row = customer_row.ok_or(AppError::NotFound)?;
 
@@ -433,8 +441,9 @@ async fn get_customer(
         "#,
     )
     .bind(id)
-    .fetch_all(&state.db)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     // Rolled up here rather than left for the frontend to sum, so
     // every caller (today just this page) sees the same "customer
@@ -520,8 +529,7 @@ const CUSTOMER_ACTIVITY_QUERY: &str = r#"
 "#;
 
 async fn list_activities(
-    State(state): State<AppState>,
-    auth: AuthUser,
+    TenantTx { auth, mut tx }: TenantTx,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<CustomerActivity>>, AppError> {
     auth.require_permission(PERM_CUSTOMERS_VIEW)?;
@@ -533,7 +541,7 @@ async fn list_activities(
     let exists: bool = sqlx::query_scalar("select exists(select 1 from customers where id = $1 and organization_id = $2)")
         .bind(id)
         .bind(auth.organization_id)
-        .fetch_one(&state.db)
+        .fetch_one(&mut *tx)
         .await?;
     if !exists {
         return Err(AppError::NotFound);
@@ -543,8 +551,9 @@ async fn list_activities(
         "{CUSTOMER_ACTIVITY_QUERY} where ca.customer_id = $1 order by ca.occurred_at desc, ca.created_at desc"
     ))
     .bind(id)
-    .fetch_all(&state.db)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     Ok(Json(
         rows.into_iter()
@@ -554,8 +563,7 @@ async fn list_activities(
 }
 
 async fn log_activity(
-    State(state): State<AppState>,
-    auth: AuthUser,
+    TenantTx { auth, mut tx }: TenantTx,
     Path(id): Path<Uuid>,
     Json(input): Json<LogCustomerActivityInput>,
 ) -> Result<Json<CustomerActivity>, AppError> {
@@ -569,7 +577,7 @@ async fn log_activity(
     let exists: bool = sqlx::query_scalar("select exists(select 1 from customers where id = $1 and organization_id = $2)")
         .bind(id)
         .bind(auth.organization_id)
-        .fetch_one(&state.db)
+        .fetch_one(&mut *tx)
         .await?;
     if !exists {
         return Err(AppError::NotFound);
@@ -588,13 +596,14 @@ async fn log_activity(
     .bind(summary)
     .bind(input.occurred_at)
     .bind(auth.user_id)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await?;
 
     let row: CustomerActivityRow = sqlx::query_as(&format!("{CUSTOMER_ACTIVITY_QUERY} where ca.id = $1"))
         .bind(new_id)
-        .fetch_one(&state.db)
+        .fetch_one(&mut *tx)
         .await?;
+    tx.commit().await?;
 
     Ok(Json(row.into_domain()?))
 }
