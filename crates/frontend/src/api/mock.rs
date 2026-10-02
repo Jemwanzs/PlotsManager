@@ -1403,10 +1403,17 @@ impl MockApi {
             .ok_or(ApiError::NotFound)?;
         let (label, color) = loan_status_meta(account.status);
 
+        // Only a payment that actually posted (immediately, or later
+        // via approval) ever gets a real backend `loan_ledger_entries`
+        // row — a still-`Captured` or `Rejected` payment has none and
+        // must never appear here or move `running`, matching
+        // `apply_payment_effects` being the only inserter of a
+        // payment-type ledger entry on the real backend.
         let mut payments: Vec<Payment> = db
             .payments
             .iter()
             .filter(|p| p.loan_account_id == id)
+            .filter(|p| matches!(p.status, PaymentStatus::Posted | PaymentStatus::Reversed))
             .cloned()
             .collect();
         payments.sort_by(|a, b| (a.payment_date, a.created_at).cmp(&(b.payment_date, b.created_at)));
@@ -3628,7 +3635,7 @@ impl MockApi {
                 existing.api_secret = Some(secret);
             }
             if let Some(extra) = input.extra_credentials {
-                existing.extra_credentials = Some(extra);
+                existing.extra_credentials = extra;
             }
             existing.updated_at = Utc::now();
             return Ok(mock_integration_config_to_domain(existing));
@@ -3642,7 +3649,7 @@ impl MockApi {
             config: input.config,
             api_key: input.api_key,
             api_secret: input.api_secret,
-            extra_credentials: input.extra_credentials,
+            extra_credentials: input.extra_credentials.flatten(),
             updated_at: Utc::now(),
         };
         db.integration_configs.push(config);

@@ -518,20 +518,36 @@ async fn reject_payment(
         return Err(AppError::bad_request("Enter a reason for rejecting this payment."));
     }
 
-    let exists: bool = sqlx::query_scalar(
+    let mut tx = state.db.begin().await?;
+
+    let org_ok: bool = sqlx::query_scalar(
         r#"select exists(
             select 1 from payments p
             join plot_loan_accounts pla on pla.id = p.loan_account_id
             join plot_sales ps on ps.id = pla.sale_id
-            where p.id = $1 and p.loan_account_id = $2 and ps.organization_id = $3 and p.status = 'captured'
+            where p.id = $1 and p.loan_account_id = $2 and ps.organization_id = $3
         )"#,
     )
     .bind(payment_id)
     .bind(id)
     .bind(auth.organization_id)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await?;
-    if !exists {
+    if !org_ok {
+        return Err(AppError::NotFound);
+    }
+
+    // `for update`: locks this payment row so a concurrent approve on
+    // the same captured payment can't post it out from under a reject
+    // (mirrors approve_payment's own lock, above).
+    let locked: Option<Uuid> = sqlx::query_scalar(
+        "select id from payments where id = $1 and loan_account_id = $2 and status = 'captured' for update",
+    )
+    .bind(payment_id)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if locked.is_none() {
         return Err(AppError::bad_request("This payment isn't awaiting approval."));
     }
 
@@ -542,9 +558,10 @@ async fn reject_payment(
     .bind(auth.user_id)
     .bind(reason)
     .bind(payment_id)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await?;
 
+    tx.commit().await?;
     Ok(Json(updated.into_domain()?))
 }
 

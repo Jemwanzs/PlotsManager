@@ -122,6 +122,16 @@ async fn upsert_integration_config(
         return Err(AppError::bad_request("Enter a provider name."));
     }
 
+    // Collapse the field's three JSON-level states (omitted / present
+    // `null` / present with a value) into what `coalesce` below needs:
+    // `None` binds SQL NULL (omitted -> keep existing); `Some(v)` binds
+    // a real jsonb value, including `Value::Null` for an explicit
+    // clear, which is NOT SQL NULL so it overwrites.
+    let extra_credentials: Option<JsonValue> = match input.extra_credentials {
+        None => None,
+        Some(inner) => Some(inner.unwrap_or(JsonValue::Null)),
+    };
+
     let row: IntegrationConfigRow = sqlx::query_as(&format!(
         r#"
         insert into integration_configs
@@ -153,7 +163,7 @@ async fn upsert_integration_config(
     .bind(&input.config)
     .bind(&input.api_key)
     .bind(&input.api_secret)
-    .bind(&input.extra_credentials)
+    .bind(&extra_credentials)
     .bind(auth.user_id)
     .fetch_one(&state.db)
     .await?;

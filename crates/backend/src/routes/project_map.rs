@@ -147,7 +147,8 @@ async fn get_map_summary(
     for row in rows {
         match row.status.as_str() {
             "published" => published = Some(row.into_domain()?),
-            _ => draft = Some(row.into_domain()?),
+            "draft" => draft = Some(row.into_domain()?),
+            _ => {}
         }
     }
 
@@ -205,48 +206,28 @@ async fn upload_map_image(
 
     let empty_polygons = serde_json::json!({"image_width": 0, "image_height": 0, "features": []});
 
-    let draft_id: Option<Uuid> =
-        sqlx::query_scalar("select id from project_map_versions where project_id = $1 and status = 'draft'")
-            .bind(project_id)
-            .fetch_optional(&state.db)
-            .await?;
-
-    match draft_id {
-        Some(id) => {
-            sqlx::query(
-                "update project_map_versions set image_data = $1, image_content_type = $2, \
-                 polygons = $3, updated_at = now() where id = $4",
-            )
-            .bind(image_data.as_ref())
-            .bind(&content_type)
-            .bind(&empty_polygons)
-            .bind(id)
-            .execute(&state.db)
-            .await?;
-        }
-        None => {
-            let next_version: i32 = sqlx::query_scalar(
-                "select coalesce(max(version_number), 0) + 1 from project_map_versions where project_id = $1",
-            )
-            .bind(project_id)
-            .fetch_one(&state.db)
-            .await?;
-            sqlx::query(
-                "insert into project_map_versions \
-                 (project_id, organization_id, version_number, status, image_data, image_content_type, polygons, created_by) \
-                 values ($1, $2, $3, 'draft', $4, $5, $6, $7)",
-            )
-            .bind(project_id)
-            .bind(auth.organization_id)
-            .bind(next_version)
-            .bind(image_data.as_ref())
-            .bind(&content_type)
-            .bind(&empty_polygons)
-            .bind(auth.user_id)
-            .execute(&state.db)
-            .await?;
-        }
-    }
+    // A single atomic upsert against the one-draft-per-project partial
+    // unique index — not a select-then-insert/update — so two
+    // concurrent uploads (double-click, two tabs) when no draft exists
+    // yet can't both take the insert branch and have the second fail
+    // on the unique index instead of just overwriting like the first.
+    sqlx::query(
+        "insert into project_map_versions \
+         (project_id, organization_id, version_number, status, image_data, image_content_type, polygons, created_by) \
+         values ($1, $2, (select coalesce(max(version_number), 0) + 1 from project_map_versions where project_id = $1), \
+                 'draft', $3, $4, $5, $6) \
+         on conflict (project_id) where status = 'draft' \
+         do update set image_data = excluded.image_data, image_content_type = excluded.image_content_type, \
+                       polygons = excluded.polygons, updated_at = now()",
+    )
+    .bind(project_id)
+    .bind(auth.organization_id)
+    .bind(image_data.as_ref())
+    .bind(&content_type)
+    .bind(&empty_polygons)
+    .bind(auth.user_id)
+    .execute(&state.db)
+    .await?;
 
     get_map_summary(State(state), auth, Path(project_id)).await
 }
@@ -290,20 +271,21 @@ async fn ensure_draft(
             AppError::bad_request("Upload a site plan image before editing boundaries.")
         })?;
 
-        let next_version: i32 = sqlx::query_scalar(
-            "select coalesce(max(version_number), 0) + 1 from project_map_versions where project_id = $1",
-        )
-        .bind(project_id)
-        .fetch_one(&state.db)
-        .await?;
+        // `on conflict ... do nothing`: if a concurrent request (e.g.
+        // a double-click) already created the draft between the
+        // `draft_exists` check above and here, this just no-ops
+        // instead of failing on the one-draft-per-project unique
+        // index — `get_map_summary` below returns whichever draft
+        // won either way.
         sqlx::query(
             "insert into project_map_versions \
              (project_id, organization_id, version_number, status, image_data, image_content_type, polygons, created_by) \
-             values ($1, $2, $3, 'draft', $4, $5, $6, $7)",
+             values ($1, $2, (select coalesce(max(version_number), 0) + 1 from project_map_versions where project_id = $1), \
+                     'draft', $3, $4, $5, $6) \
+             on conflict (project_id) where status = 'draft' do nothing",
         )
         .bind(project_id)
         .bind(auth.organization_id)
-        .bind(next_version)
         .bind(&published.image_data)
         .bind(&published.image_content_type)
         .bind(&published.polygons)

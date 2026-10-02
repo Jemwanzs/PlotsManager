@@ -101,7 +101,23 @@ pub struct UpsertIntegrationConfigInput {
     /// Same tri-state convention, but a JSON object/array rather than
     /// a string — free-form bag for whatever a provider needs beyond a
     /// single key/secret pair (multiple tokens, a webhook secret,
-    /// ...). `Some(JsonValue::Null)` clears it.
-    #[serde(default)]
-    pub extra_credentials: Option<JsonValue>,
+    /// ...). Field omitted -> `None` (keep); present as JSON `null` ->
+    /// `Some(None)` (clear); present with a value -> `Some(Some(v))`
+    /// (replace). A plain `Option<JsonValue>` can't represent this:
+    /// serde's `Option<T>` deserialization treats a JSON `null` as
+    /// "absent" and collapses straight to `None` before `T` (here
+    /// `JsonValue`, which could otherwise represent `null` itself as
+    /// `Value::Null`) ever sees it, making the field-level "send null
+    /// to clear" contract unreachable. The nested `Option<Option<_>>`
+    /// plus `deserialize_with` below is the standard way to recover
+    /// the distinction.
+    #[serde(default, deserialize_with = "deserialize_present_as_some")]
+    pub extra_credentials: Option<Option<JsonValue>>,
+}
+
+fn deserialize_present_as_some<'de, D>(deserializer: D) -> Result<Option<Option<JsonValue>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
 }
