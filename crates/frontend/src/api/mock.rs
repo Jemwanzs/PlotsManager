@@ -67,7 +67,7 @@ struct MockDb {
     reversed_entry_ids: HashSet<Uuid>,
     quotations: Vec<Quotation>,
     approval_requests: Vec<ApprovalRequest>,
-    project_maps: HashMap<Uuid, MockProjectMap>,
+    map_versions: Vec<MockMapVersion>,
     roles: Vec<domain::Role>,
     tenant_users: Vec<domain::TenantUser>,
     branches: Vec<domain::Branch>,
@@ -179,7 +179,7 @@ fn sale_lifecycle_of(
 
 /// Mirrors the real `documents` table (`database/migrations/
 /// 0027_documents.sql`) — `file_url` is a browser blob: URL, same
-/// stand-in `project_maps.image_url` uses, since the mock never
+/// stand-in `MockMapVersion::image_url` uses, since the mock never
 /// leaves this tab and has no server to round-trip bytes through.
 struct MockDocument {
     id: Uuid,
@@ -211,16 +211,45 @@ struct MockNumbering {
     next_number: u32,
 }
 
-/// Mirrors the real `project_maps` table (see
-/// `database/migrations/0009_project_map.sql`) — `image_url` is a
-/// browser blob: URL (`web_sys::Url::create_object_url_with_blob`)
+/// Mirrors one row of the real `project_map_versions` table
+/// (`database/migrations/0038_project_map_versions.sql`) — `image_url`
+/// is a browser blob: URL (`web_sys::Url::create_object_url_with_blob`)
 /// rather than stored bytes, since the mock never leaves this tab and
-/// has no server to round-trip bytes through.
-struct MockProjectMap {
+/// has no server to round-trip bytes through. A flat `Vec` filtered by
+/// `project_id`, same row-per-version shape as the real table, rather
+/// than a `HashMap<Uuid, _>` — a project can have more than one row
+/// (a draft and a published version) at once.
+#[derive(Clone)]
+struct MockMapVersion {
+    id: Uuid,
+    project_id: Uuid,
+    version_number: i32,
+    status: domain::MapVersionStatus,
     image_url: String,
     image_content_type: String,
     polygons: MapPolygons,
+    created_by_name: String,
+    created_at: chrono::DateTime<Utc>,
     updated_at: chrono::DateTime<Utc>,
+    published_by_name: Option<String>,
+    published_at: Option<chrono::DateTime<Utc>>,
+}
+
+impl MockMapVersion {
+    fn to_domain(&self) -> domain::ProjectMapVersion {
+        domain::ProjectMapVersion {
+            id: self.id,
+            version_number: self.version_number,
+            status: self.status,
+            image_content_type: self.image_content_type.clone(),
+            polygons: self.polygons.clone(),
+            created_by_name: self.created_by_name.clone(),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            published_by_name: self.published_by_name.clone(),
+            published_at: self.published_at,
+        }
+    }
 }
 
 // Arc<Mutex<..>>, not Rc<RefCell<..>>: Leptos 0.7's `provide_context`
@@ -2588,22 +2617,24 @@ impl MockApi {
     pub async fn get_map_summary(&self, project_id: Uuid) -> Result<ProjectMapSummary, ApiError> {
         settle(100).await;
         let db = self.db.lock().unwrap();
-        Ok(match db.project_maps.get(&project_id) {
-            Some(map) => ProjectMapSummary {
-                exists: true,
-                image_content_type: Some(map.image_content_type.clone()),
-                polygons: map.polygons.clone(),
-                updated_at: Some(map.updated_at),
-            },
-            None => ProjectMapSummary {
-                exists: false,
-                image_content_type: None,
-                polygons: MapPolygons::default(),
-                updated_at: None,
-            },
-        })
+        let published = db
+            .map_versions
+            .iter()
+            .find(|v| v.project_id == project_id && v.status == domain::MapVersionStatus::Published)
+            .map(MockMapVersion::to_domain);
+        let draft = db
+            .map_versions
+            .iter()
+            .find(|v| v.project_id == project_id && v.status == domain::MapVersionStatus::Draft)
+            .map(MockMapVersion::to_domain);
+        Ok(ProjectMapSummary { published, draft })
     }
 
+    /// Resets `polygons` to empty on a fresh upload — pixel coordinates
+    /// drawn against the old image almost never line up with a
+    /// differently-sized replacement. Creates the draft if none exists
+    /// yet; replaces the existing draft's image otherwise. Never
+    /// touches the published version.
     pub async fn upload_map_image(
         &self,
         project_id: Uuid,
@@ -2615,17 +2646,148 @@ impl MockApi {
             .map_err(|_| ApiError::Network("couldn't read that file".to_string()))?;
 
         let mut db = self.db.lock().unwrap();
-        db.project_maps.insert(
-            project_id,
-            MockProjectMap {
+        let created_by_name = db.demo_user.full_name.clone();
+        if let Some(draft) = db
+            .map_versions
+            .iter_mut()
+            .find(|v| v.project_id == project_id && v.status == domain::MapVersionStatus::Draft)
+        {
+            draft.image_url = url;
+            draft.image_content_type = content_type;
+            draft.polygons = MapPolygons::default();
+            draft.updated_at = Utc::now();
+        } else {
+            let next_version = db
+                .map_versions
+                .iter()
+                .filter(|v| v.project_id == project_id)
+                .map(|v| v.version_number)
+                .max()
+                .unwrap_or(0)
+                + 1;
+            db.map_versions.push(MockMapVersion {
+                id: Uuid::new_v4(),
+                project_id,
+                version_number: next_version,
+                status: domain::MapVersionStatus::Draft,
                 image_url: url,
                 image_content_type: content_type,
                 polygons: MapPolygons::default(),
+                created_by_name,
+                created_at: Utc::now(),
                 updated_at: Utc::now(),
-            },
-        );
+                published_by_name: None,
+                published_at: None,
+            });
+        }
         drop(db);
         self.get_map_summary(project_id).await
+    }
+
+    /// Explicit "start editing": clones the published version into a
+    /// new draft row. No-op if a draft already exists.
+    pub async fn ensure_map_draft(&self, project_id: Uuid) -> Result<ProjectMapSummary, ApiError> {
+        settle(150).await;
+        let mut db = self.db.lock().unwrap();
+        let draft_exists = db
+            .map_versions
+            .iter()
+            .any(|v| v.project_id == project_id && v.status == domain::MapVersionStatus::Draft);
+        if !draft_exists {
+            let published = db
+                .map_versions
+                .iter()
+                .find(|v| v.project_id == project_id && v.status == domain::MapVersionStatus::Published)
+                .cloned();
+            let Some(published) = published else {
+                return Err(ApiError::InvalidCredentials(
+                    "Upload a site plan image before editing boundaries.".to_string(),
+                ));
+            };
+            let next_version = db
+                .map_versions
+                .iter()
+                .filter(|v| v.project_id == project_id)
+                .map(|v| v.version_number)
+                .max()
+                .unwrap_or(0)
+                + 1;
+            let created_by_name = db.demo_user.full_name.clone();
+            db.map_versions.push(MockMapVersion {
+                id: Uuid::new_v4(),
+                project_id,
+                version_number: next_version,
+                status: domain::MapVersionStatus::Draft,
+                image_url: published.image_url,
+                image_content_type: published.image_content_type,
+                polygons: published.polygons,
+                created_by_name,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                published_by_name: None,
+                published_at: None,
+            });
+        }
+        drop(db);
+        self.get_map_summary(project_id).await
+    }
+
+    /// Discards the current draft outright — the undo path a real
+    /// draft needs.
+    pub async fn discard_map_draft(&self, project_id: Uuid) -> Result<ProjectMapSummary, ApiError> {
+        settle(150).await;
+        let mut db = self.db.lock().unwrap();
+        let before = db.map_versions.len();
+        db.map_versions
+            .retain(|v| !(v.project_id == project_id && v.status == domain::MapVersionStatus::Draft));
+        if db.map_versions.len() == before {
+            return Err(ApiError::InvalidCredentials("There's no draft to discard.".to_string()));
+        }
+        drop(db);
+        self.get_map_summary(project_id).await
+    }
+
+    /// Promotes the current draft to published; whatever was published
+    /// before becomes permanent `Superseded` history.
+    pub async fn publish_map_draft(&self, project_id: Uuid) -> Result<ProjectMapSummary, ApiError> {
+        settle(200).await;
+        let mut db = self.db.lock().unwrap();
+        let has_draft = db
+            .map_versions
+            .iter()
+            .any(|v| v.project_id == project_id && v.status == domain::MapVersionStatus::Draft);
+        if !has_draft {
+            return Err(ApiError::InvalidCredentials("There's no draft to publish.".to_string()));
+        }
+        let published_by_name = db.demo_user.full_name.clone();
+        let now = Utc::now();
+        for v in db.map_versions.iter_mut().filter(|v| v.project_id == project_id) {
+            match v.status {
+                domain::MapVersionStatus::Published => v.status = domain::MapVersionStatus::Superseded,
+                domain::MapVersionStatus::Draft => {
+                    v.status = domain::MapVersionStatus::Published;
+                    v.published_by_name = Some(published_by_name.clone());
+                    v.published_at = Some(now);
+                    v.updated_at = now;
+                }
+                domain::MapVersionStatus::Superseded => {}
+            }
+        }
+        drop(db);
+        self.get_map_summary(project_id).await
+    }
+
+    pub async fn list_map_versions(&self, project_id: Uuid) -> Result<Vec<domain::ProjectMapVersion>, ApiError> {
+        settle(150).await;
+        let db = self.db.lock().unwrap();
+        let mut versions: Vec<domain::ProjectMapVersion> = db
+            .map_versions
+            .iter()
+            .filter(|v| v.project_id == project_id)
+            .map(MockMapVersion::to_domain)
+            .collect();
+        versions.sort_by(|a, b| b.version_number.cmp(&a.version_number));
+        Ok(versions)
     }
 
     pub async fn update_map_polygons(
@@ -2659,13 +2821,17 @@ impl MockApi {
         }
 
         let mut db = self.db.lock().unwrap();
-        let Some(map) = db.project_maps.get_mut(&project_id) else {
+        let Some(draft) = db
+            .map_versions
+            .iter_mut()
+            .find(|v| v.project_id == project_id && v.status == domain::MapVersionStatus::Draft)
+        else {
             return Err(ApiError::InvalidCredentials(
-                "Upload a site plan image before saving plot boundaries.".to_string(),
+                "Start editing boundaries before saving plot shapes.".to_string(),
             ));
         };
-        map.polygons = polygons;
-        map.updated_at = Utc::now();
+        draft.polygons = polygons;
+        draft.updated_at = Utc::now();
         drop(db);
         self.get_map_summary(project_id).await
     }
@@ -2679,10 +2845,14 @@ impl MockApi {
         settle(300).await;
         let plot = self.create_plot(input).await?;
         let mut db = self.db.lock().unwrap();
-        let Some(map) = db.project_maps.get_mut(&project_id) else {
+        let Some(draft) = db
+            .map_versions
+            .iter_mut()
+            .find(|v| v.project_id == project_id && v.status == domain::MapVersionStatus::Draft)
+        else {
             return Err(ApiError::NotFound);
         };
-        let Some(feature) = map.polygons.features.iter_mut().find(|f| f.id == feature_id) else {
+        let Some(feature) = draft.polygons.features.iter_mut().find(|f| f.id == feature_id) else {
             return Err(ApiError::NotFound);
         };
         if feature.plot_id.is_some() {
@@ -2691,7 +2861,7 @@ impl MockApi {
             ));
         }
         feature.plot_id = Some(plot.id);
-        map.updated_at = Utc::now();
+        draft.updated_at = Utc::now();
         drop(db);
         self.get_map_summary(project_id).await
     }
@@ -2710,15 +2880,19 @@ impl MockApi {
                 "That plot doesn't belong to this project.".to_string(),
             ));
         }
-        let Some(map) = db.project_maps.get_mut(&project_id) else {
+        let Some(draft) = db
+            .map_versions
+            .iter_mut()
+            .find(|v| v.project_id == project_id && v.status == domain::MapVersionStatus::Draft)
+        else {
             return Err(ApiError::NotFound);
         };
-        if map.polygons.features.iter().any(|f| f.plot_id == Some(plot_id)) {
+        if draft.polygons.features.iter().any(|f| f.plot_id == Some(plot_id)) {
             return Err(ApiError::InvalidCredentials(
                 "That plot is already linked to a shape on this map.".to_string(),
             ));
         }
-        let Some(feature) = map.polygons.features.iter_mut().find(|f| f.id == feature_id) else {
+        let Some(feature) = draft.polygons.features.iter_mut().find(|f| f.id == feature_id) else {
             return Err(ApiError::NotFound);
         };
         if feature.plot_id.is_some() {
@@ -2727,7 +2901,7 @@ impl MockApi {
             ));
         }
         feature.plot_id = Some(plot_id);
-        map.updated_at = Utc::now();
+        draft.updated_at = Utc::now();
         drop(db);
         self.get_map_summary(project_id).await
     }
@@ -2739,25 +2913,30 @@ impl MockApi {
     ) -> Result<ProjectMapSummary, ApiError> {
         settle(200).await;
         let mut db = self.db.lock().unwrap();
-        let Some(map) = db.project_maps.get_mut(&project_id) else {
+        let Some(draft) = db
+            .map_versions
+            .iter_mut()
+            .find(|v| v.project_id == project_id && v.status == domain::MapVersionStatus::Draft)
+        else {
             return Err(ApiError::NotFound);
         };
-        let Some(feature) = map.polygons.features.iter_mut().find(|f| f.id == feature_id) else {
+        let Some(feature) = draft.polygons.features.iter_mut().find(|f| f.id == feature_id) else {
             return Err(ApiError::NotFound);
         };
         feature.plot_id = None;
-        map.updated_at = Utc::now();
+        draft.updated_at = Utc::now();
         drop(db);
         self.get_map_summary(project_id).await
     }
 
-    pub fn map_image_url(&self, project_id: Uuid) -> String {
+    pub fn map_image_url(&self, project_id: Uuid, version_id: Uuid) -> String {
         self.db
             .lock()
             .unwrap()
-            .project_maps
-            .get(&project_id)
-            .map(|m| m.image_url.clone())
+            .map_versions
+            .iter()
+            .find(|v| v.project_id == project_id && v.id == version_id)
+            .map(|v| v.image_url.clone())
             .unwrap_or_default()
     }
 
@@ -4380,7 +4559,7 @@ fn seed() -> MockDb {
         reversed_entry_ids: HashSet::new(),
         quotations: Vec::new(),
         approval_requests: Vec::new(),
-        project_maps: HashMap::new(),
+        map_versions: Vec::new(),
         roles: vec![domain::Role {
             id: admin_role_id,
             organization_id: org_id,

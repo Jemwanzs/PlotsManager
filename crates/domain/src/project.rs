@@ -45,18 +45,39 @@ pub struct Project {
     pub commission_rate_override_reason: Option<String>,
 }
 
-/// One image plus one polygon set per project — the minimal v1 slice
-/// of docs/06-interactive-map-engine.md's Phase 3, deliberately
-/// without its draft/pending-approval/published versioning workflow
-/// (see `database/migrations/0009_project_map.sql`'s module comment).
-/// Re-uploading the image replaces this outright.
+/// A project map's lifecycle state (docs/06-interactive-map-engine.md:
+/// "every edit creates a new draft version; the currently approved
+/// version stays locked and in force until a new one is approved").
+/// At most one `Draft` and one `Published` row exist per project at a
+/// time (`database/migrations/0038_project_map_versions.sql`'s partial
+/// unique indexes); every prior `Published` becomes `Superseded` the
+/// moment a new draft is published over it, and is never written to
+/// again — permanent, read-only history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MapVersionStatus {
+    Draft,
+    Published,
+    Superseded,
+}
+
+/// One version of a project's map — an image plus a polygon set, with
+/// the version/publish metadata docs/06 calls "source-of-truth
+/// controls". Replaces the v1 slice's single mutable `ProjectMap` row
+/// per project (`database/migrations/0009_project_map.sql`'s module
+/// comment on that deliberate cut) now that real versioning exists.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProjectMap {
-    pub project_id: Uuid,
+pub struct ProjectMapVersion {
+    pub id: Uuid,
+    pub version_number: i32,
+    pub status: MapVersionStatus,
     pub image_content_type: String,
     pub polygons: MapPolygons,
-    pub uploaded_by: Uuid,
+    pub created_by_name: String,
+    pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub published_by_name: Option<String>,
+    pub published_at: Option<DateTime<Utc>>,
 }
 
 /// Plot boundaries in *pixel* space against the uploaded image, not

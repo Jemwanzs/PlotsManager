@@ -13,7 +13,8 @@ use uuid::Uuid;
 
 use crate::{
     ApprovalRequest, AreaUnit, Customer, LeadStage, MapPolygons, Payment, PaymentMode, Plot,
-    PlotLoanAccount, PlotStatusCount, ProjectStatus, Quotation, SaleLifecycleStatus, User,
+    PlotLoanAccount, PlotStatusCount, ProjectMapVersion, ProjectStatus, Quotation,
+    SaleLifecycleStatus, User,
 };
 
 /// The full commercial position of one plot — what shows in Plot
@@ -649,15 +650,18 @@ pub struct DecideApprovalInput {
 }
 
 /// Metadata for `GET /projects/:id/map` — no image bytes (those come
-/// from the separate `GET /projects/:id/map/image` route, so a page
-/// that only needs "does a map exist / what are the polygons" never
-/// pulls a multi-MB payload for it).
+/// from the separate `GET /projects/:id/map/image?version_id=...`
+/// route, so a page that only needs "does a map exist / what are the
+/// polygons" never pulls a multi-MB payload for it). Both fields are
+/// independently optional: a brand new project has neither; a project
+/// with a live map but no in-progress edit has only `published`; one
+/// mid-edit has both. The frontend shows `draft` while editing (or as
+/// a fallback when nothing has ever been published yet) and
+/// `published` otherwise — see `pages/project_detail.rs::MapCanvas`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectMapSummary {
-    pub exists: bool,
-    pub image_content_type: Option<String>,
-    pub polygons: MapPolygons,
-    pub updated_at: Option<DateTime<Utc>>,
+    pub published: Option<ProjectMapVersion>,
+    pub draft: Option<ProjectMapVersion>,
 }
 
 /// One row of a bulk sales-*history* import (tenant onboarding —

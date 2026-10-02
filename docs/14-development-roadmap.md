@@ -40,10 +40,7 @@ integrations — mobile-money/banking, automated reconciliation, a
 customer self-service portal), Phase 7's GIS/satellite mapping and
 SMS/email/WhatsApp/accounting integrations, a real plan-selection UI
 for signup (today's form only takes a free-text "preferred package"
-string — see Platform billing's own note), map *versioning* (a
-deliberate v1 scope cut, not an oversight — its search/filter/zoom
-toolbar shipped 2026-09-30 and is a separate item, see Phase 3's own
-note), the Captured → Verified → Posted
+string — see Platform billing's own note), the Captured → Verified → Posted
 payment approval lifecycle (an open product question, not a known
 gap — see Phase 6's own note), and the remaining 22 of 24 backend
 route files' migration to the least-privilege `app_user` RLS role
@@ -121,11 +118,18 @@ or its linked plot number, status filters to plots in that state, both
 dim non-matching shapes rather than hiding them; zoom scales the image
 to an explicit pixel width off its normal "fit" size, and the wrapping
 container's native scroll handles panning once zoomed past its
-`max-height`/`max-width`, so no drag-to-pan handler was needed). Not
-built: map *versioning* (one image + one polygon set per project,
-no draft/pending-approval revision history — a deliberate v1 scope
-decision per `database/migrations/0009_project_map.sql`'s own module
-comment, not reversed by the toolbar work above).
+`max-height`/`max-width`, so no drag-to-pan handler was needed). **Map
+versioning shipped 2026-10-02**: real draft/published lifecycle
+(`database/migrations/0038_project_map_versions.sql`, replacing the
+single mutable row `0009_project_map.sql` deliberately cut this down
+to) — editing always edits a draft, invisible to anyone else, and an
+explicit "Publish" promotes it to the version everyone sees; every
+prior published version becomes permanent, read-only `superseded`
+history, viewable via a "Show version history" panel. Deliberately not
+built in this pass (per the explicit choice made when scoping it):
+polygon split/merge tools and a side-by-side comparison view against
+the originally uploaded document — both separate, later work if ever
+wanted.
 
 ## Phase 4 — AI-Assisted Plan Conversion
 Image enhancement; OCR; boundary detection; plot-number recognition;

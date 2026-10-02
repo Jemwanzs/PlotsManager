@@ -616,10 +616,38 @@ impl ApiClient {
         }
     }
 
-    pub fn map_image_url(&self, project_id: Uuid) -> String {
+    pub fn map_image_url(&self, project_id: Uuid, version_id: Uuid) -> String {
         match self {
-            Self::Mock(api) => api.map_image_url(project_id),
-            Self::Http(api) => api.map_image_url(project_id),
+            Self::Mock(api) => api.map_image_url(project_id, version_id),
+            Self::Http(api) => api.map_image_url(project_id, version_id),
+        }
+    }
+
+    pub async fn ensure_map_draft(&self, project_id: Uuid) -> Result<domain::ProjectMapSummary, ApiError> {
+        match self {
+            Self::Mock(api) => api.ensure_map_draft(project_id).await,
+            Self::Http(api) => api.ensure_map_draft(project_id).await,
+        }
+    }
+
+    pub async fn discard_map_draft(&self, project_id: Uuid) -> Result<domain::ProjectMapSummary, ApiError> {
+        match self {
+            Self::Mock(api) => api.discard_map_draft(project_id).await,
+            Self::Http(api) => api.discard_map_draft(project_id).await,
+        }
+    }
+
+    pub async fn publish_map_draft(&self, project_id: Uuid) -> Result<domain::ProjectMapSummary, ApiError> {
+        match self {
+            Self::Mock(api) => api.publish_map_draft(project_id).await,
+            Self::Http(api) => api.publish_map_draft(project_id).await,
+        }
+    }
+
+    pub async fn list_map_versions(&self, project_id: Uuid) -> Result<Vec<domain::ProjectMapVersion>, ApiError> {
+        match self {
+            Self::Mock(api) => api.list_map_versions(project_id).await,
+            Self::Http(api) => api.list_map_versions(project_id).await,
         }
     }
 

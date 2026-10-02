@@ -2442,9 +2442,10 @@ fn QuoteForm(plot_id: Uuid, asking_price: Decimal, on_quoted: impl Fn() + Clone 
     }
 }
 
-/// Minimal interactive-map v1 (see `domain::ProjectMap`'s module docs)
-/// — loads the current map (if any) and hands off to `MapUploadForm`
-/// or `MapCanvas`.
+/// Interactive map with real versioning (see
+/// `domain::ProjectMapVersion`'s module docs) — loads the current
+/// summary (published + draft) and hands off to `MapUploadForm` or
+/// `MapCanvas`.
 #[component]
 fn ProjectMapSection(
     project_id: Uuid,
@@ -2453,6 +2454,14 @@ fn ProjectMapSection(
 ) -> impl IntoView {
     let api = use_api();
     let refresh = RwSignal::new(0u32);
+    // Lifted up from `MapCanvas` rather than created inside it: that
+    // component remounts fresh on every `refresh` tick (new `summary`
+    // prop, new local signals) — entering/leaving edit mode is itself
+    // one of the actions that triggers a refresh (see `MapCanvas`'s own
+    // comment on why), so `edit_mode` has to live here to survive that
+    // remount instead of silently resetting to "view mode" right after
+    // the click that was supposed to enter edit mode.
+    let edit_mode = RwSignal::new(false);
 
     let summary = LocalResource::new({
         let api = api.clone();
@@ -2471,7 +2480,7 @@ fn ProjectMapSection(
                     .get()
                     .map(|wrapped| wrapped.take())
                     .map(|result| match result {
-                        Ok(s) if !s.exists => view! {
+                        Ok(s) if s.published.is_none() && s.draft.is_none() => view! {
                             <MapUploadForm
                                 project_id=project_id
                                 on_uploaded=move || refresh.update(|n| *n += 1)
@@ -2485,6 +2494,7 @@ fn ProjectMapSection(
                                 summary=s
                                 selected=selected
                                 refresh=refresh
+                                edit_mode=edit_mode
                             />
                         }
                             .into_any(),
@@ -2574,19 +2584,37 @@ fn MapCanvas(
     summary: domain::ProjectMapSummary,
     selected: RwSignal<Option<PlotWithColor>>,
     refresh: RwSignal<u32>,
+    edit_mode: RwSignal<bool>,
 ) -> impl IntoView {
     let api = use_api();
     let auth = use_auth();
     let can_edit_boundaries = has_permission(auth, PERM_PLOTS_MAP_EDIT_BOUNDARIES);
     let can_link = has_permission(auth, PERM_PLOTS_MAP_LINK);
-    let image_url = api.map_image_url(project_id);
+    // Editing always means editing the draft; otherwise show the
+    // published version, falling back to the draft when nothing has
+    // ever been published yet (never show a blank map when something
+    // exists). `edit_mode` only ever changes together with a `refresh`
+    // (see `ProjectMapSection`'s own comment), so this component always
+    // remounts fresh when which one is "active" changes — a one-time
+    // read here, not a reactive closure, is correct.
+    let active_version = if edit_mode.get() || summary.published.is_none() {
+        summary.draft.clone()
+    } else {
+        summary.published.clone()
+    };
+    let active_version_number = active_version.as_ref().map(|v| v.version_number).unwrap_or(0);
+    let image_url = api.map_image_url(
+        project_id,
+        active_version.as_ref().map(|v| v.id).unwrap_or_default(),
+    );
 
     let img_dims = RwSignal::new((
-        if summary.polygons.image_width > 0.0 { summary.polygons.image_width } else { 1000.0 },
-        if summary.polygons.image_height > 0.0 { summary.polygons.image_height } else { 700.0 },
+        active_version.as_ref().map(|v| v.polygons.image_width).filter(|w| *w > 0.0).unwrap_or(1000.0),
+        active_version.as_ref().map(|v| v.polygons.image_height).filter(|h| *h > 0.0).unwrap_or(700.0),
     ));
-    let features: RwSignal<Vec<MapFeature>> = RwSignal::new(summary.polygons.features.clone());
-    let edit_mode = RwSignal::new(false);
+    let features: RwSignal<Vec<MapFeature>> = RwSignal::new(
+        active_version.as_ref().map(|v| v.polygons.features.clone()).unwrap_or_default(),
+    );
     let draft_points: RwSignal<Vec<(f64, f64)>> = RwSignal::new(Vec::new());
     let draft_label = RwSignal::new(String::new());
     let selected_draft: RwSignal<Option<MapFeature>> = RwSignal::new(None);
@@ -2613,6 +2641,8 @@ fn MapCanvas(
     let error = RwSignal::new(None::<String>);
     let saving = RwSignal::new(false);
     let replacing = RwSignal::new(false);
+    let publishing = RwSignal::new(false);
+    let discarding = RwSignal::new(false);
 
     let capture_dims = move |img: &web_sys::HtmlImageElement| {
         let w = img.natural_width() as f64;
@@ -2700,37 +2730,73 @@ fn MapCanvas(
         {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
 
         <div style="display:flex; justify-content: space-between; align-items:center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-2);">
-            <p class="meta mt-0">
-                {move || if edit_mode.get() {
-                    "Click the image to place boundary points; click an existing unlinked shape to remove it, or a linked one to unlink it (its boundary is kept for relinking)."
-                } else {
-                    "Click a shape to view its plot — or, if it isn't linked to one yet, to create or link one."
-                }}
-            </p>
+            <div>
+                <p class="meta mt-0" style="margin-bottom: var(--space-1);">
+                    {move || if edit_mode.get() {
+                        format!("Editing draft v{active_version_number} — not visible to anyone else until published.")
+                    } else if summary.published.is_some() {
+                        format!("Viewing published v{active_version_number}.")
+                    } else {
+                        "Not published yet.".to_string()
+                    }}
+                </p>
+                <p class="meta mt-0">
+                    {move || if edit_mode.get() {
+                        "Click the image to place boundary points; click an existing unlinked shape to remove it, or a linked one to unlink it (its boundary is kept for relinking)."
+                    } else {
+                        "Click a shape to view its plot — or, if it isn't linked to one yet, to create or link one."
+                    }}
+                </p>
+            </div>
             <div style="display:flex; gap: var(--space-2); align-items:center;">
-                {can_edit_boundaries.then(|| view! {
-                    <label class="btn btn-secondary" style="margin-bottom:0; cursor:pointer;">
-                        {move || if replacing.get() { "Replacing…" } else { "Replace image" }}
-                        <input
-                            type="file"
-                            accept="image/*"
-                            disabled=replacing
-                            style="display:none;"
-                            on:change=on_replace_change
-                        />
-                    </label>
+                {can_edit_boundaries.then(|| {
+                    let on_replace_change = on_replace_change.clone();
+                    view! {
+                        {move || {
+                            let on_replace_change = on_replace_change.clone();
+                            edit_mode.get().then(|| view! {
+                                <label class="btn btn-secondary" style="margin-bottom:0; cursor:pointer;">
+                                    {move || if replacing.get() { "Replacing…" } else { "Replace image" }}
+                                    <input
+                                        type="file"
+                                        accept="image/*"
+                                        disabled=replacing
+                                        style="display:none;"
+                                        on:change=on_replace_change
+                                    />
+                                </label>
+                            })
+                        }}
+                    }
                 })}
-                {can_edit_boundaries.then(|| view! {
-                    <button
-                        type="button"
-                        class="btn btn-secondary"
-                        on:click=move |_| {
-                            edit_mode.update(|v| *v = !*v);
-                            draft_points.set(Vec::new());
-                        }
-                    >
-                        {move || if edit_mode.get() { "Done editing" } else { "Edit boundaries" }}
-                    </button>
+                {can_edit_boundaries.then(|| {
+                    let api = api.clone();
+                    view! {
+                        <button
+                            type="button"
+                            class="btn btn-secondary"
+                            on:click=move |_| {
+                                draft_points.set(Vec::new());
+                                if edit_mode.get() {
+                                    edit_mode.set(false);
+                                    refresh.update(|n| *n += 1);
+                                    return;
+                                }
+                                let api = api.clone();
+                                spawn_local(async move {
+                                    match api.ensure_map_draft(project_id).await {
+                                        Ok(_) => {
+                                            edit_mode.set(true);
+                                            refresh.update(|n| *n += 1);
+                                        }
+                                        Err(e) => error.set(Some(format!("{e}"))),
+                                    }
+                                });
+                            }
+                        >
+                            {move || if edit_mode.get() { "Done editing" } else { "Edit boundaries" }}
+                        </button>
+                    }
                 })}
             </div>
         </div>
@@ -2809,11 +2875,17 @@ fn MapCanvas(
 
         <Show when=move || edit_mode.get() && can_edit_boundaries>
             {
-                // Fresh per-invocation clone: `<Show>`'s children run
+                // Fresh per-invocation clones: `<Show>`'s children run
                 // repeatedly as `edit_mode` toggles, but this outer
                 // `api` is captured once — see the identical note in
-                // `pages/quotation_detail.rs::run`.
+                // `pages/quotation_detail.rs::run`. Three buttons below
+                // each move their own `api` into a single `on:click`
+                // closure (not a reactive one), so each needs its own
+                // named clone made before the first one consumes `api`
+                // itself.
                 let api = api.clone();
+                let api_for_publish = api.clone();
+                let api_for_discard = api.clone();
                 view! {
             <div class="card" style="margin-bottom: var(--space-3); display:flex; gap: var(--space-3); align-items:flex-end; flex-wrap:wrap;">
                 <div class="field" style="margin-bottom:0;">
@@ -2884,6 +2956,62 @@ fn MapCanvas(
                     }
                 >
                     {move || if saving.get() { "Saving…" } else { "Save map" }}
+                </button>
+                <button
+                    type="button"
+                    class="btn btn-primary"
+                    disabled=publishing
+                    on:click={
+                        let api = api_for_publish.clone();
+                        move |_| {
+                            if publishing.get() {
+                                return;
+                            }
+                            error.set(None);
+                            publishing.set(true);
+                            let api = api.clone();
+                            spawn_local(async move {
+                                match api.publish_map_draft(project_id).await {
+                                    Ok(_) => {
+                                        edit_mode.set(false);
+                                        refresh.update(|n| *n += 1);
+                                    }
+                                    Err(e) => error.set(Some(format!("{e}"))),
+                                }
+                                publishing.set(false);
+                            });
+                        }
+                    }
+                >
+                    {move || if publishing.get() { "Publishing…" } else { "Publish" }}
+                </button>
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    disabled=discarding
+                    on:click={
+                        let api = api_for_discard.clone();
+                        move |_| {
+                            if discarding.get() {
+                                return;
+                            }
+                            error.set(None);
+                            discarding.set(true);
+                            let api = api.clone();
+                            spawn_local(async move {
+                                match api.discard_map_draft(project_id).await {
+                                    Ok(_) => {
+                                        edit_mode.set(false);
+                                        refresh.update(|n| *n += 1);
+                                    }
+                                    Err(e) => error.set(Some(format!("{e}"))),
+                                }
+                                discarding.set(false);
+                            });
+                        }
+                    }
+                >
+                    {move || if discarding.get() { "Discarding…" } else { "Discard draft" }}
                 </button>
             </div>
                 }
@@ -3129,6 +3257,83 @@ fn MapCanvas(
                 }
             })
         }}
+
+        <MapVersionHistory project_id=project_id refresh=refresh />
+    }
+}
+
+/// Read-only version history — docs/06-interactive-map-engine.md's
+/// "previous versions remain accessible to authorised users," kept
+/// deliberately minimal (a list, not a side-by-side comparison view —
+/// that's separate, later work). Refetches whenever the parent's
+/// `refresh` ticks (a publish/discard changes this list) via the same
+/// `LocalResource` + `refresh.get()` dependency pattern used
+/// throughout this page.
+#[component]
+fn MapVersionHistory(project_id: Uuid, refresh: RwSignal<u32>) -> impl IntoView {
+    let api = use_api();
+    let open = RwSignal::new(false);
+
+    let versions = LocalResource::new({
+        let api = api.clone();
+        move || {
+            let api = api.clone();
+            refresh.get();
+            async move { api.list_map_versions(project_id).await }
+        }
+    });
+
+    view! {
+        <div class="card" style="margin-top: var(--space-4);">
+            <button
+                type="button"
+                class="btn btn-secondary"
+                on:click=move |_| open.update(|v| *v = !*v)
+            >
+                {move || if open.get() { "Hide version history" } else { "Show version history" }}
+            </button>
+            <Show when=move || open.get()>
+                <Suspense fallback=|| view! { <LoadingState label="Loading version history…" /> }>
+                    {move || {
+                        versions
+                            .get()
+                            .map(|wrapped| wrapped.take())
+                            .map(|result| match result {
+                                Ok(list) if list.is_empty() => view! {
+                                    <p class="meta" style="margin-top: var(--space-3);">"No versions yet."</p>
+                                }.into_any(),
+                                Ok(list) => view! {
+                                    <div style="display:flex; flex-direction:column; gap: var(--space-2); margin-top: var(--space-3);">
+                                        {list.into_iter().map(|v| {
+                                            let status_label = match v.status {
+                                                domain::MapVersionStatus::Draft => "Draft",
+                                                domain::MapVersionStatus::Published => "Published",
+                                                domain::MapVersionStatus::Superseded => "Superseded",
+                                            };
+                                            let detail = match (v.status, v.published_by_name, v.published_at) {
+                                                (domain::MapVersionStatus::Draft, _, _) => {
+                                                    format!("Started by {} on {}", v.created_by_name, v.created_at.format("%b %d, %Y"))
+                                                }
+                                                (_, Some(name), Some(at)) => {
+                                                    format!("Published by {name} on {}", at.format("%b %d, %Y"))
+                                                }
+                                                _ => format!("Created by {} on {}", v.created_by_name, v.created_at.format("%b %d, %Y")),
+                                            };
+                                            view! {
+                                                <div style="display:flex; justify-content:space-between; align-items:center; gap: var(--space-2);">
+                                                    <span>"v" {v.version_number} " — " {detail}</span>
+                                                    <span class="badge">{status_label}</span>
+                                                </div>
+                                            }
+                                        }).collect_view()}
+                                    </div>
+                                }.into_any(),
+                                Err(e) => view! { <ErrorAlert message=format!("Couldn't load version history: {e}") /> }.into_any(),
+                            })
+                    }}
+                </Suspense>
+            </Show>
+        </div>
     }
 }
 

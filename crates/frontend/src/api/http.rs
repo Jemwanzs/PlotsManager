@@ -624,9 +624,32 @@ impl HttpApi {
     /// `<img>` can't send an `Authorization` header, so the token
     /// rides along as a query param instead (see
     /// `crates/backend/src/routes/project_map.rs`'s module docs).
-    pub fn map_image_url(&self, project_id: Uuid) -> String {
+    /// Keyed by `version_id` now that more than one version's image can
+    /// exist for a project at once (a draft and a published version).
+    pub fn map_image_url(&self, project_id: Uuid, version_id: Uuid) -> String {
         let token = self.token.lock().unwrap().clone().unwrap_or_default();
-        format!("{}/api/v1/projects/{project_id}/map/image?token={token}", self.base_url)
+        format!(
+            "{}/api/v1/projects/{project_id}/map/image?token={token}&version_id={version_id}",
+            self.base_url
+        )
+    }
+
+    pub async fn ensure_map_draft(&self, project_id: Uuid) -> Result<ProjectMapSummary, ApiError> {
+        self.post(&format!("/api/v1/projects/{project_id}/map/draft"), &())
+            .await
+    }
+
+    pub async fn discard_map_draft(&self, project_id: Uuid) -> Result<ProjectMapSummary, ApiError> {
+        self.delete(&format!("/api/v1/projects/{project_id}/map/draft")).await
+    }
+
+    pub async fn publish_map_draft(&self, project_id: Uuid) -> Result<ProjectMapSummary, ApiError> {
+        self.post(&format!("/api/v1/projects/{project_id}/map/publish"), &())
+            .await
+    }
+
+    pub async fn list_map_versions(&self, project_id: Uuid) -> Result<Vec<domain::ProjectMapVersion>, ApiError> {
+        self.get(&format!("/api/v1/projects/{project_id}/map/versions")).await
     }
 
     pub async fn list_documents(
