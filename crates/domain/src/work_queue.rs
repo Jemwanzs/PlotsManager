@@ -19,6 +19,11 @@ pub enum WorkQueueItemKind {
     ApprovalPending,
     LeadFollowUp,
     TenantPendingApproval,
+    /// A payment captured while `organizations.require_payment_approval`
+    /// is on, awaiting someone with `PERM_FINANCE_APPROVE_PAYMENTS` to
+    /// approve or reject it — the only way an approver would otherwise
+    /// discover one, since this app has no notification system.
+    PaymentPendingApproval,
 }
 
 impl WorkQueueItemKind {
@@ -29,6 +34,7 @@ impl WorkQueueItemKind {
             Self::ApprovalPending => "Approval pending",
             Self::LeadFollowUp => "Follow-up due",
             Self::TenantPendingApproval => "Tenant awaiting approval",
+            Self::PaymentPendingApproval => "Payment awaiting approval",
         }
     }
 
@@ -39,6 +45,7 @@ impl WorkQueueItemKind {
             Self::ApprovalPending => "#2563eb",
             Self::LeadFollowUp => "#7c3aed",
             Self::TenantPendingApproval => "#0891b2",
+            Self::PaymentPendingApproval => "#16a34a",
         }
     }
 }

@@ -33,6 +33,7 @@ use domain::{
     PlatformOrganizationDetail, PlatformOrganizationSummary, PlotCommercialSummary, PlotWithColor,
     PostWaiverInput, ProjectMapSummary, ProjectSummary,
     QuotationDetail, QuotationSummary, RecordPaymentInput, RejectOrganizationInput,
+    RejectPaymentInput,
     ResetPasswordInput, ReverseEntryInput, Role, SalesReport, SignupInput, SignupResult, TenantUser, TermsVersion,
     UpdateBranchInput, UpdateCustomerInput, UpdateLeadInput, UpdateMapPolygonsInput, UpdateOrganizationSettingsInput,
     UpdatePlotInput, UpdateRoleInput, UpdateTitleRecordInput, UpdateUserInput, UploadDocumentInput,
@@ -341,6 +342,31 @@ impl HttpApi {
     ) -> Result<domain::Payment, ApiError> {
         let path = format!("/api/v1/loan-accounts/{}/payments", input.loan_account_id);
         self.post(&path, &input).await
+    }
+
+    pub async fn approve_payment(
+        &self,
+        loan_account_id: Uuid,
+        payment_id: Uuid,
+    ) -> Result<domain::Payment, ApiError> {
+        self.post(
+            &format!("/api/v1/loan-accounts/{loan_account_id}/payments/{payment_id}/approve"),
+            &(),
+        )
+        .await
+    }
+
+    pub async fn reject_payment(
+        &self,
+        loan_account_id: Uuid,
+        payment_id: Uuid,
+        reason: String,
+    ) -> Result<domain::Payment, ApiError> {
+        self.post(
+            &format!("/api/v1/loan-accounts/{loan_account_id}/payments/{payment_id}/reject"),
+            &RejectPaymentInput { reason },
+        )
+        .await
     }
 
     pub async fn get_loan_statement(&self, id: Uuid) -> Result<domain::LoanStatement, ApiError> {

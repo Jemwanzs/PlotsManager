@@ -138,6 +138,14 @@ pub struct FinancePolicy {
     pub grace_period_days: i32,
     pub interest: ChargePolicy,
     pub penalty: ChargePolicy,
+    /// Off by default — a captured payment posts (affects the balance)
+    /// immediately, today's only behavior. On: `record_payment`
+    /// (`routes/loan_accounts.rs`) only captures; a second person with
+    /// `PERM_FINANCE_APPROVE_PAYMENTS` must approve (or reject) it
+    /// before it counts (`domain::PaymentStatus`'s
+    /// `Captured`/`Posted`/`Rejected` states — always modeled, never
+    /// enforced until now).
+    pub require_payment_approval: bool,
 }
 
 /// `GET /api/v1/settings` — the "Organization / System Configuration"

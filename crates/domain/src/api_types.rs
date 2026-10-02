@@ -435,6 +435,14 @@ pub struct RecordPaymentInput {
     pub method: String,
 }
 
+/// `POST /api/v1/loan-accounts/:id/payments/:payment_id/reject` — the
+/// mandatory reason, same convention as every other reversal/override
+/// in this app. Approving needs no body (`POST .../approve`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RejectPaymentInput {
+    pub reason: String,
+}
+
 /// `POST /api/v1/sales/:id/cancel` — an administrative/mutual
 /// cancellation, no loan account required. Ends the sale on every plot
 /// it covers (primary and additional) and any linked loan account, but

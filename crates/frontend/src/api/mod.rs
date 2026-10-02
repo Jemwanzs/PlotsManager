@@ -256,6 +256,29 @@ impl ApiClient {
         }
     }
 
+    pub async fn approve_payment(
+        &self,
+        loan_account_id: Uuid,
+        payment_id: Uuid,
+    ) -> Result<domain::Payment, ApiError> {
+        match self {
+            Self::Mock(api) => api.approve_payment(loan_account_id, payment_id).await,
+            Self::Http(api) => api.approve_payment(loan_account_id, payment_id).await,
+        }
+    }
+
+    pub async fn reject_payment(
+        &self,
+        loan_account_id: Uuid,
+        payment_id: Uuid,
+        reason: String,
+    ) -> Result<domain::Payment, ApiError> {
+        match self {
+            Self::Mock(api) => api.reject_payment(loan_account_id, payment_id, reason).await,
+            Self::Http(api) => api.reject_payment(loan_account_id, payment_id, reason).await,
+        }
+    }
+
     pub async fn get_loan_statement(&self, id: Uuid) -> Result<domain::LoanStatement, ApiError> {
         match self {
             Self::Mock(api) => api.get_loan_statement(id).await,

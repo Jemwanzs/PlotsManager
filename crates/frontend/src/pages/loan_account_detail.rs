@@ -11,9 +11,9 @@ use crate::auth::{has_permission, use_api, use_auth, use_currency};
 use crate::components::{ErrorAlert, LoadingState, StatCard, StatusBadge};
 use crate::format::{format_amount, format_money, format_payment_status};
 use domain::{
-    ApplyRepaymentHolidayInput, ChargeType, PostChargeInput, PostWaiverInput,
-    RestructureLoanInput, WaiverType, PERM_FINANCE_POST_CHARGES, PERM_FINANCE_RESTRUCTURE,
-    PERM_FINANCE_REVERSE, PERM_PAYMENTS_RECORD,
+    ApplyRepaymentHolidayInput, ChargeType, PaymentStatus, PostChargeInput, PostWaiverInput,
+    RestructureLoanInput, WaiverType, PERM_FINANCE_APPROVE_PAYMENTS, PERM_FINANCE_POST_CHARGES,
+    PERM_FINANCE_RESTRUCTURE, PERM_FINANCE_REVERSE, PERM_PAYMENTS_RECORD,
 };
 
 #[component]
@@ -57,7 +57,10 @@ pub fn LoanAccountDetailPage() -> impl IntoView {
 #[component]
 fn LoanAccountContent(
     detail: LoanAccountDetail,
-    on_payment_recorded: impl Fn() + Clone + 'static,
+    // `Send + Sync`: `PaymentApprovalActions` below needs that bound on
+    // whatever it's given (see its own doc comment), and this prop is
+    // threaded straight into it as `on_done`.
+    on_payment_recorded: impl Fn() + Clone + Send + Sync + 'static,
 ) -> impl IntoView {
     let currency = use_currency();
     let auth = use_auth();
@@ -65,6 +68,7 @@ fn LoanAccountContent(
     let can_post_charges = has_permission(auth, PERM_FINANCE_POST_CHARGES);
     let can_reverse = has_permission(auth, PERM_FINANCE_REVERSE);
     let can_restructure = has_permission(auth, PERM_FINANCE_RESTRUCTURE);
+    let can_approve_payments = has_permission(auth, PERM_FINANCE_APPROVE_PAYMENTS);
     let account = detail.account.clone();
     let principal_outstanding = (account.outstanding_balance - detail.interest_outstanding - detail.penalty_outstanding).max(Decimal::ZERO);
     let project_href = format!("/projects/{}", detail.project_id);
@@ -187,15 +191,31 @@ fn LoanAccountContent(
                         <tbody>
                             {detail.payments.into_iter().map(|p| {
                                 let receipt_href = format!("/loan-accounts/{}/payments/{}/receipt", p.loan_account_id, p.id);
+                                let is_captured = p.status == PaymentStatus::Captured;
+                                let status_text = match &p.rejection_reason {
+                                    Some(reason) if p.status == PaymentStatus::Rejected => {
+                                        format!("{} ({reason})", format_payment_status(p.status))
+                                    }
+                                    _ => format_payment_status(p.status).to_string(),
+                                };
                                 view! {
                                     <tr style="border-bottom: 1px solid var(--color-border);">
                                         <td style="padding: var(--space-3)">{p.payment_date.to_string()}</td>
                                         <td style="padding: var(--space-3)">{p.receipt_number.clone()}</td>
                                         <td style="padding: var(--space-3)">{p.method}</td>
                                         <td style="padding: var(--space-3)">{format_money(p.amount, &currency.get())}</td>
-                                        <td style="padding: var(--space-3)">{format_payment_status(p.status)}</td>
+                                        <td style="padding: var(--space-3)">{status_text}</td>
                                         <td style="padding: var(--space-3)">
-                                            <A href=receipt_href attr:class="btn btn-secondary btn-sm">"Receipt"</A>
+                                            <div style="display:flex; flex-direction:column; gap: var(--space-2); align-items:flex-start;">
+                                                {(is_captured && can_approve_payments).then(|| view! {
+                                                    <PaymentApprovalActions
+                                                        loan_account_id=p.loan_account_id
+                                                        payment_id=p.id
+                                                        on_done=on_payment_recorded.clone()
+                                                    />
+                                                })}
+                                                <A href=receipt_href attr:class="btn btn-secondary btn-sm">"Receipt"</A>
+                                            </div>
                                         </td>
                                     </tr>
                                 }
@@ -205,6 +225,107 @@ fn LoanAccountContent(
                 </div>
             }
                 .into_any()
+        }}
+    }
+}
+
+/// Approve/reject a `Captured` payment — only ever rendered for a row
+/// in that status (see the payment table below). "Approve" posts
+/// (verify-and-post in one step, `ApiClient::approve_payment`); reject
+/// needs a reason first, same confirm-with-reason shape `ReverseButton`
+/// above already uses for its own mandatory-reason action.
+#[component]
+fn PaymentApprovalActions(
+    loan_account_id: Uuid,
+    payment_id: Uuid,
+    // `Send + Sync`, not just the usual `Fn() + Clone + 'static` —
+    // this component's own internal `{move || ...}` (switching between
+    // the button pair and the reject-reason form) needs it, same as
+    // `ReverseButton`'s identical shape above.
+    on_done: impl Fn() + Clone + Send + Sync + 'static,
+) -> impl IntoView {
+    let api = use_api();
+    let rejecting = RwSignal::new(false);
+    let reason = RwSignal::new(String::new());
+    let error = RwSignal::new(None::<String>);
+    let submitting = RwSignal::new(false);
+
+    let approve = {
+        let api = api.clone();
+        let on_done = on_done.clone();
+        move |_: leptos::ev::MouseEvent| {
+            if submitting.get() {
+                return;
+            }
+            error.set(None);
+            submitting.set(true);
+            let api = api.clone();
+            let on_done = on_done.clone();
+            spawn_local(async move {
+                match api.approve_payment(loan_account_id, payment_id).await {
+                    Ok(_) => on_done(),
+                    Err(e) => error.set(Some(format!("{e}"))),
+                }
+                submitting.set(false);
+            });
+        }
+    };
+
+    let confirm_reject = move |_: leptos::ev::MouseEvent| {
+        if submitting.get() {
+            return;
+        }
+        let reason_value = reason.get().trim().to_string();
+        if reason_value.is_empty() {
+            error.set(Some("Enter a reason.".to_string()));
+            return;
+        }
+        error.set(None);
+        submitting.set(true);
+        let api = api.clone();
+        let on_done = on_done.clone();
+        spawn_local(async move {
+            match api.reject_payment(loan_account_id, payment_id, reason_value).await {
+                Ok(_) => on_done(),
+                Err(e) => error.set(Some(format!("{e}"))),
+            }
+            submitting.set(false);
+        });
+    };
+
+    view! {
+        {move || {
+            if rejecting.get() {
+                let confirm_reject = confirm_reject.clone();
+                view! {
+                    <div style="display:flex; flex-direction:column; gap: var(--space-2);">
+                        <div style="display:flex; gap: var(--space-2); align-items:center;">
+                            <input
+                                type="text"
+                                placeholder="Reason"
+                                style="max-width: 160px;"
+                                prop:value=reason
+                                on:input=move |ev| reason.set(event_target_value(&ev))
+                            />
+                            <button class="btn btn-danger" on:click=confirm_reject disabled=submitting>
+                                {move || if submitting.get() { "…" } else { "Confirm" }}
+                            </button>
+                            <button class="btn btn-secondary" on:click=move |_| rejecting.set(false)>"Cancel"</button>
+                        </div>
+                        {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+                    </div>
+                }.into_any()
+            } else {
+                view! {
+                    <div style="display:flex; gap: var(--space-2); align-items:center;">
+                        <button class="btn btn-primary btn-sm" on:click=approve.clone() disabled=submitting>
+                            {move || if submitting.get() { "…" } else { "Approve" }}
+                        </button>
+                        <button class="btn btn-secondary btn-sm" on:click=move |_| rejecting.set(true)>"Reject"</button>
+                        {move || error.get().map(|msg| view! { <ErrorAlert message=msg /> })}
+                    </div>
+                }.into_any()
+            }
         }}
     }
 }

@@ -154,6 +154,15 @@ pub const PERM_FINANCE_REVERSE: &str = "finance:reverse";
 /// customer is obligated to pay and by when, so it's kept as its own
 /// sensitive key rather than folded into an existing one.
 pub const PERM_FINANCE_RESTRUCTURE: &str = "finance:restructure";
+/// Approving (verify-and-post) or rejecting a *captured* payment when
+/// the organization has `require_payment_approval` turned on
+/// (`routes/loan_accounts.rs::approve_payment`/`reject_payment`) —
+/// deliberately not backfilled onto any existing role the way most
+/// permissions in this app are: real maker-checker separation means an
+/// org turning this on should deliberately choose who gets it via the
+/// Roles screen, not inherit it automatically alongside
+/// `payments:record`. A wildcard `"*"` role already has it implicitly.
+pub const PERM_FINANCE_APPROVE_PAYMENTS: &str = "finance:approve_payments";
 
 // ---------------------------------------------------------------
 // Reports
@@ -284,6 +293,7 @@ const REGISTRY: &[StaticPermissionDef] = &[
     StaticPermissionDef { key: PERM_FINANCE_POST_CHARGES, label: "Post interest/penalty charges", module: "Finance", feature: "Payments", sensitive: true },
     StaticPermissionDef { key: PERM_FINANCE_REVERSE, label: "Reverse payments/charges, waive interest/penalty", module: "Finance", feature: "Payments", sensitive: true },
     StaticPermissionDef { key: PERM_FINANCE_RESTRUCTURE, label: "Grant repayment holidays, restructure loans", module: "Finance", feature: "Payments", sensitive: true },
+    StaticPermissionDef { key: PERM_FINANCE_APPROVE_PAYMENTS, label: "Approve or reject a captured payment", module: "Finance", feature: "Payments", sensitive: true },
 
     StaticPermissionDef { key: PERM_REPORTS_SALES, label: "View sales report", module: "Reports", feature: "Reports", sensitive: false },
     StaticPermissionDef { key: PERM_REPORTS_INVENTORY, label: "View inventory report", module: "Reports", feature: "Reports", sensitive: false },

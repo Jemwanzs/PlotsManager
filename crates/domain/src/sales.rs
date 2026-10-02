@@ -128,7 +128,17 @@ pub struct Payment {
     pub external_reference: Option<String>,
     pub status: PaymentStatus,
     pub captured_by: Uuid,
+    /// Who approved or rejected this payment — `None` until it leaves
+    /// `Captured`. Set alongside `status` moving to `Posted` (approved)
+    /// or `Rejected`; a payment captured while
+    /// `organizations.require_payment_approval` is off goes straight
+    /// to `Posted` with this already filled in (the capturer, same as
+    /// before this lifecycle existed — see `record_payment`'s docs).
     pub verified_by: Option<Uuid>,
+    /// Only set when `status` is `Rejected` — required at that point
+    /// (`routes/loan_accounts.rs::reject_payment`), matching this
+    /// app's convention of a mandatory reason for reversals/overrides.
+    pub rejection_reason: Option<String>,
     pub created_at: DateTime<Utc>,
     /// `"RCT-00001"`-style, a real Postgres sequence
     /// (`payment_receipt_number_seq`, `database/migrations/

@@ -53,6 +53,7 @@ struct OrgSettingsRow {
     penalty_rate_type: String,
     penalty_rate_value: Decimal,
     default_commission_rate_percent: Decimal,
+    require_payment_approval: bool,
 }
 
 impl OrgSettingsRow {
@@ -70,6 +71,7 @@ impl OrgSettingsRow {
                 rate_type: from_pg("organizations.penalty_rate_type", &self.penalty_rate_type)?,
                 rate_value: self.penalty_rate_value,
             },
+            require_payment_approval: self.require_payment_approval,
         })
     }
 }
@@ -129,7 +131,8 @@ async fn fetch_settings(
     let org: OrgSettingsRow = sqlx::query_as(
         r#"select name, currency, date_format, timezone, allocation_order,
                finance_grace_period_days, interest_enabled, interest_rate_type, interest_rate_value,
-               penalty_enabled, penalty_rate_type, penalty_rate_value, default_commission_rate_percent
+               penalty_enabled, penalty_rate_type, penalty_rate_value, default_commission_rate_percent,
+               require_payment_approval
            from organizations where id = $1"#,
     )
     .bind(organization_id)
@@ -257,8 +260,8 @@ async fn update_settings(
                allocation_order = $4, finance_grace_period_days = $5,
                interest_enabled = $6, interest_rate_type = $7, interest_rate_value = $8,
                penalty_enabled = $9, penalty_rate_type = $10, penalty_rate_value = $11,
-               default_commission_rate_percent = $12
-           where id = $13"#,
+               default_commission_rate_percent = $12, require_payment_approval = $13
+           where id = $14"#,
     )
     .bind(&currency)
     .bind(date_format)
@@ -272,6 +275,7 @@ async fn update_settings(
     .bind(to_pg(&input.finance_policy.penalty.rate_type))
     .bind(input.finance_policy.penalty.rate_value)
     .bind(input.default_commission_rate_percent)
+    .bind(input.finance_policy.require_payment_approval)
     .bind(auth.organization_id)
     .execute(&mut *tx)
     .await?;

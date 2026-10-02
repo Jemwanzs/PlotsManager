@@ -165,6 +165,30 @@ fn advance_plots_to_sold_locked(db: &mut MockDb, loan_account_id: Uuid) {
     }
 }
 
+/// The balance/status side effects of a payment actually being posted
+/// — shared by `MockApi::record_payment`'s immediate-post path and
+/// `approve_payment`. Mirrors
+/// `routes/loan_accounts.rs::apply_payment_effects`, minus the real
+/// backend's interest/penalty waterfall and ledger entry (this mock
+/// has no ledger table to write one into — balance/status only).
+fn apply_payment_effects_locked(db: &mut MockDb, loan_account_id: Uuid, amount: Decimal) {
+    let Some(account) = db.loan_accounts.iter_mut().find(|la| la.id == loan_account_id) else {
+        return;
+    };
+    account.amount_paid += amount;
+    account.outstanding_balance = (account.outstanding_balance - amount).max(Decimal::ZERO);
+    account.status = if account.outstanding_balance <= Decimal::ZERO {
+        LoanAccountStatus::FullyPaid
+    } else if account.amount_paid > Decimal::ZERO {
+        LoanAccountStatus::ActivePartiallyPaid
+    } else {
+        account.status
+    };
+    if account.status == LoanAccountStatus::FullyPaid {
+        advance_plots_to_sold_locked(db, loan_account_id);
+    }
+}
+
 /// `Active` when a sale has no `sale_lifecycle` entry — the default
 /// every sale starts at and the overwhelming majority never leave.
 fn sale_lifecycle_of(
@@ -585,6 +609,32 @@ impl MockApi {
                 href: format!("/customers/{}", c.id),
                 due_date: Some(due),
                 days_overdue: (days_overdue > 0).then_some(days_overdue as i32),
+            });
+        }
+
+        for p in db.payments.iter().filter(|p| p.status == PaymentStatus::Captured) {
+            let account_number = db
+                .loan_accounts
+                .iter()
+                .find(|la| la.id == p.loan_account_id)
+                .map(|la| la.account_number.clone())
+                .unwrap_or_default();
+            let customer_name = db
+                .loan_accounts
+                .iter()
+                .find(|la| la.id == p.loan_account_id)
+                .and_then(|la| db.sales.iter().find(|s| s.id == la.sale_id))
+                .and_then(|s| db.customers.iter().find(|c| c.id == s.customer_id))
+                .map(|c| c.full_name.clone())
+                .unwrap_or_else(|| "Unknown customer".to_string());
+            items.push(domain::WorkQueueItem {
+                kind: domain::WorkQueueItemKind::PaymentPendingApproval,
+                title: format!("{account_number} — {customer_name}"),
+                subtitle: format!("Captured {}", p.created_at.format("%b %d, %Y")),
+                amount: Some(p.amount),
+                href: format!("/loan-accounts/{}", p.loan_account_id),
+                due_date: None,
+                days_overdue: None,
             });
         }
 
@@ -2149,11 +2199,12 @@ impl MockApi {
         })
     }
 
-    /// Records a payment against a Plot Loan Account and updates its
-    /// running balance/status. Posted immediately — the
-    /// Captured/Verified/Posted lifecycle and approval gating from
-    /// docs/08 apply once real authenticated users and an approval engine
-    /// exist (docs/09); this mock has neither yet.
+    /// Records a payment against a Plot Loan Account. If
+    /// `finance_policy.require_payment_approval` is off (the default),
+    /// posts immediately and updates the running balance/status in the
+    /// same call — this app's only behavior before the approval
+    /// lifecycle existed. If it's on, this only captures;
+    /// `apply_payment_effects_locked` doesn't run until `approve_payment`.
     pub async fn record_payment(&self, input: RecordPaymentInput) -> Result<Payment, ApiError> {
         settle(300).await;
         let mut db = self.db.lock().unwrap();
@@ -2163,7 +2214,11 @@ impl MockApi {
                 "Enter an amount greater than zero.".to_string(),
             ));
         }
+        if !db.loan_accounts.iter().any(|la| la.id == input.loan_account_id) {
+            return Err(ApiError::NotFound);
+        }
 
+        let require_approval = db.finance_policy.require_payment_approval;
         let captured_by = db.demo_user.id;
         let payment = Payment {
             id: Uuid::new_v4(),
@@ -2172,34 +2227,88 @@ impl MockApi {
             payment_date: input.payment_date,
             method: input.method,
             external_reference: None,
-            status: PaymentStatus::Posted,
+            status: if require_approval { PaymentStatus::Captured } else { PaymentStatus::Posted },
             captured_by,
-            verified_by: Some(captured_by),
+            verified_by: if require_approval { None } else { Some(captured_by) },
+            rejection_reason: None,
             created_at: Utc::now(),
             receipt_number: format!("RCT-{:05}", db.payments.len() + 1),
         };
 
-        let account = db
-            .loan_accounts
-            .iter_mut()
-            .find(|la| la.id == input.loan_account_id)
-            .ok_or(ApiError::NotFound)?;
-        account.amount_paid += input.amount;
-        account.outstanding_balance = (account.outstanding_balance - input.amount).max(Decimal::ZERO);
-        account.status = if account.outstanding_balance <= Decimal::ZERO {
-            LoanAccountStatus::FullyPaid
-        } else if account.amount_paid > Decimal::ZERO {
-            LoanAccountStatus::ActivePartiallyPaid
-        } else {
-            account.status
-        };
-        let became_fully_paid = account.status == LoanAccountStatus::FullyPaid;
-
         db.payments.push(payment.clone());
-        if became_fully_paid {
-            advance_plots_to_sold_locked(&mut db, input.loan_account_id);
+        if !require_approval {
+            apply_payment_effects_locked(&mut db, input.loan_account_id, input.amount);
         }
         Ok(payment)
+    }
+
+    /// Approves (verify-and-post, in one step) a captured payment — the
+    /// moment it actually affects the balance. Mirrors
+    /// `routes/loan_accounts.rs::approve_payment`.
+    pub async fn approve_payment(
+        &self,
+        loan_account_id: Uuid,
+        payment_id: Uuid,
+    ) -> Result<Payment, ApiError> {
+        settle(250).await;
+        let mut db = self.db.lock().unwrap();
+
+        let amount = {
+            let payment = db
+                .payments
+                .iter()
+                .find(|p| p.id == payment_id && p.loan_account_id == loan_account_id)
+                .ok_or(ApiError::NotFound)?;
+            if payment.status != PaymentStatus::Captured {
+                return Err(ApiError::InvalidCredentials(
+                    "This payment isn't awaiting approval.".to_string(),
+                ));
+            }
+            payment.amount
+        };
+
+        apply_payment_effects_locked(&mut db, loan_account_id, amount);
+
+        let verifier = db.demo_user.id;
+        let payment = db.payments.iter_mut().find(|p| p.id == payment_id).unwrap();
+        payment.status = PaymentStatus::Posted;
+        payment.verified_by = Some(verifier);
+        Ok(payment.clone())
+    }
+
+    /// Rejects a captured payment — never touches the balance, since a
+    /// captured-not-yet-posted payment never did either. Mirrors
+    /// `routes/loan_accounts.rs::reject_payment`.
+    pub async fn reject_payment(
+        &self,
+        loan_account_id: Uuid,
+        payment_id: Uuid,
+        reason: String,
+    ) -> Result<Payment, ApiError> {
+        settle(200).await;
+        let reason = reason.trim().to_string();
+        if reason.is_empty() {
+            return Err(ApiError::InvalidCredentials(
+                "Enter a reason for rejecting this payment.".to_string(),
+            ));
+        }
+
+        let mut db = self.db.lock().unwrap();
+        let verifier = db.demo_user.id;
+        let payment = db
+            .payments
+            .iter_mut()
+            .find(|p| p.id == payment_id && p.loan_account_id == loan_account_id)
+            .ok_or(ApiError::NotFound)?;
+        if payment.status != PaymentStatus::Captured {
+            return Err(ApiError::InvalidCredentials(
+                "This payment isn't awaiting approval.".to_string(),
+            ));
+        }
+        payment.status = PaymentStatus::Rejected;
+        payment.verified_by = Some(verifier);
+        payment.rejection_reason = Some(reason);
+        Ok(payment.clone())
     }
 
     // MockDb's demo_user is never a platform owner (see `signup` above —
@@ -4476,6 +4585,7 @@ fn seed() -> MockDb {
                 status: PaymentStatus::Posted,
                 captured_by: demo_user.id,
                 verified_by: Some(demo_user.id),
+                rejection_reason: None,
                 created_at: Utc::now(),
                 receipt_number: format!("RCT-{:05}", payments.len() + 1),
             });
@@ -4489,6 +4599,7 @@ fn seed() -> MockDb {
                 status: PaymentStatus::Posted,
                 captured_by: demo_user.id,
                 verified_by: Some(demo_user.id),
+                rejection_reason: None,
                 created_at: Utc::now(),
                 receipt_number: format!("RCT-{:05}", payments.len() + 1),
             });
@@ -4542,6 +4653,7 @@ fn seed() -> MockDb {
                 rate_type: domain::RateType::Percentage,
                 rate_value: Decimal::ZERO,
             },
+            require_payment_approval: false,
         },
         default_commission_rate_percent: Decimal::ZERO,
         plot_numbering,

@@ -361,6 +361,7 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
     let penalty_enabled = RwSignal::new(initial.finance_policy.penalty.enabled);
     let penalty_rate_type = RwSignal::new(rate_type_str(initial.finance_policy.penalty.rate_type).to_string());
     let penalty_rate_value = RwSignal::new(initial.finance_policy.penalty.rate_value.to_string());
+    let require_payment_approval = RwSignal::new(initial.finance_policy.require_payment_approval);
     let commission_rate_value = RwSignal::new(initial.default_commission_rate_percent.to_string());
 
     let error = RwSignal::new(None::<String>);
@@ -478,6 +479,7 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
                     rate_type: parse_rate_type(&penalty_rate_type.get()),
                     rate_value: penalty_rate_val,
                 },
+                require_payment_approval: require_payment_approval.get(),
             },
             default_commission_rate_percent: commission_rate_val,
         };
@@ -507,6 +509,7 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
                     penalty_enabled.set(s.finance_policy.penalty.enabled);
                     penalty_rate_type.set(rate_type_str(s.finance_policy.penalty.rate_type).to_string());
                     penalty_rate_value.set(s.finance_policy.penalty.rate_value.to_string());
+                    require_payment_approval.set(s.finance_policy.require_payment_approval);
                     commission_rate_value.set(s.default_commission_rate_percent.to_string());
                     success.set(true);
                 }
@@ -711,6 +714,21 @@ fn SettingsForm(initial: OrganizationSettings) -> impl IntoView {
                             />
                         </div>
                     </div>
+
+                    <label class="checkbox-field" style="margin-top: var(--space-3);">
+                        <input
+                            type="checkbox"
+                            prop:checked=require_payment_approval
+                            on:change=move |ev| require_payment_approval.set(event_target_checked(&ev))
+                        />
+                        "Require a second person to approve payments before they count toward the balance"
+                    </label>
+                    <p class="meta mt-0">
+                        "Off (default): a captured payment posts immediately, same as today. On: a payment only "
+                        "affects the balance once someone with the \"Approve or reject a captured payment\" "
+                        "permission approves it — assign that permission from Roles to whoever should verify "
+                        "payments separately from whoever records them."
+                    </p>
 
                     <div class="form-grid-2" style="margin-top: var(--space-4);">
                         <div>

@@ -5,9 +5,9 @@ use chrono::{DateTime, Duration, NaiveDate, Utc};
 use domain::{
     ApplyRepaymentHolidayInput, ChargeType, LoanAccountDetail, LoanAccountStatus, LoanLedgerEntry,
     LoanStatement, Payment, PaymentAllocationPreview, PlotLoanAccount, PostChargeInput,
-    PostWaiverInput, RecordPaymentInput, RestructureLoanInput, ReverseEntryInput, WaiverType,
-    PERM_FINANCE_POST_CHARGES, PERM_FINANCE_RESTRUCTURE, PERM_FINANCE_REVERSE,
-    PERM_PAYMENTS_RECORD,
+    PostWaiverInput, RecordPaymentInput, RejectPaymentInput, RestructureLoanInput,
+    ReverseEntryInput, WaiverType, PERM_FINANCE_APPROVE_PAYMENTS, PERM_FINANCE_POST_CHARGES,
+    PERM_FINANCE_RESTRUCTURE, PERM_FINANCE_REVERSE, PERM_PAYMENTS_RECORD,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -21,6 +21,14 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/loan-accounts/:id", get(get_loan_account))
         .route("/api/v1/loan-accounts/:id/payments", post(record_payment))
+        .route(
+            "/api/v1/loan-accounts/:id/payments/:payment_id/approve",
+            post(approve_payment),
+        )
+        .route(
+            "/api/v1/loan-accounts/:id/payments/:payment_id/reject",
+            post(reject_payment),
+        )
         .route("/api/v1/loan-accounts/:id/statement", get(get_loan_statement))
         .route("/api/v1/loan-accounts/:id/charges", post(post_charge))
         .route("/api/v1/loan-accounts/:id/waivers", post(post_waiver))
@@ -164,6 +172,7 @@ struct PaymentRow {
     status: String,
     captured_by: Uuid,
     verified_by: Option<Uuid>,
+    rejection_reason: Option<String>,
     created_at: DateTime<Utc>,
     receipt_number: String,
 }
@@ -180,13 +189,14 @@ impl PaymentRow {
             status: from_pg("payments.status", &self.status)?,
             captured_by: self.captured_by,
             verified_by: self.verified_by,
+            rejection_reason: self.rejection_reason,
             created_at: self.created_at,
             receipt_number: self.receipt_number,
         })
     }
 }
 
-const PAYMENT_COLUMNS: &str = "id, loan_account_id, amount, payment_date, method, external_reference, status, captured_by, verified_by, created_at, receipt_number";
+const PAYMENT_COLUMNS: &str = "id, loan_account_id, amount, payment_date, method, external_reference, status, captured_by, verified_by, rejection_reason, created_at, receipt_number";
 
 async fn get_loan_account(
     State(state): State<AppState>,
@@ -248,28 +258,23 @@ async fn get_loan_account(
     }))
 }
 
-/// Records a payment and updates the account's running balance/status in
-/// one transaction — mirrors `frontend::api::mock::MockApi::record_payment`.
-/// Posted immediately; the Captured -> Verified -> Posted approval gate
-/// from docs/08/09 needs real roles first (tracked in
-/// docs/14-development-roadmap.md), not half-built here.
-async fn record_payment(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Path(id): Path<Uuid>,
-    Json(input): Json<RecordPaymentInput>,
-) -> Result<Json<Payment>, AppError> {
-    auth.require_permission(PERM_PAYMENTS_RECORD)?;
-
-    if input.amount <= Decimal::ZERO {
-        return Err(AppError::bad_request("Enter an amount greater than zero."));
-    }
-    if input.loan_account_id != id {
-        return Err(AppError::bad_request("Loan account id mismatch."));
-    }
-
-    let mut tx = state.db.begin().await?;
-
+/// The balance/ledger/plot-status side effects of a payment actually
+/// being posted — shared by `record_payment`'s immediate-post path
+/// (`organizations.require_payment_approval` off, today's only
+/// behavior) and `approve_payment` (a previously captured payment
+/// approved later). Always re-fetches and locks the account's
+/// *current* state rather than trusting anything computed earlier, so
+/// a payment posted immediately and one captured-then-approved later
+/// can never race each other's balance math on the same account.
+/// `created_by` is whoever caused the posting — the capturer for an
+/// immediate post, the approver for a deferred one.
+async fn apply_payment_effects(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    organization_id: Uuid,
+    loan_account_id: Uuid,
+    payment: &PaymentRow,
+    created_by: Uuid,
+) -> Result<(), AppError> {
     let account: Option<(Decimal, Decimal, Decimal)> = sqlx::query_as(
         r#"select pla.principal, pla.amount_paid, pla.outstanding_balance
            from plot_loan_accounts pla
@@ -277,52 +282,37 @@ async fn record_payment(
            where pla.id = $1 and ps.organization_id = $2
            for update of pla"#,
     )
-    .bind(id)
-    .bind(auth.organization_id)
-    .fetch_optional(&mut *tx)
+    .bind(loan_account_id)
+    .bind(organization_id)
+    .fetch_optional(&mut **tx)
     .await?;
     let (_, amount_paid, outstanding_balance) = account.ok_or(AppError::NotFound)?;
 
-    let new_amount_paid = amount_paid + input.amount;
-    let new_outstanding = (outstanding_balance - input.amount).max(Decimal::ZERO);
+    let new_amount_paid = amount_paid + payment.amount;
+    let new_outstanding = (outstanding_balance - payment.amount).max(Decimal::ZERO);
     let new_status = if new_outstanding <= Decimal::ZERO {
         LoanAccountStatus::FullyPaid
     } else {
         LoanAccountStatus::ActivePartiallyPaid
     };
 
-    let (interest_outstanding, penalty_outstanding) = outstanding_components(&mut *tx, id).await?;
+    let (interest_outstanding, penalty_outstanding) = outstanding_components(&mut **tx, loan_account_id).await?;
     let principal_outstanding = (outstanding_balance - interest_outstanding - penalty_outstanding).max(Decimal::ZERO);
-    let allocation_order = fetch_allocation_order(&mut *tx, auth.organization_id).await?;
+    let allocation_order = fetch_allocation_order(&mut **tx, organization_id).await?;
     let (penalty_paid, interest_paid, principal_paid) = allocate_waterfall(
-        input.amount,
+        payment.amount,
         interest_outstanding,
         penalty_outstanding,
         principal_outstanding,
         &allocation_order,
     );
 
-    let payment_row: PaymentRow = sqlx::query_as(&format!(
-        r#"
-        insert into payments (loan_account_id, amount, payment_date, method, status, captured_by, verified_by, receipt_number)
-        values ($1, $2, $3, $4, 'posted', $5, $5, 'RCT-' || lpad(nextval('payment_receipt_number_seq')::text, 5, '0'))
-        returning {PAYMENT_COLUMNS}
-        "#,
-    ))
-    .bind(id)
-    .bind(input.amount)
-    .bind(input.payment_date)
-    .bind(&input.method)
-    .bind(auth.user_id)
-    .fetch_one(&mut *tx)
-    .await?;
-
     sqlx::query("update plot_loan_accounts set amount_paid = $1, outstanding_balance = $2, status = $3 where id = $4")
         .bind(new_amount_paid)
         .bind(new_outstanding)
         .bind(to_pg(&new_status))
-        .bind(id)
-        .execute(&mut *tx)
+        .bind(loan_account_id)
+        .execute(&mut **tx)
         .await?;
 
     sqlx::query(
@@ -334,19 +324,19 @@ async fn record_payment(
         values ($1, $2, 'payment', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         "#,
     )
-    .bind(id)
-    .bind(auth.organization_id)
-    .bind(input.payment_date)
-    .bind(input.amount)
+    .bind(loan_account_id)
+    .bind(organization_id)
+    .bind(payment.payment_date)
+    .bind(payment.amount)
     .bind(-principal_paid)
     .bind(-interest_paid)
     .bind(-penalty_paid)
     .bind(new_outstanding)
-    .bind(&input.method)
-    .bind(&payment_row.external_reference)
-    .bind(payment_row.id)
-    .bind(auth.user_id)
-    .execute(&mut *tx)
+    .bind(&payment.method)
+    .bind(&payment.external_reference)
+    .bind(payment.id)
+    .bind(created_by)
+    .execute(&mut **tx)
     .await?;
 
     // The plot itself never advanced past `Booked` once this reached
@@ -378,14 +368,184 @@ async fn record_payment(
               and status in ('booked', 'reserved', 'selected', 'temporarily_held', 'under_approval')
             "#,
         )
-        .bind(id)
-        .execute(&mut *tx)
+        .bind(loan_account_id)
+        .execute(&mut **tx)
         .await?;
+    }
+
+    Ok(())
+}
+
+/// Records a payment — mirrors
+/// `frontend::api::mock::MockApi::record_payment`. If the organization
+/// hasn't turned on `require_payment_approval`, this still posts
+/// immediately and affects the balance in the same transaction,
+/// identical to this app's only behavior before this lifecycle
+/// existed. If it has, this only captures: `apply_payment_effects`
+/// doesn't run until a separate `approve_payment` call.
+async fn record_payment(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(input): Json<RecordPaymentInput>,
+) -> Result<Json<Payment>, AppError> {
+    auth.require_permission(PERM_PAYMENTS_RECORD)?;
+
+    if input.amount <= Decimal::ZERO {
+        return Err(AppError::bad_request("Enter an amount greater than zero."));
+    }
+    if input.loan_account_id != id {
+        return Err(AppError::bad_request("Loan account id mismatch."));
+    }
+
+    let mut tx = state.db.begin().await?;
+
+    let require_approval: Option<bool> = sqlx::query_scalar(
+        r#"select o.require_payment_approval
+           from plot_loan_accounts pla
+           join plot_sales ps on ps.id = pla.sale_id
+           join organizations o on o.id = ps.organization_id
+           where pla.id = $1 and ps.organization_id = $2"#,
+    )
+    .bind(id)
+    .bind(auth.organization_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let require_approval = require_approval.ok_or(AppError::NotFound)?;
+
+    let initial_status = if require_approval { "captured" } else { "posted" };
+    let initial_verified_by = if require_approval { None } else { Some(auth.user_id) };
+
+    let payment_row: PaymentRow = sqlx::query_as(&format!(
+        r#"
+        insert into payments (loan_account_id, amount, payment_date, method, status, captured_by, verified_by, receipt_number)
+        values ($1, $2, $3, $4, $5, $6, $7, 'RCT-' || lpad(nextval('payment_receipt_number_seq')::text, 5, '0'))
+        returning {PAYMENT_COLUMNS}
+        "#,
+    ))
+    .bind(id)
+    .bind(input.amount)
+    .bind(input.payment_date)
+    .bind(&input.method)
+    .bind(initial_status)
+    .bind(auth.user_id)
+    .bind(initial_verified_by)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if !require_approval {
+        apply_payment_effects(&mut tx, auth.organization_id, id, &payment_row, auth.user_id).await?;
     }
 
     tx.commit().await?;
 
     Ok(Json(payment_row.into_domain()?))
+}
+
+/// Approves (verify-and-post, in one step — see this feature's own
+/// plan notes on why an intermediate "verified but still not posted"
+/// state wouldn't change anything on its own) a payment captured while
+/// `require_payment_approval` is on. The moment it actually affects
+/// the balance — `apply_payment_effects`'s own docs cover why the
+/// account state is re-locked and re-fetched here rather than reusing
+/// anything from capture time.
+async fn approve_payment(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((id, payment_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Payment>, AppError> {
+    auth.require_permission(PERM_FINANCE_APPROVE_PAYMENTS)?;
+
+    let mut tx = state.db.begin().await?;
+
+    let org_ok: bool = sqlx::query_scalar(
+        r#"select exists(
+            select 1 from payments p
+            join plot_loan_accounts pla on pla.id = p.loan_account_id
+            join plot_sales ps on ps.id = pla.sale_id
+            where p.id = $1 and p.loan_account_id = $2 and ps.organization_id = $3
+        )"#,
+    )
+    .bind(payment_id)
+    .bind(id)
+    .bind(auth.organization_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !org_ok {
+        return Err(AppError::NotFound);
+    }
+
+    // `for update`: locks this payment row so two concurrent approve
+    // clicks on the same captured payment can't both pass the status
+    // check and double-post it.
+    let payment_row: Option<PaymentRow> = sqlx::query_as(&format!(
+        "select {PAYMENT_COLUMNS} from payments where id = $1 and loan_account_id = $2 and status = 'captured' for update"
+    ))
+    .bind(payment_id)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let payment_row = payment_row
+        .ok_or_else(|| AppError::bad_request("This payment isn't awaiting approval."))?;
+
+    apply_payment_effects(&mut tx, auth.organization_id, id, &payment_row, auth.user_id).await?;
+
+    let updated: PaymentRow = sqlx::query_as(&format!(
+        "update payments set status = 'posted', verified_by = $1 where id = $2 returning {PAYMENT_COLUMNS}"
+    ))
+    .bind(auth.user_id)
+    .bind(payment_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Json(updated.into_domain()?))
+}
+
+/// Rejects a captured payment — never touches the balance, since a
+/// captured-not-yet-posted payment never did either. Mandatory reason,
+/// same convention as every other reversal/override in this app.
+async fn reject_payment(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((id, payment_id)): Path<(Uuid, Uuid)>,
+    Json(input): Json<RejectPaymentInput>,
+) -> Result<Json<Payment>, AppError> {
+    auth.require_permission(PERM_FINANCE_APPROVE_PAYMENTS)?;
+
+    let reason = input.reason.trim();
+    if reason.is_empty() {
+        return Err(AppError::bad_request("Enter a reason for rejecting this payment."));
+    }
+
+    let exists: bool = sqlx::query_scalar(
+        r#"select exists(
+            select 1 from payments p
+            join plot_loan_accounts pla on pla.id = p.loan_account_id
+            join plot_sales ps on ps.id = pla.sale_id
+            where p.id = $1 and p.loan_account_id = $2 and ps.organization_id = $3 and p.status = 'captured'
+        )"#,
+    )
+    .bind(payment_id)
+    .bind(id)
+    .bind(auth.organization_id)
+    .fetch_one(&state.db)
+    .await?;
+    if !exists {
+        return Err(AppError::bad_request("This payment isn't awaiting approval."));
+    }
+
+    let updated: PaymentRow = sqlx::query_as(&format!(
+        "update payments set status = 'rejected', verified_by = $1, rejection_reason = $2 \
+         where id = $3 returning {PAYMENT_COLUMNS}"
+    ))
+    .bind(auth.user_id)
+    .bind(reason)
+    .bind(payment_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(updated.into_domain()?))
 }
 
 #[derive(sqlx::FromRow)]

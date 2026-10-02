@@ -40,9 +40,7 @@ integrations — mobile-money/banking, automated reconciliation, a
 customer self-service portal), Phase 7's GIS/satellite mapping and
 SMS/email/WhatsApp/accounting integrations, a real plan-selection UI
 for signup (today's form only takes a free-text "preferred package"
-string — see Platform billing's own note), the Captured → Verified → Posted
-payment approval lifecycle (an open product question, not a known
-gap — see Phase 6's own note), and the remaining 22 of 24 backend
+string — see Platform billing's own note), and the remaining 22 of 24 backend
 route files' migration to the least-privilege `app_user` RLS role
 (infrastructure + a two-file pilot shipped 2026-10-01 — see docs/10's
 own note). Per the 2026-09-26 decision, every integration in that list
@@ -201,11 +199,19 @@ pending approvals/lead follow-ups into one dashboard panel
 (`routes/work_queue.rs`, `domain::work_queue`), and a customer-360
 financial rollup (`routes/customers.rs::get_customer`). A
 communications log — a separate item from Phase 5's note — is also now
-built (2026-09-28). The Captured →
-Verified → Posted payment
-approval lifecycle from the original spec was never built — every
-payment posts immediately; whether that's still wanted now that real
-roles/permissions exist is an open product question, not a known gap.
+built (2026-09-28). **The Captured → Verified-and-Posted payment
+approval lifecycle shipped 2026-10-02**, opt-in per organization
+(`organizations.require_payment_approval`, off by default — every
+existing tenant's workflow is unchanged until they turn it on from
+Settings): `record_payment` only captures when it's on, affecting
+nothing until a second person with the new `finance:approve_payments`
+permission (deliberately not auto-granted to any existing role — a
+real maker-checker separation, chosen deliberately via Roles) approves
+(verify-and-post in one step — a separate "Verified" click was
+considered and dropped, since it wouldn't change anything on its own)
+or rejects it with a reason. A pending payment surfaces in the Work
+Queue (`WorkQueueItemKind::PaymentPendingApproval`) so an approver has
+a way to find it at all, since this app has no notification system.
 **Phase D — mobile-money/banking integrations, automated matching/
 receipting/reconciliation, the customer self-service portal — not
 started at all.** This is the "integration" work explicitly deferred

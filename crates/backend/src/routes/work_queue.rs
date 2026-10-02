@@ -10,7 +10,7 @@ use axum::{extract::State, routing::get, Json, Router};
 use chrono::{NaiveDate, Utc};
 use domain::{
     WorkQueue, WorkQueueItem, WorkQueueItemKind, PERM_APPROVALS_VIEW, PERM_CUSTOMERS_VIEW,
-    PERM_FINANCE_VIEW, PERM_QUOTES_VIEW,
+    PERM_FINANCE_APPROVE_PAYMENTS, PERM_FINANCE_VIEW, PERM_QUOTES_VIEW,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -52,6 +52,9 @@ async fn get_work_queue(
     }
     if auth.is_platform_owner {
         items.extend(tenant_pending_items(&state).await?);
+    }
+    if auth.has_permission(PERM_FINANCE_APPROVE_PAYMENTS) {
+        items.extend(payment_pending_items(&state, auth.organization_id).await?);
     }
 
     // Overdue first (most days overdue leads), then soonest-due, then
@@ -282,6 +285,47 @@ async fn tenant_pending_items(state: &AppState) -> Result<Vec<WorkQueueItem>, Ap
             subtitle: format!("Applied {}", r.created_at.format("%b %d, %Y")),
             amount: None,
             href: format!("/platform/{}", r.id),
+            due_date: None,
+            days_overdue: None,
+        })
+        .collect())
+}
+
+#[derive(sqlx::FromRow)]
+struct PaymentPendingRow {
+    loan_account_id: Uuid,
+    account_number: String,
+    customer_name: String,
+    amount: Decimal,
+    created_at: chrono::DateTime<Utc>,
+}
+
+async fn payment_pending_items(state: &AppState, org_id: Uuid) -> Result<Vec<WorkQueueItem>, AppError> {
+    let rows: Vec<PaymentPendingRow> = sqlx::query_as(
+        r#"
+        select pla.id as loan_account_id, pla.account_number, c.full_name as customer_name,
+            p.amount, p.created_at
+        from payments p
+        join plot_loan_accounts pla on pla.id = p.loan_account_id
+        join plot_sales ps on ps.id = pla.sale_id
+        join customers c on c.id = ps.customer_id
+        where ps.organization_id = $1 and p.status = 'captured'
+        order by p.created_at
+        limit 50
+        "#,
+    )
+    .bind(org_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| WorkQueueItem {
+            kind: WorkQueueItemKind::PaymentPendingApproval,
+            title: format!("{} — {}", r.account_number, r.customer_name),
+            subtitle: format!("Captured {}", r.created_at.format("%b %d, %Y")),
+            amount: Some(r.amount),
+            href: format!("/loan-accounts/{}", r.loan_account_id),
             due_date: None,
             days_overdue: None,
         })
